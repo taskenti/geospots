@@ -1,0 +1,85 @@
+# GeoSpots — Motor Geoespacial Semántico
+
+networks:
+  geospots_net:
+    driver: bridge
+
+services:
+  db:
+    build: ./db
+    container_name: geospots-db
+    restart: unless-stopped
+    networks:
+      - geospots_net
+    ports:
+      - "25433:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - geospots-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  scraper:
+    build: ./scraper
+    container_name: geospots-scraper
+    restart: unless-stopped
+    networks:
+      - geospots_net
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REQUEST_DELAY_SECONDS: 2
+      MAX_WORKERS: 3
+      LOG_LEVEL: INFO
+    volumes:
+      - geospots-logs:/app/logs
+      - ./data:/data:ro
+      - ./scraper:/app
+
+  api:
+    build: ./api
+    container_name: geospots-api
+    restart: unless-stopped
+    networks:
+      - geospots_net
+    ports:
+      - "18889:18889"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      API_SECRET_KEY: ${API_SECRET_KEY}
+      LOG_LEVEL: INFO
+    volumes:
+      - ./pwa:/pwa
+      - ./api:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:18889/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  geospots-pgdata:
+  geospots-logs:

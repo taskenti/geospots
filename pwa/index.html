@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoSpots — Motor Geoespacial</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+        }
+        h1 {
+            font-size: 3rem;
+            background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+        .status {
+            display: inline-block;
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 12px;
+            padding: 1rem 2rem;
+            font-size: 0.9rem;
+        }
+        .status span { color: #00d4ff; }
+        #stats { margin-top: 1rem; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>GeoSpots</h1>
+        <p class="subtitle">Motor geoespacial semántico para vanlife</p>
+        <div class="status">
+            Estado: <span id="status">Conectando...</span>
+            <div id="stats"></div>
+        </div>
+    </div>
+    <script>
+        fetch('/health', { headers: { 'X-API-Key': 'clave_secreta_inventada_por_ti_123' } })
+            .then(r => r.json())
+            .then(d => {
+                document.getElementById('status').textContent = d.status === 'ok' ? 'Online' : 'Error';
+                document.getElementById('stats').textContent = `${d.spots.toLocaleString()} spots activos · v${d.version}`;
+            })
+            .catch(() => {
+                document.getElementById('status').textContent = 'Offline';
+            });
+    </script>
+</body>
+</html>
