@@ -1,6 +1,7 @@
 """GeoSpots Scheduler — Orquestador de scrapers."""
 
 import asyncio
+import json
 import sys
 from datetime import datetime
 from loguru import logger
@@ -88,6 +89,52 @@ async def run_source_reviews(source_key: str):
             })
 
 
+async def run_pending_jobs():
+    """Ejecuta los jobs de la cola scraper_jobs. Uso: python scheduler.py --run-pending"""
+    # Marca atómicamente como 'running' hasta 5 jobs pending
+    async with pool.acquire() as conn:
+        jobs = await conn.fetch(
+            "UPDATE scraper_jobs SET status='running', started_at=NOW() "
+            "WHERE id IN (SELECT id FROM scraper_jobs WHERE status='pending' ORDER BY created_at LIMIT 5) "
+            "RETURNING id, source, job_type"
+        )
+
+    if not jobs:
+        logger.info("[queue] No hay jobs pendientes")
+        return
+
+    for job in jobs:
+        job_id, source_key, job_type = job["id"], job["source"], job["job_type"]
+        logger.info(f"[queue] Ejecutando job {job_id}: {source_key} ({job_type})")
+
+        if source_key not in SOURCES:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE scraper_jobs SET status='error', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                    json.dumps({"error": f"Fuente desconocida: {source_key}"}), job_id,
+                )
+            continue
+
+        try:
+            if job_type == "reviews":
+                stats = await run_source_reviews(source_key)
+            else:
+                stats = await run_source(source_key)
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE scraper_jobs SET status='done', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                    json.dumps(stats or {}), job_id,
+                )
+            logger.info(f"[queue] Job {job_id} completado: {stats}")
+        except Exception as e:
+            logger.error(f"[queue] Job {job_id} falló: {e}")
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE scraper_jobs SET status='error', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                    json.dumps({"error": str(e)}), job_id,
+                )
+
+
 async def run_all_sources():
     """Ejecuta todos los scrapers activos secuencialmente."""
     for key in SOURCES:
@@ -136,6 +183,11 @@ async def main():
                 from reconciliar import job_reconciliar
                 stats = await job_reconciliar(pool)
                 logger.info(f"Reconciliación completada: {stats}")
+                return
+
+            if source_key == "run-pending":
+                logger.info("Modo: ejecutar jobs pendientes de la cola")
+                await run_pending_jobs()
                 return
 
             if source_key in SOURCES:

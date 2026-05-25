@@ -16,7 +16,6 @@
         }
 
         a { color: #00d4ff; text-decoration: none; }
-        a:hover { text-decoration: underline; }
 
         /* ── Header ── */
         .header {
@@ -35,14 +34,15 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        .header-title { color: #888; font-size: 0.9rem; }
+        .header-title { color: #555; font-size: 0.9rem; }
         .header-right { display: flex; align-items: center; gap: 0.75rem; }
-        #last-refresh { font-size: 0.78rem; color: #555; }
+        #last-refresh { font-size: 0.78rem; color: #444; }
+        #poll-indicator { font-size: 0.75rem; color: #f59e0b; display: none; }
 
         /* ── Buttons ── */
         .btn {
-            background: rgba(0, 212, 255, 0.12);
-            border: 1px solid rgba(0, 212, 255, 0.35);
+            background: rgba(0,212,255,0.10);
+            border: 1px solid rgba(0,212,255,0.30);
             color: #00d4ff;
             padding: 0.4rem 0.9rem;
             border-radius: 6px;
@@ -50,21 +50,47 @@
             font-size: 0.82rem;
             transition: background 0.15s;
         }
-        .btn:hover { background: rgba(0, 212, 255, 0.22); }
-        .btn:disabled { opacity: 0.4; cursor: default; }
+        .btn:hover { background: rgba(0,212,255,0.20); }
+        .btn:disabled { opacity: 0.35; cursor: default; }
+
+        .btn-run {
+            background: rgba(34,197,94,0.10);
+            border: 1px solid rgba(34,197,94,0.30);
+            color: #22c55e;
+            padding: 0.25rem 0.65rem;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.74rem;
+            white-space: nowrap;
+            transition: background 0.15s;
+        }
+        .btn-run:hover { background: rgba(34,197,94,0.20); }
+        .btn-run:disabled { opacity: 0.35; cursor: default; }
+        .btn-run.reviews {
+            background: rgba(123,47,247,0.10);
+            border-color: rgba(123,47,247,0.35);
+            color: #a78bfa;
+        }
+        .btn-run.reviews:hover { background: rgba(123,47,247,0.20); }
+        .btn-run.queued {
+            background: rgba(245,158,11,0.10);
+            border-color: rgba(245,158,11,0.35);
+            color: #f59e0b;
+            cursor: default;
+        }
 
         /* ── Stats bar ── */
         .stats-bar {
             display: flex;
-            gap: 1.5rem;
+            gap: 1rem;
             margin-bottom: 1.5rem;
             flex-wrap: wrap;
         }
         .stat-chip {
             background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.07);
             border-radius: 8px;
-            padding: 0.5rem 1rem;
+            padding: 0.45rem 0.9rem;
             font-size: 0.82rem;
         }
         .stat-chip span { color: #00d4ff; font-weight: 600; }
@@ -73,21 +99,21 @@
         .table-wrap {
             overflow-x: auto;
             border-radius: 10px;
-            border: 1px solid rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.07);
         }
-        table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
         thead tr {
-            background: rgba(255,255,255,0.05);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.04);
+            border-bottom: 1px solid rgba(255,255,255,0.09);
         }
         th {
-            padding: 0.65rem 0.85rem;
+            padding: 0.6rem 0.8rem;
             text-align: left;
-            color: #888;
+            color: #666;
             font-weight: 500;
-            font-size: 0.78rem;
+            font-size: 0.74rem;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.05em;
             white-space: nowrap;
         }
         tbody tr {
@@ -95,109 +121,127 @@
             cursor: pointer;
             transition: background 0.1s;
         }
-        tbody tr:hover { background: rgba(255,255,255,0.04); }
-        tbody tr.expanded { background: rgba(0,212,255,0.05); }
-        td { padding: 0.6rem 0.85rem; vertical-align: middle; }
+        tbody tr:hover { background: rgba(255,255,255,0.03); }
+        tbody tr.expanded { background: rgba(0,212,255,0.04); }
+        td { padding: 0.55rem 0.8rem; vertical-align: middle; }
 
-        /* ── Health dot ── */
+        /* ── Health indicator ── */
+        .health-cell {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
         .dot {
             display: inline-block;
-            width: 10px; height: 10px;
+            width: 9px; height: 9px;
             border-radius: 50%;
             flex-shrink: 0;
         }
-        .dot.green  { background: #22c55e; box-shadow: 0 0 6px #22c55e66; }
-        .dot.amber  { background: #f59e0b; box-shadow: 0 0 6px #f59e0b66; }
-        .dot.red    { background: #ef4444; box-shadow: 0 0 6px #ef444466; }
+        .dot.green  { background: #22c55e; box-shadow: 0 0 5px #22c55e55; }
+        .dot.amber  { background: #f59e0b; box-shadow: 0 0 5px #f59e0b55; }
+        .dot.red    { background: #ef4444; box-shadow: 0 0 5px #ef444455; }
+        .dot.spin   { background: #f59e0b; animation: pulse 1s ease-in-out infinite; }
+        @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 
-        .health-cell { display: flex; align-items: center; gap: 0.5rem; }
+        .health-text { font-size: 0.79rem; }
+        .health-text.green { color: #4ade80; }
+        .health-text.amber { color: #fbbf24; }
+        .health-text.red   { color: #f87171; }
 
         /* ── Badges ── */
         .badge {
             display: inline-block;
-            font-size: 0.7rem;
-            padding: 0.1rem 0.45rem;
+            font-size: 0.68rem;
+            padding: 0.1rem 0.4rem;
             border-radius: 4px;
             font-weight: 600;
         }
-        .badge-active   { background: rgba(34,197,94,0.15); color: #22c55e; }
-        .badge-inactive { background: rgba(255,255,255,0.07); color: #666; }
-        .badge-error    { background: rgba(239,68,68,0.15);  color: #ef4444; }
-        .badge-ok       { background: rgba(34,197,94,0.10);  color: #22c55e; }
-        .badge-running  { background: rgba(245,158,11,0.15); color: #f59e0b; }
-        .badge-reviews  { background: rgba(123,47,247,0.15); color: #a78bfa; }
+        .badge-active   { background: rgba(34,197,94,0.12); color: #4ade80; }
+        .badge-inactive { background: rgba(255,255,255,0.06); color: #555; }
+        .badge-error    { background: rgba(239,68,68,0.12);  color: #f87171; }
+        .badge-ok       { background: rgba(34,197,94,0.08);  color: #4ade80; }
+        .badge-running  { background: rgba(245,158,11,0.12); color: #fbbf24; }
+        .badge-pending  { background: rgba(245,158,11,0.08); color: #f59e0b; }
+        .badge-reviews  { background: rgba(123,47,247,0.12); color: #a78bfa; }
 
-        .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; }
-        .dim  { color: #555; }
+        .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.78rem; }
+        .dim  { color: #444; }
+        .muted { color: #666; }
+
+        /* ── Actions cell ── */
+        .actions-cell {
+            display: flex;
+            gap: 0.35rem;
+            align-items: center;
+        }
 
         /* ── Detail panel ── */
         .detail-row td {
             padding: 0;
-            background: #0d0d15;
+            background: #0c0c14;
             cursor: default;
         }
-        .detail-row:hover { background: #0d0d15 !important; }
+        .detail-row:hover { background: #0c0c14 !important; }
         .detail-inner {
-            padding: 1.25rem 1.25rem 1.25rem 2.5rem;
+            padding: 1.1rem 1.1rem 1.1rem 2.2rem;
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 1rem;
+            grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+            gap: 0.85rem;
         }
 
         .detail-card {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.07);
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 8px;
-            padding: 0.85rem 1rem;
+            padding: 0.8rem 0.9rem;
         }
         .detail-card h4 {
-            font-size: 0.72rem;
+            font-size: 0.69rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #555;
-            margin-bottom: 0.6rem;
+            letter-spacing: 0.06em;
+            color: #444;
+            margin-bottom: 0.55rem;
         }
-        .kv { display: flex; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.3rem; font-size: 0.82rem; }
-        .kv-key { color: #888; white-space: nowrap; }
-        .kv-val { color: #e0e0e0; text-align: right; word-break: break-all; }
+        .kv { display: flex; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.28rem; font-size: 0.8rem; }
+        .kv-key { color: #666; white-space: nowrap; }
+        .kv-val { color: #ccc; text-align: right; word-break: break-word; }
 
-        /* ── History mini-table ── */
-        .history-card {
-            grid-column: 1 / -1;
-        }
-        .hist-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 0.4rem; }
-        .hist-table th { color: #555; font-weight: 500; text-align: left; padding: 0.25rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
-        .hist-table td { padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.04); color: #ccc; }
+        /* ── History ── */
+        .history-card { grid-column: 1 / -1; }
+        .hist-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; margin-top: 0.35rem; }
+        .hist-table th { color: #444; font-weight: 500; text-align: left; padding: 0.22rem 0.45rem; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .hist-table td { padding: 0.28rem 0.45rem; border-bottom: 1px solid rgba(255,255,255,0.03); color: #bbb; }
         .hist-table tr:last-child td { border-bottom: none; }
 
         /* ── Samples ── */
         .samples-card { grid-column: 1 / -1; }
-        .sample-list { font-size: 0.78rem; margin-top: 0.4rem; }
+        .sample-list { font-size: 0.77rem; margin-top: 0.35rem; }
         .sample-item {
-            padding: 0.3rem 0;
+            padding: 0.28rem 0;
             border-bottom: 1px solid rgba(255,255,255,0.04);
             display: flex;
-            gap: 1rem;
-            color: #aaa;
+            gap: 0.8rem;
+            align-items: center;
+            color: #999;
         }
         .sample-item:last-child { border-bottom: none; }
-        .sample-id { color: #00d4ff; font-family: monospace; min-width: 120px; }
+        .sample-id { color: #00d4ff; font-family: monospace; min-width: 110px; font-size: 0.73rem; }
 
         /* ── Loading / empty ── */
-        .loading { text-align: center; padding: 3rem; color: #555; }
+        .loading { text-align: center; padding: 3rem; color: #444; }
         .spinner {
             display: inline-block;
-            width: 20px; height: 20px;
-            border: 2px solid rgba(0,212,255,0.2);
+            width: 18px; height: 18px;
+            border: 2px solid rgba(0,212,255,0.15);
             border-top-color: #00d4ff;
             border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            margin-right: 0.5rem;
+            animation: spin 0.75s linear infinite;
+            margin-right: 0.45rem;
             vertical-align: middle;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-
-        .error-msg { text-align: center; padding: 2rem; color: #ef4444; font-size: 0.9rem; }
+        .error-msg { text-align: center; padding: 2rem; color: #f87171; font-size: 0.88rem; }
     </style>
 </head>
 <body>
@@ -208,34 +252,33 @@
         <span class="header-title">/ Admin Scrapers</span>
     </div>
     <div class="header-right">
+        <span id="poll-indicator">⟳ Actualizando automáticamente…</span>
         <span id="last-refresh"></span>
         <button class="btn" id="btn-refresh" onclick="loadAll()">↻ Actualizar</button>
     </div>
 </div>
 
 <div class="stats-bar" id="stats-bar"></div>
-
 <div class="table-wrap" id="main-wrap">
     <div class="loading"><span class="spinner"></span> Cargando fuentes…</div>
 </div>
 
 <script>
 const API_KEY = 'clave_secreta_inventada_por_ti_123';
-const BASE = '';
 
 const H = {
-    get: (url) => fetch(BASE + url, { headers: { 'X-API-Key': API_KEY } }).then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-    })
+    get:  (url) => fetch(url, { headers: { 'X-API-Key': API_KEY } })
+                    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
+    post: (url) => fetch(url, { method: 'POST', headers: { 'X-API-Key': API_KEY } })
+                    .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail || `HTTP ${r.status}`); }); return r.json(); }),
 };
 
 // ─── helpers ───────────────────────────────────────────────────────────
 function fmtDate(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
-    return d.toLocaleDateString('es-ES', {day:'2-digit',month:'2-digit',year:'2-digit'}) +
-           ' ' + d.toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'});
+    return d.toLocaleDateString('es-ES', {day:'2-digit',month:'2-digit',year:'2-digit'})
+         + ' ' + d.toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'});
 }
 function daysSince(iso) {
     if (!iso) return null;
@@ -244,49 +287,58 @@ function daysSince(iso) {
 function fmtDuration(s) {
     if (s == null) return '—';
     if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60), sec = s % 60;
-    return `${m}m ${sec}s`;
+    const m = Math.floor(s/60), sec = s%60;
+    return sec > 0 ? `${m}m ${sec}s` : `${m}m`;
 }
-function fmtNum(n) {
-    if (n == null) return '—';
+function fmtNum(n, zero) {
+    if (n == null) return zero !== undefined ? zero : '—';
     return Number(n).toLocaleString('es-ES');
 }
 function statusBadge(st) {
     if (!st) return '<span class="dim">—</span>';
-    const map = { ok: 'ok', ok_con_errores: 'error', error: 'error', running: 'running' };
-    const cls = map[st] || 'ok';
-    return `<span class="badge badge-${cls}">${st}</span>`;
+    const map = { ok: 'ok', ok_con_errores: 'error', error: 'error', running: 'running', pending: 'pending', done: 'ok' };
+    return `<span class="badge badge-${map[st]||'ok'}">${st}</span>`;
 }
-function healthDot(h) {
-    return `<span class="dot ${h}"></span>`;
+function esc(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-function arr(a) {
-    if (!a || !a.length) return '—';
-    return a.join(', ');
-}
+function arr(a) { return (!a||!a.length) ? '—' : a.join(', '); }
 
 // ─── state ─────────────────────────────────────────────────────────────
 let allData = [];
-const expandedRows = new Set();
+const expanded = new Set();
 const detailCache = {};
+let pollTimer = null;
+
+function hasPendingJobs() {
+    return allData.some(d => d.active_job_types && d.active_job_types.length > 0);
+}
+
+function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (hasPendingJobs()) {
+        document.getElementById('poll-indicator').style.display = 'inline';
+        pollTimer = setTimeout(loadAll, 20000); // refresca en 20s si hay jobs activos
+    } else {
+        document.getElementById('poll-indicator').style.display = 'none';
+    }
+}
 
 // ─── main load ─────────────────────────────────────────────────────────
 async function loadAll() {
+    clearTimeout(pollTimer);
     const btn = document.getElementById('btn-refresh');
     btn.disabled = true;
     btn.textContent = '↻ Cargando…';
-    document.getElementById('main-wrap').innerHTML =
-        '<div class="loading"><span class="spinner"></span> Cargando fuentes…</div>';
 
     try {
         allData = await H.get('/admin/scrapers');
         renderStats(allData);
         renderTable(allData);
-        document.getElementById('last-refresh').textContent =
-            'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
-    } catch (e) {
-        document.getElementById('main-wrap').innerHTML =
-            `<div class="error-msg">Error cargando datos: ${e.message}</div>`;
+        document.getElementById('last-refresh').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
+        schedulePoll();
+    } catch(e) {
+        document.getElementById('main-wrap').innerHTML = `<div class="error-msg">Error: ${esc(e.message)}</div>`;
     } finally {
         btn.disabled = false;
         btn.textContent = '↻ Actualizar';
@@ -294,18 +346,18 @@ async function loadAll() {
 }
 
 function renderStats(data) {
-    const green  = data.filter(d => d.salud === 'green').length;
-    const amber  = data.filter(d => d.salud === 'amber').length;
-    const red    = data.filter(d => d.salud === 'red').length;
-    const totalRec = data.reduce((s, d) => s + (d.total_records || 0), 0);
-    const totalSpots = Math.max(...data.map(d => d.spots_total || 0), 0);
-
+    const green = data.filter(d => d.salud==='green').length;
+    const amber = data.filter(d => d.salud==='amber').length;
+    const red   = data.filter(d => d.salud==='red').length;
+    const totalRec = data.reduce((s,d)=>s+(d.total_records||0),0);
+    const totalRev = data.reduce((s,d)=>s+(d.total_reviews||0),0);
     document.getElementById('stats-bar').innerHTML = `
         <div class="stat-chip">Fuentes <span>${data.length}</span></div>
-        <div class="stat-chip"><span class="dot green" style="margin-right:4px;vertical-align:middle;display:inline-block"></span>Verde <span>${green}</span></div>
-        <div class="stat-chip"><span class="dot amber" style="margin-right:4px;vertical-align:middle;display:inline-block"></span>Ámbar <span>${amber}</span></div>
-        <div class="stat-chip"><span class="dot red" style="margin-right:4px;vertical-align:middle;display:inline-block"></span>Rojo <span>${red}</span></div>
+        <div class="stat-chip"><span class="dot green" style="display:inline-block;vertical-align:middle;margin-right:4px"></span>Al día <span>${green}</span></div>
+        <div class="stat-chip"><span class="dot amber" style="display:inline-block;vertical-align:middle;margin-right:4px"></span>Atención <span>${amber}</span></div>
+        <div class="stat-chip"><span class="dot red" style="display:inline-block;vertical-align:middle;margin-right:4px"></span>Crítico <span>${red}</span></div>
         <div class="stat-chip">Source records <span>${fmtNum(totalRec)}</span></div>
+        <div class="stat-chip">Reviews <span>${fmtNum(totalRev)}</span></div>
     `;
 }
 
@@ -316,201 +368,250 @@ function renderTable(data) {
     }
 
     const rows = data.map((d, i) => {
-        const days = daysSince(d.ultimo_fin);
-        const daysStr = days == null ? '<span class="dim">nunca</span>' : `${days}d`;
-        const isExpanded = expandedRows.has(d.nombre);
+        const isExp = expanded.has(d.nombre);
+        const activeJobs = d.active_job_types || [];
+        const spotsQueued   = activeJobs.includes('spots');
+        const reviewsQueued = activeJobs.includes('reviews');
+
+        // Botón spots
+        const btnSpots = spotsQueued
+            ? `<button class="btn-run queued" disabled onclick="event.stopPropagation()">⏳ Spots</button>`
+            : `<button class="btn-run" onclick="event.stopPropagation();queueRun('${esc(d.nombre)}','spots',${i})">▶ Spots</button>`;
+
+        // Botón reviews (solo si la fuente los soporta)
+        const btnReviews = d.has_reviews_support
+            ? reviewsQueued
+                ? `<button class="btn-run reviews queued" disabled onclick="event.stopPropagation()">⏳ Reviews</button>`
+                : `<button class="btn-run reviews" onclick="event.stopPropagation();queueRun('${esc(d.nombre)}','reviews',${i})">▶ Reviews</button>`
+            : '';
+
+        // Cron
+        const cronTxt = d.cron_schedule
+            ? `<span class="muted mono" style="font-size:0.72rem">${esc(d.cron_schedule)}</span>`
+            : '';
 
         return `
-        <tr onclick="toggleRow('${d.nombre}', ${i})" class="${isExpanded ? 'expanded' : ''}" id="row-${i}">
+        <tr onclick="toggleRow('${esc(d.nombre)}')" class="${isExp?'expanded':''}" id="row-${i}">
             <td>
                 <div class="health-cell">
-                    ${healthDot(d.salud)}
+                    <span class="dot ${d.salud}${activeJobs.length?' spin':''}"></span>
+                    <span class="health-text ${d.salud}">${esc(d.salud_texto||d.salud)}</span>
                 </div>
             </td>
             <td>
-                <div style="font-weight:500">${escHtml(d.display_name)}</div>
-                <div class="mono dim">${escHtml(d.nombre)}</div>
+                <div style="font-weight:500">${esc(d.display_name)}</div>
+                <div class="mono muted" style="font-size:0.72rem">${esc(d.nombre)}</div>
             </td>
             <td>${d.activa
                 ? '<span class="badge badge-active">activa</span>'
-                : '<span class="badge badge-inactive">inactiva</span>'}</td>
-            <td class="mono">${fmtNum(d.total_records)}</td>
-            <td class="mono">${fmtNum(d.spots_total)}
-                ${d.spots_exclusive > 0
-                    ? `<span class="dim" style="font-size:0.72rem"> (${fmtNum(d.spots_exclusive)} excl.)</span>`
-                    : ''}</td>
-            <td class="mono">${d.total_reviews > 0 ? fmtNum(d.total_reviews) : '<span class="dim">—</span>'}</td>
+                : '<span class="badge badge-inactive">inactiva</span>'}
+            </td>
+            <td class="mono">${fmtNum(d.total_records, '0')}</td>
+            <td class="mono">
+                ${fmtNum(d.spots_total, '0')}
+                ${(d.spots_exclusive||0)>0
+                    ? `<span class="dim" style="font-size:0.7rem"> (${fmtNum(d.spots_exclusive)} excl.)</span>`
+                    : ''}
+            </td>
+            <td class="mono">${fmtNum(d.total_reviews, '0')}</td>
             <td>${fmtDate(d.ultimo_fin)}</td>
-            <td>${daysStr}</td>
             <td>${statusBadge(d.ultimo_estado)}</td>
-            <td class="dim" style="font-size:0.75rem">${arr(d.coverage_region)}</td>
-            <td class="dim" style="font-size:0.75rem">${d.base_score != null ? d.base_score.toFixed(2) : '—'}</td>
+            <td>${cronTxt}</td>
+            <td>
+                <div class="actions-cell">
+                    ${btnSpots}
+                    ${btnReviews}
+                </div>
+            </td>
         </tr>
-        ${isExpanded ? `<tr class="detail-row" id="detail-${i}"><td colspan="11"><div class="detail-inner" id="detail-inner-${i}">
-            <div class="loading"><span class="spinner"></span> Cargando detalle…</div>
-        </div></td></tr>` : ''}
-        `;
+        ${isExp ? `
+        <tr class="detail-row" id="detail-row-${i}">
+            <td colspan="10">
+                <div class="detail-inner" id="detail-inner-${i}">
+                    <div class="loading" style="padding:1.5rem"><span class="spinner"></span> Cargando…</div>
+                </div>
+            </td>
+        </tr>` : ''}`;
     }).join('');
 
     document.getElementById('main-wrap').innerHTML = `
         <table>
-            <thead>
-                <tr>
-                    <th>Salud</th>
-                    <th>Fuente</th>
-                    <th>Estado</th>
-                    <th>Records</th>
-                    <th>Spots</th>
-                    <th>Reviews</th>
-                    <th>Último fin</th>
-                    <th>Días</th>
-                    <th>Resultado</th>
-                    <th>Región</th>
-                    <th>Score</th>
-                </tr>
-            </thead>
+            <thead><tr>
+                <th>Estado de salud</th>
+                <th>Fuente</th>
+                <th>Activa</th>
+                <th>Records</th>
+                <th>Spots</th>
+                <th>Reviews</th>
+                <th>Último fin</th>
+                <th>Resultado</th>
+                <th>Cron</th>
+                <th>Lanzar</th>
+            </tr></thead>
             <tbody>${rows}</tbody>
-        </table>
-    `;
+        </table>`;
 
-    // Re-load expanded details
-    data.forEach((d, i) => {
-        if (expandedRows.has(d.nombre)) loadDetail(d.nombre, i);
-    });
+    // Re-cargar detalles de filas expandidas
+    data.forEach((d, i) => { if (expanded.has(d.nombre)) loadDetail(d.nombre, i); });
 }
 
-function escHtml(s) {
-    return String(s || '')
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-async function toggleRow(nombre, idx) {
-    if (expandedRows.has(nombre)) {
-        expandedRows.delete(nombre);
-    } else {
-        expandedRows.add(nombre);
-    }
+function toggleRow(nombre) {
+    if (expanded.has(nombre)) expanded.delete(nombre);
+    else expanded.add(nombre);
     renderTable(allData);
-    if (expandedRows.has(nombre)) {
-        loadDetail(nombre, idx);
+    if (expanded.has(nombre)) {
+        const i = allData.findIndex(d => d.nombre === nombre);
+        if (i >= 0) loadDetail(nombre, i);
     }
 }
 
 async function loadDetail(nombre, idx) {
     const container = document.getElementById(`detail-inner-${idx}`);
     if (!container) return;
-
     try {
-        // Parallel fetch: detail + history + samples
         const [detail, history, samples] = await Promise.all([
-            detailCache[nombre] ? Promise.resolve(detailCache[nombre]) : H.get(`/admin/scrapers/${nombre}`),
-            H.get(`/admin/scrapers/${nombre}/history?limit=10`),
-            H.get(`/admin/scrapers/${nombre}/samples?limit=5`),
+            detailCache[nombre] ? Promise.resolve(detailCache[nombre]) : H.get(`/admin/scrapers/${encodeURIComponent(nombre)}`),
+            H.get(`/admin/scrapers/${encodeURIComponent(nombre)}/history?limit=10`),
+            H.get(`/admin/scrapers/${encodeURIComponent(nombre)}/samples?limit=5`),
         ]);
         detailCache[nombre] = detail;
-        container.innerHTML = renderDetail(detail, history, samples);
-    } catch (e) {
-        if (container) container.innerHTML = `<div style="color:#ef4444;padding:1rem">Error: ${e.message}</div>`;
+        if (document.getElementById(`detail-inner-${idx}`))
+            document.getElementById(`detail-inner-${idx}`).innerHTML = renderDetail(detail, history, samples);
+    } catch(e) {
+        const c = document.getElementById(`detail-inner-${idx}`);
+        if (c) c.innerHTML = `<div style="color:#f87171;padding:1rem">Error: ${esc(e.message)}</div>`;
     }
 }
 
 function renderDetail(d, history, samples) {
-    const cred = d.credibility || {};
+    const cred  = d.credibility || {};
     const stats = d.stats || {};
-    const lr = d.last_run;
-    const lrr = d.last_reviews_run;
+    const fc    = d.config || {};
+    const lr    = d.last_run;
+    const lrr   = d.last_reviews_run;
 
-    // ── Stats card ──
     const statsCard = `
         <div class="detail-card">
             <h4>Volumen</h4>
-            <div class="kv"><span class="kv-key">Source records</span><span class="kv-val mono">${fmtNum(stats.total_records)}</span></div>
-            <div class="kv"><span class="kv-key">Spots activos</span><span class="kv-val mono">${fmtNum(stats.spots_total)}</span></div>
-            <div class="kv"><span class="kv-key">Spots exclusivos</span><span class="kv-val mono">${fmtNum(stats.spots_exclusive)}</span></div>
-            <div class="kv"><span class="kv-key">Reviews</span><span class="kv-val mono">${fmtNum(stats.total_reviews)}</span></div>
+            <div class="kv"><span class="kv-key">Source records</span><span class="kv-val mono">${fmtNum(stats.total_records,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Spots activos</span><span class="kv-val mono">${fmtNum(stats.spots_total,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Exclusivos (solo esta fuente)</span><span class="kv-val mono">${fmtNum(stats.spots_exclusive,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Reviews totales</span><span class="kv-val mono">${fmtNum(stats.total_reviews,'0')}</span></div>
         </div>`;
 
-    // ── Credibility card ──
     const credCard = `
         <div class="detail-card">
             <h4>Credibilidad</h4>
-            <div class="kv"><span class="kv-key">base_score</span><span class="kv-val mono">${cred.base_score != null ? cred.base_score.toFixed(2) : '—'}</span></div>
-            <div class="kv"><span class="kv-key">review_quality</span><span class="kv-val mono">${cred.review_quality != null ? cred.review_quality.toFixed(2) : '—'}</span></div>
-            <div class="kv"><span class="kv-key">coverage</span><span class="kv-val">${arr(cred.coverage_region)}</span></div>
-            ${cred.notes ? `<div class="kv"><span class="kv-key">notes</span><span class="kv-val dim" style="font-size:0.75rem">${escHtml(cred.notes)}</span></div>` : ''}
+            <div class="kv"><span class="kv-key">base_score</span><span class="kv-val mono">${cred.base_score!=null?cred.base_score.toFixed(2):'—'}</span></div>
+            <div class="kv"><span class="kv-key">review_quality</span><span class="kv-val mono">${cred.review_quality!=null?cred.review_quality.toFixed(2):'—'}</span></div>
+            <div class="kv"><span class="kv-key">Cobertura</span><span class="kv-val">${arr(cred.coverage_region)}</span></div>
+            ${cred.notes?`<div class="kv" style="margin-top:0.4rem"><span class="kv-key" style="font-size:0.72rem;color:#444">${esc(cred.notes)}</span></div>`:''}
         </div>`;
 
-    // ── Last run card ──
+    const configCard = `
+        <div class="detail-card">
+            <h4>Configuración</h4>
+            <div class="kv"><span class="kv-key">Activa</span><span class="kv-val">${fc.activa!=null?(fc.activa?'Sí':'No'):'—'}</span></div>
+            <div class="kv"><span class="kv-key">Spots en config</span><span class="kv-val mono">${fmtNum(fc.spots_totales,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Cron schedule</span><span class="kv-val mono">${fc.cron_schedule?esc(fc.cron_schedule):'<span class="dim">sin configurar</span>'}</span></div>
+            ${fc.notas?`<div class="kv"><span class="kv-key">Notas</span><span class="kv-val dim" style="font-size:0.73rem">${esc(fc.notas)}</span></div>`:''}
+        </div>`;
+
     const runCard = (run, title) => {
-        if (!run) return `<div class="detail-card"><h4>${title}</h4><div class="dim">Sin ejecuciones registradas</div></div>`;
+        if (!run) return `
+            <div class="detail-card">
+                <h4>${title}</h4>
+                <div class="dim" style="margin-top:0.3rem;font-size:0.8rem">Sin ejecuciones registradas</div>
+            </div>`;
+        const errColor = (run.errores||0)>0 ? 'color:#f87171' : '';
         return `
         <div class="detail-card">
             <h4>${title}</h4>
             <div class="kv"><span class="kv-key">Estado</span><span class="kv-val">${statusBadge(run.estado)}</span></div>
-            <div class="kv"><span class="kv-key">Inicio</span><span class="kv-val mono" style="font-size:0.76rem">${fmtDate(run.iniciado_en)}</span></div>
-            <div class="kv"><span class="kv-key">Fin</span><span class="kv-val mono" style="font-size:0.76rem">${fmtDate(run.terminado_en)}</span></div>
+            <div class="kv"><span class="kv-key">Inicio</span><span class="kv-val mono" style="font-size:0.73rem">${fmtDate(run.iniciado_en)}</span></div>
+            <div class="kv"><span class="kv-key">Fin</span><span class="kv-val mono" style="font-size:0.73rem">${fmtDate(run.terminado_en)}</span></div>
             <div class="kv"><span class="kv-key">Duración</span><span class="kv-val mono">${fmtDuration(run.duration_s)}</span></div>
-            <div class="kv"><span class="kv-key">Nuevos</span><span class="kv-val mono">${fmtNum(run.spots_nuevos)}</span></div>
-            <div class="kv"><span class="kv-key">Actualizados</span><span class="kv-val mono">${fmtNum(run.spots_actualizados)}</span></div>
-            <div class="kv"><span class="kv-key">Reviews nuevas</span><span class="kv-val mono">${fmtNum(run.reviews_nuevas)}</span></div>
-            <div class="kv"><span class="kv-key">Errores</span><span class="kv-val mono" style="${(run.errores||0)>0?'color:#ef4444':''}">${fmtNum(run.errores)}</span></div>
+            <div class="kv"><span class="kv-key">Nuevos</span><span class="kv-val mono">${fmtNum(run.spots_nuevos,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Actualizados</span><span class="kv-val mono">${fmtNum(run.spots_actualizados,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Reviews nuevas</span><span class="kv-val mono">${fmtNum(run.reviews_nuevas,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Errores</span><span class="kv-val mono" style="${errColor}">${fmtNum(run.errores,'0')}</span></div>
         </div>`;
     };
 
-    // ── History table ──
+    // Historial
     const histRows = history.map(h => {
-        const isReviews = h.fuente && h.fuente.endsWith('_reviews');
+        const isRev = h.fuente && h.fuente.endsWith('_reviews');
+        const errStyle = (h.errores||0)>0 ? 'color:#f87171' : '';
         return `<tr>
             <td>${fmtDate(h.iniciado_en)}</td>
-            <td>${isReviews ? '<span class="badge badge-reviews">reviews</span>' : '<span class="badge badge-ok">spots</span>'}</td>
+            <td>${isRev?'<span class="badge badge-reviews">reviews</span>':'<span class="badge badge-ok">spots</span>'}</td>
             <td>${statusBadge(h.estado)}</td>
             <td class="mono">${fmtDuration(h.duration_s)}</td>
-            <td class="mono">${fmtNum(h.spots_nuevos)}</td>
-            <td class="mono">${fmtNum(h.spots_actualizados)}</td>
-            <td class="mono">${fmtNum(h.reviews_nuevas)}</td>
-            <td class="mono" style="${(h.errores||0)>0?'color:#ef4444':''}">${fmtNum(h.errores)}</td>
+            <td class="mono">${fmtNum(h.spots_nuevos,'0')}</td>
+            <td class="mono">${fmtNum(h.spots_actualizados,'0')}</td>
+            <td class="mono">${fmtNum(h.reviews_nuevas,'0')}</td>
+            <td class="mono" style="${errStyle}">${fmtNum(h.errores,'0')}</td>
         </tr>`;
     }).join('');
 
     const histCard = `
         <div class="detail-card history-card">
-            <h4>Historial de ejecuciones</h4>
-            ${history.length === 0
-                ? '<div class="dim" style="margin-top:0.4rem">Sin historial</div>'
-                : `<table class="hist-table">
-                    <thead><tr>
-                        <th>Fecha</th><th>Tipo</th><th>Resultado</th>
-                        <th>Duración</th><th>Nuevos</th><th>Actualizados</th>
-                        <th>Reviews</th><th>Errores</th>
-                    </tr></thead>
-                    <tbody>${histRows}</tbody>
-                  </table>`}
+            <h4>Historial (últimas 10 ejecuciones)</h4>
+            ${history.length===0
+                ? '<div class="dim" style="margin-top:0.35rem;font-size:0.8rem">Sin historial</div>'
+                : `<table class="hist-table"><thead><tr>
+                    <th>Fecha</th><th>Tipo</th><th>Resultado</th>
+                    <th>Duración</th><th>Nuevos</th><th>Actualizados</th>
+                    <th>Reviews</th><th>Errores</th>
+                   </tr></thead><tbody>${histRows}</tbody></table>`}
         </div>`;
 
-    // ── Samples ──
+    // Muestras
     const sampleItems = samples.map(s => `
         <div class="sample-item">
-            <span class="sample-id">${escHtml(s.source_id || '—')}</span>
-            <span style="flex:1">${escHtml(s.nombre_canonico || '—')}</span>
-            <span class="dim">${s.tipo || '—'}</span>
-            <span class="mono dim">${s.lat != null ? s.lat.toFixed(4) : '?'}, ${s.lon != null ? s.lon.toFixed(4) : '?'}</span>
-            <span class="dim" style="font-size:0.72rem">${fmtDate(s.last_seen)}</span>
+            <span class="sample-id">${esc(s.source_id||'—')}</span>
+            <span style="flex:1">${esc(s.nombre_canonico||'—')}</span>
+            <span class="muted">${esc(s.tipo||'—')}</span>
+            <span class="mono muted">${s.lat!=null?s.lat.toFixed(4):'?'}, ${s.lon!=null?s.lon.toFixed(4):'?'}</span>
+            <span class="dim" style="font-size:0.71rem">${fmtDate(s.last_seen)}</span>
         </div>`).join('');
 
     const samplesCard = `
         <div class="detail-card samples-card">
-            <h4>Últimos 5 records insertados</h4>
+            <h4>Últimos 5 source_records</h4>
             <div class="sample-list">
-                ${samples.length === 0
-                    ? '<div class="dim">Sin registros</div>'
+                ${samples.length===0
+                    ? '<div class="dim" style="font-size:0.8rem">Sin registros</div>'
                     : sampleItems}
             </div>
         </div>`;
 
-    return statsCard + credCard + runCard(lr, 'Última ejecución (spots)') +
-           (lrr ? runCard(lrr, 'Última ejecución (reviews)') : '') +
-           histCard + samplesCard;
+    return statsCard + credCard + configCard
+         + runCard(lr, 'Última ejecución — Spots')
+         + (lrr ? runCard(lrr, 'Última ejecución — Reviews') : '')
+         + histCard + samplesCard;
+}
+
+// ─── lanzar job ────────────────────────────────────────────────────────
+async function queueRun(nombre, jobType, rowIdx) {
+    const btns = document.querySelectorAll(`#row-${rowIdx} .btn-run`);
+    btns.forEach(b => { b.disabled = true; });
+
+    try {
+        const res = await H.post(`/admin/scrapers/${encodeURIComponent(nombre)}/run?job_type=${jobType}`);
+        // Actualiza estado local para reflejar el job encolado
+        const d = allData.find(x => x.nombre === nombre);
+        if (d) {
+            d.active_job_types = d.active_job_types || [];
+            if (!d.active_job_types.includes(jobType)) d.active_job_types.push(jobType);
+        }
+        delete detailCache[nombre];
+        renderTable(allData);
+        schedulePoll();
+    } catch(e) {
+        alert(`Error: ${e.message}`);
+        btns.forEach(b => { b.disabled = false; });
+    }
 }
 
 // ─── boot ──────────────────────────────────────────────────────────────
