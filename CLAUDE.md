@@ -247,6 +247,7 @@ FUENTES EXTERNAS (20+ scrapers)
 - **Async everywhere**: todas las funciones de DB son `async def` con `asyncpg`
 - **Cada fuente sobreescribe `run()`** si su estrategia difiere de la base (P4N, Furgovw, iOverlander lo hacen)
 - **`normalize()`** devuelve siempre el mismo schema: `source_id, nombre, lat, lon, tipo, gratuito, ...`
+- **Validación de coordenadas centralizada**: `AbstractSource.coords_validas(lat, lon)` rechaza None, NaN, fuera de rango y (0,0). Aplicada automáticamente en `base.run()`; los scrapers que sobreescriben `run()` deben llamarla tras `normalize()`
 - **`enriquecer_spot()`** usa `COALESCE(col, $val)` — nunca sobreescribe un valor ya existente
 - **Checksums MD5** en `source_records` para detección de cambios incrementales
 - **`fuentes[]`** en `spots` es el array de fuentes que conocen el spot — es la fuente de verdad para multi-fuente

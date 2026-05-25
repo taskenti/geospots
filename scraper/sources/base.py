@@ -30,6 +30,24 @@ class AbstractSource(ABC):
         Debe devolver al menos: nombre, lat, lon, source_id, tipo.
         Devuelve None si el item no es válido."""
 
+    @staticmethod
+    def coords_validas(lat, lon) -> bool:
+        """Filtro de seguridad: descarta None, NaN, fuera de rango y el
+        clásico (0,0) que devuelven muchas APIs cuando la geolocalización falla.
+        Llamar tras normalize() y antes de cualquier INSERT."""
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            return False
+        if lat_f != lat_f or lon_f != lon_f:  # NaN check
+            return False
+        if not (-90.0 <= lat_f <= 90.0) or not (-180.0 <= lon_f <= 180.0):
+            return False
+        if abs(lat_f) < 1e-6 and abs(lon_f) < 1e-6:
+            return False
+        return True
+
     def generate_grid(self):
         """Genera celdas (tl_lat, tl_lon, br_lat, br_lon) para toda Europa."""
         lat = self.EU_BOUNDS["lat_max"]
@@ -151,6 +169,14 @@ class AbstractSource(ABC):
                     for raw_item in result:
                         norm = self.normalize(raw_item)
                         if not norm:
+                            continue
+
+                        if not self.coords_validas(norm.get("lat"), norm.get("lon")):
+                            logger.debug(
+                                f"[{self.name}] Coordenadas inválidas descartadas: "
+                                f"lat={norm.get('lat')} lon={norm.get('lon')} "
+                                f"src_id={norm.get('source_id')}"
+                            )
                             continue
 
                         sid = str(norm.get("source_id", ""))

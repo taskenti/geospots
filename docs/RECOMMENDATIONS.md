@@ -49,10 +49,8 @@ Eliminado. La información que devolvía la cubre `/dashboard` (counts) y `psql`
 **Esfuerzo**: Medio.  
 **Acción**: Agrupar fuentes por tipo: las que usan `generate_active_grid` pueden correr en paralelo entre sí (compiten por celdas distintas). Fuentes "globales" (furgovw, ioverlander) pueden correr en paralelo con cualquier otra. Usar `asyncio.gather()` con grupos.
 
-### 9. Sin validación de coordenadas en `normalize()`
-**Impacto**: Spots con lat=0/lon=0 (valor por defecto de muchas APIs cuando falla la geolocación) entran en la DB y aparecen en el Golfo de Guinea.  
-**Esfuerzo**: Mínimo.  
-**Acción**: En `AbstractSource.run()`, añadir validación antes de insertar: `if not (-90 <= norm['lat'] <= 90 and -180 <= norm['lon'] <= 180): continue`. También descartar `lat=0 AND lon=0`.
+### 9. ~~Sin validación de coordenadas en `normalize()`~~ ✅ RESUELTO (2026-05-25)
+Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizada. Rechaza None, NaN, fuera de rango y (0,0). Aplicada en `base.run()` y en los 3 scrapers con `run()` propio (ioverlander, furgovw, campingcarinfos). DB ya estaba limpia gracias a validaciones ad-hoc previas; este cambio garantiza que cualquier scraper futuro hereda la protección sin tener que implementarla.
 
 ---
 
@@ -129,7 +127,7 @@ Eliminado. La información que devolvía la cubre `/dashboard` (counts) y `psql`
 |---|---|---|---|
 | 1 | ~~campingcarinfos sin implementación~~ ✅ RESUELTO | ALTO | Mínimo |
 | 5 | ~~debug endpoint en producción~~ ✅ RESUELTO | MEDIO | Mínimo |
-| 9 | Validar coordenadas en normalize() | ALTO | Mínimo |
+| 9 | ~~Validar coordenadas en normalize()~~ ✅ RESUELTO | ALTO | Mínimo |
 | 4 | Aviso claro token StayFree | MEDIO | Mínimo |
 | 6 | Reconciliar incremental | ALTO | Medio |
 | 7 | Bootstrap grid vacío | ALTO | Bajo |
@@ -148,4 +146,4 @@ Eliminado. La información que devolvía la cubre `/dashboard` (counts) y `psql`
 | 19 | Unificar versión Python | BAJO | Mínimo |
 | 20 | Docs en CI | BAJO | Bajo |
 
-**Quick wins (máximo impacto, mínimo esfuerzo)**: items 9, 4, 7, 14 — todos completables en una sesión de trabajo. (Items 1 y 5 ya resueltos.)
+**Quick wins (máximo impacto, mínimo esfuerzo)**: items 4, 7, 14 — todos completables en una sesión de trabajo. (Items 1, 5 y 9 ya resueltos.)

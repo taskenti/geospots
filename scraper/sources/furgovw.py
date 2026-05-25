@@ -463,6 +463,8 @@ class FurgovwSource(AbstractSource):
                 norm = self.normalize(raw)
                 if not norm:
                     continue
+                if not self.coords_validas(norm.get("lat"), norm.get("lon")):
+                    continue
 
                 sid = norm["source_id"]
                 topic_id = norm.pop("_topic_id", None)

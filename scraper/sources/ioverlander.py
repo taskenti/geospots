@@ -328,6 +328,8 @@ class IOverlanderSource(AbstractSource):
                 norm = self.normalize(raw)
                 if not norm:
                     continue
+                if not self.coords_validas(norm.get("lat"), norm.get("lon")):
+                    continue
                 batch.append((raw, norm))
 
                 if len(batch) >= BATCH_SIZE or i == len(raw_items) - 1:
