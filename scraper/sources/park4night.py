@@ -13,17 +13,46 @@ from sources.base import AbstractSource
 P4N_BASE = "https://guest.park4night.com/services/V4.1"
 P4N_LUGARES = f"{P4N_BASE}/lieuxGetFilter.php"
 P4N_REVIEWS = f"{P4N_BASE}/commGet.php"
-P4N_DETALLE = f"{P4N_BASE}/lieuGetDetail.php"
+# P4N_DETALLE = f"{P4N_BASE}/lieuGetDetail.php"  # reservado, no usado actualmente
 
 CODIGO_MAP = {"A": "area_ac", "P": "parking", "C": "camping", "N": "naturaleza", "H": "otro", "S": "otro"}
 TIPO_MAP = {1: "area_ac", 2: "parking", 3: "camping", 4: "naturaleza", 5: "picnic", 8: "parking"}
 
 
 def _b(raw: dict, key: str) -> bool | None:
+    """Lee un flag booleano. P4N puede devolver "1"/"0", "true"/"false", o boolean
+    nativo dependiendo del campo y versión de API. Defensivo contra los tres."""
     v = raw.get(key)
     if v is None:
         return None
-    return str(v).strip() == "1"
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "oui", "si"):
+        return True
+    if s in ("0", "false", "no", "non"):
+        return False
+    return None
+
+
+def _to_int_safe(v) -> int | None:
+    """P4N devuelve campos numéricos como strings ('2', '15', '50'). Falla
+    silenciosamente si llega un string raro ('N/A', '', None)."""
+    if v is None:
+        return None
+    try:
+        return int(float(v))  # acepta '2', '2.0', 2
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float_safe(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
 
 
 USER_AGENTS = [
@@ -82,7 +111,9 @@ class Park4NightSource(AbstractSource):
             if "id" not in raw:
                 return None
 
-            p4n_id = int(raw["id"])
+            p4n_id = _to_int_safe(raw["id"])
+            if p4n_id is None:
+                return None
             nombre = (raw.get("name") or raw.get("titre") or "Sin nombre").strip()[:200]
 
             tipo = None
@@ -90,35 +121,41 @@ class Park4NightSource(AbstractSource):
             if code and code in CODIGO_MAP:
                 tipo = CODIGO_MAP[code]
             else:
-                id_type = int(raw.get("id_type", 0)) if raw.get("id_type") is not None else 0
+                id_type = _to_int_safe(raw.get("id_type")) or 0
                 tipo = TIPO_MAP.get(id_type, "otro")
 
-            lat = float(raw["latitude"])
-            lon = float(raw["longitude"])
+            lat = _to_float_safe(raw.get("latitude"))
+            lon = _to_float_safe(raw.get("longitude"))
+            if lat is None or lon is None:
+                return None
 
             gratuito = None
             prix = raw.get("prix")
             if prix is not None:
-                if str(prix).strip() == "0":
+                s = str(prix).strip()
+                if s == "0":
                     gratuito = True
-                elif str(prix).strip() == "1":
+                elif s == "1":
                     gratuito = False
 
-            rating_str = raw.get("note_moyenne") or raw.get("note")
-            rating = float(rating_str) if rating_str and float(rating_str) > 0 else None
+            rating = _to_float_safe(raw.get("note_moyenne") or raw.get("note"))
+            if rating is not None and rating <= 0:
+                rating = None
 
-            nb_comm = raw.get("nb_commentaires") or raw.get("nb_comm")
-            num_reviews = int(nb_comm) if nb_comm is not None else 0
+            num_reviews = _to_int_safe(raw.get("nb_commentaires") or raw.get("nb_comm")) or 0
 
-            hauteur = raw.get("hauteur_limite")
-            altura = float(hauteur) if hauteur and float(hauteur) > 0 else None
+            altura = _to_float_safe(raw.get("hauteur_limite"))
+            if altura is not None and altura <= 0:
+                altura = None
 
-            plazas = raw.get("nb_places")
-            num_plazas = int(plazas) if plazas and int(plazas) > 0 else None
+            num_plazas = _to_int_safe(raw.get("nb_places"))
+            if num_plazas is not None and num_plazas <= 0:
+                num_plazas = None
 
+            # Defensive: "photos" puede venir como None explícito (no missing)
             fotos = [
                 {"large": f.get("link_large"), "thumb": f.get("link_thumb")}
-                for f in raw.get("photos", []) if f.get("link_large")
+                for f in (raw.get("photos") or []) if isinstance(f, dict) and f.get("link_large")
             ]
 
             return {
@@ -276,7 +313,9 @@ class Park4NightSource(AbstractSource):
                             norm = self.normalize(raw)
                             if not norm:
                                 continue
-                            
+                            if not self.coords_validas(norm.get("lat"), norm.get("lon")):
+                                continue
+
                             sid = norm["source_id"]
                             if sid in seen_ids:
                                 continue
@@ -327,9 +366,11 @@ class Park4NightSource(AbstractSource):
                             processed_count += 1
                         queue.task_done()
 
-            # Launch workers
+            # Launch workers — defensivo: config.max_workers puede ser None.
+            # Mantener concurrencia baja (max 5) para no disparar el WAF anti-bot.
+            num_workers = min(getattr(config, 'max_workers', None) or 3, 5)
             workers = []
-            for _ in range(config.max_workers):
+            for _ in range(num_workers):
                 workers.append(asyncio.create_task(worker()))
                 
             # Log progress in background
