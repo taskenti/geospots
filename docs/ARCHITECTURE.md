@@ -249,6 +249,10 @@ Fallback heurístico si Gemini falla: `extraer_intencion_heuristica()` mapea pal
 | `GET /search` | Auth | SQL clásico: geo + tipo + gratuito + filtros semánticos materializados |
 | `GET /search/semantic` | Auth | Búsqueda en lenguaje natural (Gemini + vector) |
 | `GET /dashboard` | Auth | Estadísticas agregadas del sistema |
+| `GET /admin/scrapers` | Auth | Lista resumen de todas las fuentes con semáforo de salud (rojo↑) |
+| `GET /admin/scrapers/{nombre}` | Auth | Detalle de una fuente: credibilidad, stats, último run (spots + reviews) |
+| `GET /admin/scrapers/{nombre}/history` | Auth | Historial de ejecuciones (`?limit=10`) — incluye runs de `_reviews` |
+| `GET /admin/scrapers/{nombre}/samples` | Auth | Últimos N source_records insertados (`?limit=5`) sin raw_data |
 
 ### Autenticación
 

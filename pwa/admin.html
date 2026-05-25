@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoSpots — Admin Scrapers</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 1.5rem;
+        }
+
+        a { color: #00d4ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .header-left { display: flex; align-items: center; gap: 1rem; }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header-title { color: #888; font-size: 0.9rem; }
+        .header-right { display: flex; align-items: center; gap: 0.75rem; }
+        #last-refresh { font-size: 0.78rem; color: #555; }
+
+        /* ── Buttons ── */
+        .btn {
+            background: rgba(0, 212, 255, 0.12);
+            border: 1px solid rgba(0, 212, 255, 0.35);
+            color: #00d4ff;
+            padding: 0.4rem 0.9rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            transition: background 0.15s;
+        }
+        .btn:hover { background: rgba(0, 212, 255, 0.22); }
+        .btn:disabled { opacity: 0.4; cursor: default; }
+
+        /* ── Stats bar ── */
+        .stats-bar {
+            display: flex;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+        .stat-chip {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            font-size: 0.82rem;
+        }
+        .stat-chip span { color: #00d4ff; font-weight: 600; }
+
+        /* ── Table ── */
+        .table-wrap {
+            overflow-x: auto;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+        thead tr {
+            background: rgba(255,255,255,0.05);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        th {
+            padding: 0.65rem 0.85rem;
+            text-align: left;
+            color: #888;
+            font-weight: 500;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+        }
+        tbody tr {
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+        tbody tr:hover { background: rgba(255,255,255,0.04); }
+        tbody tr.expanded { background: rgba(0,212,255,0.05); }
+        td { padding: 0.6rem 0.85rem; vertical-align: middle; }
+
+        /* ── Health dot ── */
+        .dot {
+            display: inline-block;
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .dot.green  { background: #22c55e; box-shadow: 0 0 6px #22c55e66; }
+        .dot.amber  { background: #f59e0b; box-shadow: 0 0 6px #f59e0b66; }
+        .dot.red    { background: #ef4444; box-shadow: 0 0 6px #ef444466; }
+
+        .health-cell { display: flex; align-items: center; gap: 0.5rem; }
+
+        /* ── Badges ── */
+        .badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 0.1rem 0.45rem;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .badge-active   { background: rgba(34,197,94,0.15); color: #22c55e; }
+        .badge-inactive { background: rgba(255,255,255,0.07); color: #666; }
+        .badge-error    { background: rgba(239,68,68,0.15);  color: #ef4444; }
+        .badge-ok       { background: rgba(34,197,94,0.10);  color: #22c55e; }
+        .badge-running  { background: rgba(245,158,11,0.15); color: #f59e0b; }
+        .badge-reviews  { background: rgba(123,47,247,0.15); color: #a78bfa; }
+
+        .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; }
+        .dim  { color: #555; }
+
+        /* ── Detail panel ── */
+        .detail-row td {
+            padding: 0;
+            background: #0d0d15;
+            cursor: default;
+        }
+        .detail-row:hover { background: #0d0d15 !important; }
+        .detail-inner {
+            padding: 1.25rem 1.25rem 1.25rem 2.5rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+
+        .detail-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 8px;
+            padding: 0.85rem 1rem;
+        }
+        .detail-card h4 {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #555;
+            margin-bottom: 0.6rem;
+        }
+        .kv { display: flex; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.3rem; font-size: 0.82rem; }
+        .kv-key { color: #888; white-space: nowrap; }
+        .kv-val { color: #e0e0e0; text-align: right; word-break: break-all; }
+
+        /* ── History mini-table ── */
+        .history-card {
+            grid-column: 1 / -1;
+        }
+        .hist-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 0.4rem; }
+        .hist-table th { color: #555; font-weight: 500; text-align: left; padding: 0.25rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .hist-table td { padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.04); color: #ccc; }
+        .hist-table tr:last-child td { border-bottom: none; }
+
+        /* ── Samples ── */
+        .samples-card { grid-column: 1 / -1; }
+        .sample-list { font-size: 0.78rem; margin-top: 0.4rem; }
+        .sample-item {
+            padding: 0.3rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            display: flex;
+            gap: 1rem;
+            color: #aaa;
+        }
+        .sample-item:last-child { border-bottom: none; }
+        .sample-id { color: #00d4ff; font-family: monospace; min-width: 120px; }
+
+        /* ── Loading / empty ── */
+        .loading { text-align: center; padding: 3rem; color: #555; }
+        .spinner {
+            display: inline-block;
+            width: 20px; height: 20px;
+            border: 2px solid rgba(0,212,255,0.2);
+            border-top-color: #00d4ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 0.5rem;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error-msg { text-align: center; padding: 2rem; color: #ef4444; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-left">
+        <span class="logo">GeoSpots</span>
+        <span class="header-title">/ Admin Scrapers</span>
+    </div>
+    <div class="header-right">
+        <span id="last-refresh"></span>
+        <button class="btn" id="btn-refresh" onclick="loadAll()">↻ Actualizar</button>
+    </div>
+</div>
+
+<div class="stats-bar" id="stats-bar"></div>
+
+<div class="table-wrap" id="main-wrap">
+    <div class="loading"><span class="spinner"></span> Cargando fuentes…</div>
+</div>
+
+<script>
+const API_KEY = 'clave_secreta_inventada_por_ti_123';
+const BASE = '';
+
+const H = {
+    get: (url) => fetch(BASE + url, { headers: { 'X-API-Key': API_KEY } }).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+    })
+};
+
+// ─── helpers ───────────────────────────────────────────────────────────
+function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString('es-ES', {day:'2-digit',month:'2-digit',year:'2-digit'}) +
+           ' ' + d.toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'});
+}
+function daysSince(iso) {
+    if (!iso) return null;
+    return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+function fmtDuration(s) {
+    if (s == null) return '—';
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60), sec = s % 60;
+    return `${m}m ${sec}s`;
+}
+function fmtNum(n) {
+    if (n == null) return '—';
+    return Number(n).toLocaleString('es-ES');
+}
+function statusBadge(st) {
+    if (!st) return '<span class="dim">—</span>';
+    const map = { ok: 'ok', ok_con_errores: 'error', error: 'error', running: 'running' };
+    const cls = map[st] || 'ok';
+    return `<span class="badge badge-${cls}">${st}</span>`;
+}
+function healthDot(h) {
+    return `<span class="dot ${h}"></span>`;
+}
+function arr(a) {
+    if (!a || !a.length) return '—';
+    return a.join(', ');
+}
+
+// ─── state ─────────────────────────────────────────────────────────────
+let allData = [];
+const expandedRows = new Set();
+const detailCache = {};
+
+// ─── main load ─────────────────────────────────────────────────────────
+async function loadAll() {
+    const btn = document.getElementById('btn-refresh');
+    btn.disabled = true;
+    btn.textContent = '↻ Cargando…';
+    document.getElementById('main-wrap').innerHTML =
+        '<div class="loading"><span class="spinner"></span> Cargando fuentes…</div>';
+
+    try {
+        allData = await H.get('/admin/scrapers');
+        renderStats(allData);
+        renderTable(allData);
+        document.getElementById('last-refresh').textContent =
+            'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
+    } catch (e) {
+        document.getElementById('main-wrap').innerHTML =
+            `<div class="error-msg">Error cargando datos: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '↻ Actualizar';
+    }
+}
+
+function renderStats(data) {
+    const green  = data.filter(d => d.salud === 'green').length;
+    const amber  = data.filter(d => d.salud === 'amber').length;
+    const red    = data.filter(d => d.salud === 'red').length;
+    const totalRec = data.reduce((s, d) => s + (d.total_records || 0), 0);
+    const totalSpots = Math.max(...data.map(d => d.spots_total || 0), 0);
+
+    document.getElementById('stats-bar').innerHTML = `
+        <div class="stat-chip">Fuentes <span>${data.length}</span></div>
+        <div class="stat-chip"><span class="dot green" style="margin-right:4px;vertical-align:middle;display:inline-block"></span>Verde <span>${green}</span></div>
+        <div class="stat-chip"><span class="dot amber" style="margin-right:4px;vertical-align:middle;display:inline-block"></span>Ámbar <span>${amber}</span></div>
+        <div class="stat-chip"><span class="dot red" style="margin-right:4px;vertical-align:middle;display:inline-block"></span>Rojo <span>${red}</span></div>
+        <div class="stat-chip">Source records <span>${fmtNum(totalRec)}</span></div>
+    `;
+}
+
+function renderTable(data) {
+    if (!data.length) {
+        document.getElementById('main-wrap').innerHTML = '<div class="loading">Sin fuentes</div>';
+        return;
+    }
+
+    const rows = data.map((d, i) => {
+        const days = daysSince(d.ultimo_fin);
+        const daysStr = days == null ? '<span class="dim">nunca</span>' : `${days}d`;
+        const isExpanded = expandedRows.has(d.nombre);
+
+        return `
+        <tr onclick="toggleRow('${d.nombre}', ${i})" class="${isExpanded ? 'expanded' : ''}" id="row-${i}">
+            <td>
+                <div class="health-cell">
+                    ${healthDot(d.salud)}
+                </div>
+            </td>
+            <td>
+                <div style="font-weight:500">${escHtml(d.display_name)}</div>
+                <div class="mono dim">${escHtml(d.nombre)}</div>
+            </td>
+            <td>${d.activa
+                ? '<span class="badge badge-active">activa</span>'
+                : '<span class="badge badge-inactive">inactiva</span>'}</td>
+            <td class="mono">${fmtNum(d.total_records)}</td>
+            <td class="mono">${fmtNum(d.spots_total)}
+                ${d.spots_exclusive > 0
+                    ? `<span class="dim" style="font-size:0.72rem"> (${fmtNum(d.spots_exclusive)} excl.)</span>`
+                    : ''}</td>
+            <td class="mono">${d.total_reviews > 0 ? fmtNum(d.total_reviews) : '<span class="dim">—</span>'}</td>
+            <td>${fmtDate(d.ultimo_fin)}</td>
+            <td>${daysStr}</td>
+            <td>${statusBadge(d.ultimo_estado)}</td>
+            <td class="dim" style="font-size:0.75rem">${arr(d.coverage_region)}</td>
+            <td class="dim" style="font-size:0.75rem">${d.base_score != null ? d.base_score.toFixed(2) : '—'}</td>
+        </tr>
+        ${isExpanded ? `<tr class="detail-row" id="detail-${i}"><td colspan="11"><div class="detail-inner" id="detail-inner-${i}">
+            <div class="loading"><span class="spinner"></span> Cargando detalle…</div>
+        </div></td></tr>` : ''}
+        `;
+    }).join('');
+
+    document.getElementById('main-wrap').innerHTML = `
+        <table>
+            <thead>
+                <tr>
+                    <th>Salud</th>
+                    <th>Fuente</th>
+                    <th>Estado</th>
+                    <th>Records</th>
+                    <th>Spots</th>
+                    <th>Reviews</th>
+                    <th>Último fin</th>
+                    <th>Días</th>
+                    <th>Resultado</th>
+                    <th>Región</th>
+                    <th>Score</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+
+    // Re-load expanded details
+    data.forEach((d, i) => {
+        if (expandedRows.has(d.nombre)) loadDetail(d.nombre, i);
+    });
+}
+
+function escHtml(s) {
+    return String(s || '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function toggleRow(nombre, idx) {
+    if (expandedRows.has(nombre)) {
+        expandedRows.delete(nombre);
+    } else {
+        expandedRows.add(nombre);
+    }
+    renderTable(allData);
+    if (expandedRows.has(nombre)) {
+        loadDetail(nombre, idx);
+    }
+}
+
+async function loadDetail(nombre, idx) {
+    const container = document.getElementById(`detail-inner-${idx}`);
+    if (!container) return;
+
+    try {
+        // Parallel fetch: detail + history + samples
+        const [detail, history, samples] = await Promise.all([
+            detailCache[nombre] ? Promise.resolve(detailCache[nombre]) : H.get(`/admin/scrapers/${nombre}`),
+            H.get(`/admin/scrapers/${nombre}/history?limit=10`),
+            H.get(`/admin/scrapers/${nombre}/samples?limit=5`),
+        ]);
+        detailCache[nombre] = detail;
+        container.innerHTML = renderDetail(detail, history, samples);
+    } catch (e) {
+        if (container) container.innerHTML = `<div style="color:#ef4444;padding:1rem">Error: ${e.message}</div>`;
+    }
+}
+
+function renderDetail(d, history, samples) {
+    const cred = d.credibility || {};
+    const stats = d.stats || {};
+    const lr = d.last_run;
+    const lrr = d.last_reviews_run;
+
+    // ── Stats card ──
+    const statsCard = `
+        <div class="detail-card">
+            <h4>Volumen</h4>
+            <div class="kv"><span class="kv-key">Source records</span><span class="kv-val mono">${fmtNum(stats.total_records)}</span></div>
+            <div class="kv"><span class="kv-key">Spots activos</span><span class="kv-val mono">${fmtNum(stats.spots_total)}</span></div>
+            <div class="kv"><span class="kv-key">Spots exclusivos</span><span class="kv-val mono">${fmtNum(stats.spots_exclusive)}</span></div>
+            <div class="kv"><span class="kv-key">Reviews</span><span class="kv-val mono">${fmtNum(stats.total_reviews)}</span></div>
+        </div>`;
+
+    // ── Credibility card ──
+    const credCard = `
+        <div class="detail-card">
+            <h4>Credibilidad</h4>
+            <div class="kv"><span class="kv-key">base_score</span><span class="kv-val mono">${cred.base_score != null ? cred.base_score.toFixed(2) : '—'}</span></div>
+            <div class="kv"><span class="kv-key">review_quality</span><span class="kv-val mono">${cred.review_quality != null ? cred.review_quality.toFixed(2) : '—'}</span></div>
+            <div class="kv"><span class="kv-key">coverage</span><span class="kv-val">${arr(cred.coverage_region)}</span></div>
+            ${cred.notes ? `<div class="kv"><span class="kv-key">notes</span><span class="kv-val dim" style="font-size:0.75rem">${escHtml(cred.notes)}</span></div>` : ''}
+        </div>`;
+
+    // ── Last run card ──
+    const runCard = (run, title) => {
+        if (!run) return `<div class="detail-card"><h4>${title}</h4><div class="dim">Sin ejecuciones registradas</div></div>`;
+        return `
+        <div class="detail-card">
+            <h4>${title}</h4>
+            <div class="kv"><span class="kv-key">Estado</span><span class="kv-val">${statusBadge(run.estado)}</span></div>
+            <div class="kv"><span class="kv-key">Inicio</span><span class="kv-val mono" style="font-size:0.76rem">${fmtDate(run.iniciado_en)}</span></div>
+            <div class="kv"><span class="kv-key">Fin</span><span class="kv-val mono" style="font-size:0.76rem">${fmtDate(run.terminado_en)}</span></div>
+            <div class="kv"><span class="kv-key">Duración</span><span class="kv-val mono">${fmtDuration(run.duration_s)}</span></div>
+            <div class="kv"><span class="kv-key">Nuevos</span><span class="kv-val mono">${fmtNum(run.spots_nuevos)}</span></div>
+            <div class="kv"><span class="kv-key">Actualizados</span><span class="kv-val mono">${fmtNum(run.spots_actualizados)}</span></div>
+            <div class="kv"><span class="kv-key">Reviews nuevas</span><span class="kv-val mono">${fmtNum(run.reviews_nuevas)}</span></div>
+            <div class="kv"><span class="kv-key">Errores</span><span class="kv-val mono" style="${(run.errores||0)>0?'color:#ef4444':''}">${fmtNum(run.errores)}</span></div>
+        </div>`;
+    };
+
+    // ── History table ──
+    const histRows = history.map(h => {
+        const isReviews = h.fuente && h.fuente.endsWith('_reviews');
+        return `<tr>
+            <td>${fmtDate(h.iniciado_en)}</td>
+            <td>${isReviews ? '<span class="badge badge-reviews">reviews</span>' : '<span class="badge badge-ok">spots</span>'}</td>
+            <td>${statusBadge(h.estado)}</td>
+            <td class="mono">${fmtDuration(h.duration_s)}</td>
+            <td class="mono">${fmtNum(h.spots_nuevos)}</td>
+            <td class="mono">${fmtNum(h.spots_actualizados)}</td>
+            <td class="mono">${fmtNum(h.reviews_nuevas)}</td>
+            <td class="mono" style="${(h.errores||0)>0?'color:#ef4444':''}">${fmtNum(h.errores)}</td>
+        </tr>`;
+    }).join('');
+
+    const histCard = `
+        <div class="detail-card history-card">
+            <h4>Historial de ejecuciones</h4>
+            ${history.length === 0
+                ? '<div class="dim" style="margin-top:0.4rem">Sin historial</div>'
+                : `<table class="hist-table">
+                    <thead><tr>
+                        <th>Fecha</th><th>Tipo</th><th>Resultado</th>
+                        <th>Duración</th><th>Nuevos</th><th>Actualizados</th>
+                        <th>Reviews</th><th>Errores</th>
+                    </tr></thead>
+                    <tbody>${histRows}</tbody>
+                  </table>`}
+        </div>`;
+
+    // ── Samples ──
+    const sampleItems = samples.map(s => `
+        <div class="sample-item">
+            <span class="sample-id">${escHtml(s.source_id || '—')}</span>
+            <span style="flex:1">${escHtml(s.nombre_canonico || '—')}</span>
+            <span class="dim">${s.tipo || '—'}</span>
+            <span class="mono dim">${s.lat != null ? s.lat.toFixed(4) : '?'}, ${s.lon != null ? s.lon.toFixed(4) : '?'}</span>
+            <span class="dim" style="font-size:0.72rem">${fmtDate(s.last_seen)}</span>
+        </div>`).join('');
+
+    const samplesCard = `
+        <div class="detail-card samples-card">
+            <h4>Últimos 5 records insertados</h4>
+            <div class="sample-list">
+                ${samples.length === 0
+                    ? '<div class="dim">Sin registros</div>'
+                    : sampleItems}
+            </div>
+        </div>`;
+
+    return statsCard + credCard + runCard(lr, 'Última ejecución (spots)') +
+           (lrr ? runCard(lrr, 'Última ejecución (reviews)') : '') +
+           histCard + samplesCard;
+}
+
+// ─── boot ──────────────────────────────────────────────────────────────
+loadAll();
+</script>
+</body>
+</html>

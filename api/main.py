@@ -1,6 +1,7 @@
 """GeoSpots API - semantic geospatial engine."""
 
 import os
+from datetime import datetime, timezone
 import asyncpg
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
@@ -278,6 +279,202 @@ async def dashboard():
         "enriched": dict(enriched),
         "config": [dict(c) for c in config],
     }
+
+
+def _compute_health(ultimo_fin, ultimo_estado, ultimo_errores, ultimo_nuevos, ultimo_actualizados) -> str:
+    if ultimo_fin is None:
+        return "red"
+    now = datetime.now(timezone.utc)
+    fin = ultimo_fin if ultimo_fin.tzinfo else ultimo_fin.replace(tzinfo=timezone.utc)
+    days_since = (now - fin).days
+    if ultimo_estado == "error":
+        return "red"
+    total = (ultimo_nuevos or 0) + (ultimo_actualizados or 0)
+    err_pct = (ultimo_errores or 0) / total if total > 0 else 0.0
+    if days_since <= 14 and err_pct < 0.05:
+        return "green"
+    if days_since <= 60 and err_pct < 0.20:
+        return "amber"
+    return "red"
+
+
+@app.get("/admin/scrapers")
+async def admin_scrapers_list():
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            WITH known_sources AS (
+                SELECT source AS nombre FROM source_credibility
+                UNION SELECT DISTINCT source FROM source_records
+                UNION SELECT nombre FROM fuentes_config
+            ),
+            src_counts AS (
+                SELECT source, COUNT(*) AS total_records
+                FROM source_records GROUP BY source
+            ),
+            spot_counts AS (
+                SELECT unnest(fuentes) AS source,
+                       COUNT(*) AS spots_total,
+                       COUNT(*) FILTER (WHERE cardinality(fuentes) = 1) AS spots_exclusive
+                FROM spots WHERE activo = TRUE
+                GROUP BY 1
+            ),
+            review_counts AS (
+                SELECT source, COUNT(*) AS total_reviews
+                FROM reviews GROUP BY source
+            ),
+            last_run AS (
+                SELECT DISTINCT ON (fuente)
+                    fuente, estado, iniciado_en, terminado_en,
+                    spots_nuevos, spots_actualizados, reviews_nuevas, errores
+                FROM scraper_log
+                ORDER BY fuente, iniciado_en DESC
+            )
+            SELECT
+                ks.nombre,
+                COALESCE(sc.display_name, ks.nombre) AS display_name,
+                sc.base_score,
+                sc.coverage_region,
+                COALESCE(sc.active, TRUE) AS activa,
+                COALESCE(sr.total_records, 0) AS total_records,
+                COALESCE(spc.spots_total, 0) AS spots_total,
+                COALESCE(spc.spots_exclusive, 0) AS spots_exclusive,
+                COALESCE(rc.total_reviews, 0) AS total_reviews,
+                lr.estado AS ultimo_estado,
+                lr.iniciado_en AS ultimo_inicio,
+                lr.terminado_en AS ultimo_fin,
+                lr.spots_nuevos AS ultimo_nuevos,
+                lr.spots_actualizados AS ultimo_actualizados,
+                lr.reviews_nuevas AS ultimo_reviews_nuevas,
+                lr.errores AS ultimo_errores
+            FROM known_sources ks
+            LEFT JOIN source_credibility sc ON sc.source = ks.nombre
+            LEFT JOIN src_counts sr ON sr.source = ks.nombre
+            LEFT JOIN spot_counts spc ON spc.source = ks.nombre
+            LEFT JOIN review_counts rc ON rc.source = ks.nombre
+            LEFT JOIN last_run lr ON lr.fuente = ks.nombre
+            ORDER BY ks.nombre
+        """)
+
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["salud"] = _compute_health(
+            d.get("ultimo_fin"), d.get("ultimo_estado"),
+            d.get("ultimo_errores"), d.get("ultimo_nuevos"),
+            d.get("ultimo_actualizados"),
+        )
+        result.append(d)
+
+    health_order = {"red": 0, "amber": 1, "green": 2}
+    result.sort(key=lambda x: health_order.get(x["salud"], 3))
+    return result
+
+
+@app.get("/admin/scrapers/{nombre}")
+async def admin_scraper_detail(nombre: str):
+    async with pool.acquire() as conn:
+        sc = await conn.fetchrow("SELECT * FROM source_credibility WHERE source = $1", nombre)
+        fc = await conn.fetchrow("SELECT * FROM fuentes_config WHERE nombre = $1", nombre)
+        total_records = await conn.fetchval(
+            "SELECT COUNT(*) FROM source_records WHERE source = $1", nombre
+        )
+        spot_row = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE $1 = ANY(fuentes)) AS spots_total,
+                COUNT(*) FILTER (WHERE $1 = ANY(fuentes) AND cardinality(fuentes) = 1) AS spots_exclusive
+            FROM spots WHERE activo = TRUE
+            """,
+            nombre,
+        )
+        total_reviews = await conn.fetchval(
+            "SELECT COUNT(*) FROM reviews WHERE source = $1", nombre
+        )
+        last_run = await conn.fetchrow(
+            """
+            SELECT fuente, estado, iniciado_en, terminado_en,
+                   EXTRACT(EPOCH FROM (terminado_en - iniciado_en))::INT AS duration_s,
+                   spots_nuevos, spots_actualizados, reviews_nuevas, errores, detalle
+            FROM scraper_log
+            WHERE fuente = $1
+            ORDER BY iniciado_en DESC LIMIT 1
+            """,
+            nombre,
+        )
+        last_reviews_run = await conn.fetchrow(
+            """
+            SELECT fuente, estado, iniciado_en, terminado_en,
+                   EXTRACT(EPOCH FROM (terminado_en - iniciado_en))::INT AS duration_s,
+                   spots_nuevos, spots_actualizados, reviews_nuevas, errores, detalle
+            FROM scraper_log
+            WHERE fuente = $1
+            ORDER BY iniciado_en DESC LIMIT 1
+            """,
+            f"{nombre}_reviews",
+        )
+
+    if sc is None and fc is None and total_records == 0:
+        raise HTTPException(404, f"Fuente '{nombre}' no encontrada")
+
+    last_run_d = dict(last_run) if last_run else None
+    salud = _compute_health(
+        last_run_d.get("terminado_en") if last_run_d else None,
+        last_run_d.get("estado") if last_run_d else None,
+        last_run_d.get("errores") if last_run_d else None,
+        last_run_d.get("spots_nuevos") if last_run_d else None,
+        last_run_d.get("spots_actualizados") if last_run_d else None,
+    )
+    return {
+        "nombre": nombre,
+        "display_name": dict(sc)["display_name"] if sc else nombre,
+        "credibility": dict(sc) if sc else None,
+        "config": dict(fc) if fc else None,
+        "stats": {
+            "total_records": total_records,
+            "spots_total": spot_row["spots_total"] if spot_row else 0,
+            "spots_exclusive": spot_row["spots_exclusive"] if spot_row else 0,
+            "total_reviews": total_reviews,
+        },
+        "last_run": last_run_d,
+        "last_reviews_run": dict(last_reviews_run) if last_reviews_run else None,
+        "salud": salud,
+    }
+
+
+@app.get("/admin/scrapers/{nombre}/history")
+async def admin_scraper_history(nombre: str, limit: int = Query(10, ge=1, le=100)):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT fuente, estado, iniciado_en, terminado_en,
+                   EXTRACT(EPOCH FROM (terminado_en - iniciado_en))::INT AS duration_s,
+                   spots_nuevos, spots_actualizados, reviews_nuevas, errores
+            FROM scraper_log
+            WHERE fuente = ANY($1::text[])
+            ORDER BY iniciado_en DESC
+            LIMIT $2
+            """,
+            [nombre, f"{nombre}_reviews"],
+            limit,
+        )
+    return [dict(r) for r in rows]
+
+
+@app.get("/admin/scrapers/{nombre}/samples")
+async def admin_scraper_samples(nombre: str, limit: int = Query(5, ge=1, le=20)):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT source_id, name AS nombre_canonico, lat, lon, tipo_original AS tipo, last_seen
+            FROM source_records
+            WHERE source = $1
+            ORDER BY last_seen DESC NULLS LAST
+            LIMIT $2
+            """,
+            nombre,
+            limit,
+        )
+    return [dict(r) for r in rows]
 
 
 @app.get("/")
