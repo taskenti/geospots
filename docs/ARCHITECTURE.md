@@ -249,7 +249,6 @@ Fallback heurístico si Gemini falla: `extraer_intencion_heuristica()` mapea pal
 | `GET /search` | Auth | SQL clásico: geo + tipo + gratuito + filtros semánticos materializados |
 | `GET /search/semantic` | Auth | Búsqueda en lenguaje natural (Gemini + vector) |
 | `GET /dashboard` | Auth | Estadísticas agregadas del sistema |
-| `GET /debug_furgovw` | Auth | Debug endpoint para verificar integridad furgovw |
 
 ### Autenticación
 

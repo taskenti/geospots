@@ -25,10 +25,8 @@ Implementado en `scraper/sources/campingcarinfos.py` con descarga global única 
 **Esfuerzo**: Bajo.  
 **Acción**: En `stayfree.py`, detectar explícitamente el código 403/419 y loguear un mensaje claro: `"STAYFREE_XSRF_TOKEN ha caducado — renovar en .env"`.
 
-### 5. Endpoint `debug_furgovw` expuesto en producción
-**Impacto**: Expone información interna del sistema (conteos, IDs, estado de integridad).  
-**Esfuerzo**: Mínimo.  
-**Acción**: Mover a endpoint con prefijo `/admin/` o eliminar si ya no es necesario. Como mínimo, documentar en `CLAUDE.md` que existe y por qué.
+### 5. ~~Endpoint `debug_furgovw` expuesto en producción~~ ✅ RESUELTO (2026-05-25)
+Eliminado. La información que devolvía la cubre `/dashboard` (counts) y `psql` directo (samples). Era código muerto tras la estabilización de furgovw.
 
 ---
 
@@ -128,7 +126,7 @@ Implementado en `scraper/sources/campingcarinfos.py` con descarga global única 
 | # | Recomendación | Impacto | Esfuerzo |
 |---|---|---|---|
 | 1 | ~~campingcarinfos sin implementación~~ ✅ RESUELTO | ALTO | Mínimo |
-| 5 | debug endpoint en producción | MEDIO | Mínimo |
+| 5 | ~~debug endpoint en producción~~ ✅ RESUELTO | MEDIO | Mínimo |
 | 9 | Validar coordenadas en normalize() | ALTO | Mínimo |
 | 4 | Aviso claro token StayFree | MEDIO | Mínimo |
 | 6 | Reconciliar incremental | ALTO | Medio |
@@ -148,4 +146,4 @@ Implementado en `scraper/sources/campingcarinfos.py` con descarga global única 
 | 19 | Unificar versión Python | BAJO | Mínimo |
 | 20 | Docs en CI | BAJO | Bajo |
 
-**Quick wins (máximo impacto, mínimo esfuerzo)**: items 5, 9, 4, 7, 14 — todos completables en una sesión de trabajo. (Item 1 ya resuelto.)
+**Quick wins (máximo impacto, mínimo esfuerzo)**: items 9, 4, 7, 14 — todos completables en una sesión de trabajo. (Items 1 y 5 ya resueltos.)

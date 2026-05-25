@@ -240,35 +240,6 @@ async def semantic_search(
     return result
 
 
-@app.get("/debug_furgovw")
-async def debug_furgovw():
-    async with pool.acquire() as conn:
-        spots = await conn.fetch(
-            """
-            SELECT id, source, lat, lon, name
-            FROM source_records
-            WHERE source = 'furgovw'
-            LIMIT 10
-            """
-        )
-        matches = await conn.fetch(
-            """
-            SELECT s.id, s.canonical_name, s.lat, s.lon, s.fuentes
-            FROM spots s
-            WHERE 'furgovw' = ANY(s.fuentes)
-            LIMIT 10
-            """
-        )
-        total_furgovw = await conn.fetchval("SELECT COUNT(*) FROM source_records WHERE source = 'furgovw'")
-        total_spots_con_furgovw = await conn.fetchval("SELECT COUNT(*) FROM spots WHERE 'furgovw' = ANY(fuentes)")
-    return {
-        "total_source_records": total_furgovw,
-        "total_spots_con_furgovw": total_spots_con_furgovw,
-        "source_records": [dict(s) for s in spots],
-        "spots": [dict(m) for m in matches],
-    }
-
-
 @app.get("/dashboard")
 async def dashboard():
     async with pool.acquire() as conn:
