@@ -138,17 +138,35 @@ class OSMSource(AbstractSource):
             logger.error(f"Error normalizando OSM {raw.get('id')}: {e}")
             return None
 
-    def _generate_points(self):
+    async def _generate_active_points(self, pool):
+        """Genera puntos de búsqueda basados en spots existentes en la base de datos."""
         import random
-        puntos = []
-        lat = self.EU_BOUNDS["lat_min"]
-        while lat <= self.EU_BOUNDS["lat_max"]:
-            lon = self.EU_BOUNDS["lon_min"]
-            while lon <= self.EU_BOUNDS["lon_max"]:
-                puntos.append((round(lat, 4), round(lon, 4)))
-                lon += self.grid_step
-            lat += self.grid_step
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT DISTINCT floor(lat) as lat_idx, floor(lon) as lon_idx FROM spots")
+        
+        existing_cells = {(int(r['lat_idx']), int(r['lon_idx'])) for r in rows}
+        
+        if not existing_cells:
+            logger.info("[osm] No hay spots en la DB. Usando grid de fallback de Europa...")
+            puntos = []
+            lat = self.EU_BOUNDS["lat_min"]
+            while lat <= self.EU_BOUNDS["lat_max"]:
+                lon = self.EU_BOUNDS["lon_min"]
+                while lon <= self.EU_BOUNDS["lon_max"]:
+                    puntos.append((round(lat, 4), round(lon, 4)))
+                    lon += self.grid_step
+                lat += self.grid_step
+            return puntos
+            
+        buffered = set()
+        for lat_idx, lon_idx in existing_cells:
+            for dlat in range(-1, 2):
+                for dlon in range(-1, 2):
+                    buffered.add((lat_idx + dlat, lon_idx + dlon))
+                    
+        puntos = [(lat_idx + 0.5, lon_idx + 0.5) for lat_idx, lon_idx in buffered]
         random.shuffle(puntos)
+        logger.info(f"[osm] Generados {len(puntos)} puntos mundiales activos para Overpass.")
         return puntos
 
     async def run(self, pool, config, log_id: int) -> dict:
@@ -158,7 +176,7 @@ class OSMSource(AbstractSource):
         stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0,
                  "errores": 0, "iniciado_en": inicio, "detalle": {}}
 
-        puntos = self._generate_points()
+        puntos = await self._generate_active_points(pool)
         logger.info(f"[osm] {len(puntos)} puntos GPS")
         seen_ids: set[str] = set()
         sem = asyncio.Semaphore(max(1, config.max_workers // 2))

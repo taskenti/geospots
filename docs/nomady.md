@@ -20,16 +20,24 @@ El JSON de Nomady es extremadamente rico y limpio. La normalización es muy dire
   - Si es solo para tiendas (`tent`), se etiqueta como `naturaleza`.
 - **Servicios Limpios**: Las banderas booleanas son literales y se mapean uno a uno: `drinkingWater` (agua potable), `power` (electricidad), `regularToilet` (wc), `regularShower` (ducha), `blackWater` / `greyWater` (vaciados).
 - **Gratuidad Inexistente**: Al ser un marketplace puro de alquiler privado, se fuerza `gratuito = False` en absolutamente todos los registros.
-- **URL Canónica**: Se reconstruye el enlace de reserva combinando la base de su web con el campo `slug` del spot (`https://nomady.camp/en/c/{slug}`).
+- **URL Canónica**: Se reconstruye el enlace de reserva combinando la base de su web con el campo `slug` del spot (`https://nomady.camp/en/cabin/{slug}`). Anteriormente se usaba `/en/c/{slug}`, pero este patrón de URL ahora devuelve 404.
+
+## 💬 Pipeline de Reseñas (Mayo 2026)
+Se ha implementado el descargador desacoplado `download_reviews` en `nomady.py`:
+1. **Endpoint**: `GET https://api.nomady.camp/ratings/cabin/{source_id}`.
+2. **Claves de Identificación**: Las reseñas de Nomady no devuelven un ID de reseña único estable en el JSON. Se ha implementado una clave compuesta `f"{source_id}_{userId}_{bookingEndDate}"` para garantizar la unicidad e idempotencia en la base de datos.
+3. **Mapeo de Campos**:
+   - Texto: Extraído preferentemente de `text`, con fallback a `textOriginal`.
+   - Calificación: Extraída de `numericRating` (escala nativa 1-5).
+   - Idioma: Extraído de `textOriginalLanguage` con fallback al detector automático `detect_language`.
 
 ## ⚠️ Peligros y Carencias (Riesgos Conocidos)
 
 1. **Cierre del Endpoint Global (API Hardening)**:
    - Este es el riesgo principal. Entregar la base de datos entera en una sola petición `/public-compressed-v2` es una práctica de red que muchas empresas acaban abandonando cuando su volumen de datos crece demasiado (por impacto en sus servidores y riesgo de scraping corporativo). Si Nomady decide pasar a un sistema de celdas geográficas Vector Tiles (como hace Mapbox), este scraper quedará obsoleto y requerirá una reescritura total.
-2. **Ausencia de Reviews Extensas**:
-   - Este volcado masivo inicial contiene el cálculo de la nota media y algunos datos básicos, pero no incluye el texto de las reseñas de los usuarios. Extraer las reseñas requeriría peticiones individuales por spot, lo cual sacrificaría la velocidad extrema de este scraper.
-3. **Limitación de Fotografías**:
+2. **Limitación de Fotografías**:
    - Para no sobrecargar nuestra base de datos ni ralentizar la respuesta del frontend, aunque Nomady envíe arrays con hasta 20 imágenes por parcela, el scraper está configurado para almacenar estrictamente un máximo de 5 URLs de su CDN.
 
 ---
-**Estado Actual:** Integrado, operativo y optimizado al extremo. Es el scraper más rápido de todo el ecosistema (1 Petición HTTP = 100% de la Base de Datos).
+**Estado Actual:** Integrado, operativo y con pipeline de reviews activo.
+

@@ -45,6 +45,69 @@ class AbstractSource(ABC):
                 lon += self.grid_step
             lat -= self.grid_step
 
+    async def generate_active_grid(self, pool, step=1.0, buffer=4):
+        """Genera celdas mundiales activas basadas en spots existentes en la base de datos,
+        alineando las coordenadas a múltiplos de `step` para evitar huecos y solapamientos.
+        """
+        from math import floor
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT lat, lon FROM spots WHERE lat IS NOT NULL AND lon IS NOT NULL")
+        
+        existing_cells = set()
+        for r in rows:
+            try:
+                lat = float(r['lat'])
+                lon = float(r['lon'])
+                if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                    lat_idx = int(floor(lat / step))
+                    lon_idx = int(floor(lon / step))
+                    existing_cells.add((lat_idx, lon_idx))
+            except (ValueError, TypeError):
+                continue
+        
+        if not existing_cells:
+            logger.info(f"[{self.name}] No hay spots en la DB. Usando grid global...")
+            lat = -60.0
+            cells = []
+            while lat <= 75.0:
+                lon = -180.0
+                while lon <= 180.0:
+                    cells.append((
+                        round(lat + step, 4),
+                        round(lon, 4),
+                        round(lat, 4),
+                        round(lon + step, 4),
+                    ))
+                    lon += step
+                lat += step
+            return cells
+            
+        min_lat_idx = int(floor(-90.0 / step))
+        max_lat_idx = int(floor(90.0 / step)) - 1
+        n_lon = int(360.0 / step)
+        half_lon = int(180.0 / step)
+
+        buffered = set()
+        for lat_idx, lon_idx in existing_cells:
+            for dlat in range(-buffer, buffer + 1):
+                for dlon in range(-buffer, buffer + 1):
+                    c_lat = max(min_lat_idx, min(max_lat_idx, lat_idx + dlat))
+                    c_lon = (lon_idx + dlon + half_lon) % n_lon - half_lon
+                    buffered.add((c_lat, c_lon))
+                    
+        logger.info(f"[{self.name}] Grid activo dilatado (step={step}): {len(existing_cells)} celdas iniciales a {len(buffered)} celdas mundiales.")
+        
+        cells = []
+        for lat_idx, lon_idx in buffered:
+            cells.append((
+                round((lat_idx + 1) * step, 4),
+                round(lon_idx * step, 4),
+                round(lat_idx * step, 4),
+                round((lon_idx + 1) * step, 4),
+            ))
+        return cells
+
     async def run(self, pool, config, log_id: int) -> dict:
         """Pipeline completo: grid → fetch → normalize → dedup → store."""
         from db import (
@@ -59,7 +122,7 @@ class AbstractSource(ABC):
             "errores": 0, "iniciado_en": inicio, "detalle": {}
         }
 
-        cells = list(self.generate_grid())
+        cells = await self.generate_active_grid(pool, step=self.grid_step)
         logger.info(f"[{self.name}] {len(cells)} celdas a procesar")
 
         seen_ids: set[str] = set()
@@ -100,7 +163,9 @@ class AbstractSource(ABC):
                                 async with conn.transaction():
                                     existente = await find_spot_cercano(
                                         conn, norm["lat"], norm["lon"],
-                                        self.dedup_radius_m
+                                        self.dedup_radius_m,
+                                        nombre=norm.get("nombre"),
+                                        tipo=norm.get("tipo")
                                     )
 
                                     if existente:
@@ -135,3 +200,8 @@ class AbstractSource(ABC):
         dur = (datetime.now(timezone.utc) - inicio).total_seconds()
         logger.info(f"[{self.name}] Completado en {dur:.0f}s | {stats}")
         return stats
+
+    async def download_reviews(self, pool, config) -> dict:
+        """Descarga de comentarios desacoplada para esta fuente."""
+        logger.info(f"[{self.name}] Descarga de reviews no implementada de forma desacoplada para esta fuente.")
+        return {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}

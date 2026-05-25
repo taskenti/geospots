@@ -27,24 +27,70 @@ async def create_pool(config: Config) -> asyncpg.Pool:
 # ═══════════════════════════════════════════════════════════════
 
 async def find_spot_cercano(conn: asyncpg.Connection, lat: float, lon: float,
-                             radio_metros: float = 100) -> dict | None:
-    row = await conn.fetchrow("""
+                             radio_metros: float = 100, nombre: str = None, tipo: str = None) -> dict | None:
+    # Buscar candidatos ordenados por distancia
+    rows = await conn.fetch("""
         SELECT id, canonical_name, tipo, fuentes,
-               ST_Distance(geog, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) AS dist_m
+               ST_Distance(geog, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) AS dist_m,
+               CASE WHEN $4::text IS NOT NULL THEN similarity(canonical_name, $4) ELSE 1.0 END as name_sim
         FROM spots
         WHERE ST_DWithin(geog, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
           AND activo = TRUE
         ORDER BY dist_m ASC
-        LIMIT 1
-    """, lat, lon, radio_metros)
-    return dict(row) if row else None
+        LIMIT 5
+    """, lat, lon, radio_metros, nombre)
+
+    if not rows:
+        return None
+
+    # Si no se proveen metadatos para matching refinado, devolvemos el más cercano
+    if not nombre or not tipo:
+        return dict(rows[0])
+
+    nombre_norm = nombre.lower().strip()
+    tipo_norm = tipo.lower().strip()
+
+    # Grupos de tipos mutuamente excluyentes para evitar falsas fusiones
+    EXCLUSION_GROUPS = {
+        "camping": {"wild", "naturaleza", "parking_publico", "parking", "picnic", "area_descanso"},
+        "wild": {"camping", "parking_privado", "area_ac", "gasolinera", "marina", "naturaleza"},
+        "naturaleza": {"camping", "parking_privado", "area_ac", "gasolinera", "marina", "wild"},
+        "parking_publico": {"camping", "wild", "naturaleza"},
+        "parking": {"camping", "wild", "naturaleza"},
+    }
+
+    for r in rows:
+        dist = r["dist_m"]
+        c_tipo = (r["tipo"] or "otro").lower().strip()
+        c_sim = r["name_sim"] if r["name_sim"] is not None else 0.0
+
+        # Caso 1: Extrema cercanía (< 20 metros) - Match por error de GPS típico
+        if dist < 20.0:
+            # Salvaguarda: nunca fusionar camping con wild camping
+            if (tipo_norm == "camping" and c_tipo in EXCLUSION_GROUPS["camping"]) or \
+               (c_tipo == "camping" and tipo_norm in EXCLUSION_GROUPS["camping"]):
+                continue
+            return dict(r)
+
+        # Caso 2: Distancia media-larga (20m - 100m)
+        # Comprobar exclusión de tipos
+        if tipo_norm in EXCLUSION_GROUPS and c_tipo in EXCLUSION_GROUPS[tipo_norm]:
+            continue
+        if c_tipo in EXCLUSION_GROUPS and tipo_norm in EXCLUSION_GROUPS[c_tipo]:
+            continue
+
+        # Exigir similitud lingüística de nombre para distancias medias
+        if c_sim >= 0.35:
+            return dict(r)
+
+    return None
 
 
 async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
     row = await conn.fetchrow("""
         INSERT INTO spots (
             canonical_name, lat, lon, country_iso, region, tipo,
-            gratuito, precio_info, agua_potable, vaciado_negras, vaciado_grises,
+            gratuito, precio_info, precio_aprox, agua_potable, vaciado_negras, vaciado_grises,
             electricidad, ducha, wifi, wc_publico, perros, acceso_grandes,
             num_plazas, altura_max_m, temporada_apertura,
             master_rating, total_reviews, fuentes,
@@ -53,18 +99,18 @@ async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
             web, telefono, email, fotos_urls
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, $10, $11,
-            $12, $13, $14, $15, $16, $17,
-            $18, $19, $20,
-            $21, $22, $23,
-            $24, $25, $26, $27, $28, $29,
-            $30, $31, $32, $33::jsonb
+            $7, $8, $9, $10, $11, $12,
+            $13, $14, $15, $16, $17, $18,
+            $19, $20, $21,
+            $22, $23, $24,
+            $25, $26, $27, $28, $29, $30,
+            $31, $32, $33, $34::jsonb
         )
         RETURNING id
     """,
         data.get("nombre", "Sin nombre"), data["lat"], data["lon"],
         data.get("country_iso"), data.get("region"), data.get("tipo", "otro"),
-        data.get("gratuito"), data.get("precio_info"),
+        data.get("gratuito"), data.get("precio_info"), data.get("precio_aprox"),
         data.get("agua_potable"), data.get("vaciado_negras"), data.get("vaciado_grises"),
         data.get("electricidad"), data.get("ducha"), data.get("wifi"),
         data.get("wc_publico"), data.get("perros"), data.get("acceso_grandes"),
@@ -105,6 +151,8 @@ async def enriquecer_spot(conn: asyncpg.Connection, spot_id: int,
         if k in JSONB_FIELDS or isinstance(v, (list, dict)):
             v = json.dumps(v) if not isinstance(v, str) else v
             sets.append(f"{col} = CASE WHEN {col} = '[]'::jsonb OR {col} IS NULL THEN ${i}::jsonb ELSE {col} END")
+        elif col == "tipo":
+            sets.append(f"tipo = CASE WHEN tipo = 'otro' OR tipo IS NULL THEN ${i}::text ELSE tipo END")
         else:
             sets.append(f"{col} = COALESCE({col}, ${i})")
         vals.append(v)
@@ -174,14 +222,102 @@ def _checksum(data: dict) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 async def upsert_review(conn: asyncpg.Connection, review: dict) -> None:
-    await conn.execute("""
-        INSERT INTO reviews (spot_id, source, source_review_id, texto, rating, autor, fecha, idioma)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (source, source_review_id) DO NOTHING
+    status = await conn.execute("""
+        INSERT INTO reviews (
+            spot_id, source, source_review_id, texto, texto_original,
+            rating, autor, fecha, idioma
+        )
+        VALUES ($1, $2, $3, $4, COALESCE($5, $4), $6, $7, $8, $9)
+        ON CONFLICT (source, source_review_id) DO UPDATE SET
+            texto = COALESCE(reviews.texto, EXCLUDED.texto),
+            texto_original = COALESCE(reviews.texto_original, EXCLUDED.texto_original),
+            rating = COALESCE(EXCLUDED.rating, reviews.rating),
+            autor = COALESCE(reviews.autor, EXCLUDED.autor),
+            fecha = COALESCE(reviews.fecha, EXCLUDED.fecha),
+            idioma = COALESCE(reviews.idioma, EXCLUDED.idioma)
     """,
         review["spot_id"], review["source"], review.get("source_review_id"),
-        review.get("texto"), review.get("rating"), review.get("autor"),
-        review.get("fecha"), review.get("idioma")
+        review.get("texto"), review.get("texto_original"), review.get("rating"),
+        review.get("autor"), review.get("fecha"), review.get("idioma")
+    )
+    return status == "INSERT 0 1"
+
+
+async def insert_claim(conn: asyncpg.Connection, review: dict, claim: dict,
+                       pipeline_run_id: str | None = None) -> int:
+    return await conn.fetchval("""
+        INSERT INTO extracted_claims (
+            review_id, spot_id, signal_type, raw_value, extraction_confidence,
+            extractor_name, extractor_version, pipeline_run_id, excerpt
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id
+    """,
+        review["id"], review["spot_id"],
+        claim.get("signal") or claim.get("signal_type"),
+        str(claim.get("value", claim.get("raw_value"))),
+        float(claim.get("confidence", claim.get("extraction_confidence", 1.0))),
+        claim.get("extractor_name", "regex_v1"),
+        claim.get("extractor_version", "phase3-2026-05-23"),
+        pipeline_run_id,
+        claim.get("excerpt")
+    )
+
+
+async def insert_observation(conn: asyncpg.Connection, claim_id: int,
+                             review: dict, observation) -> int:
+    return await conn.fetchval("""
+        INSERT INTO normalized_observations (
+            claim_id, spot_id, signal_type, value_num, value_bool, value_text,
+            extraction_confidence, source_confidence, reviewer_confidence,
+            observation_weight, observed_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id
+    """,
+        claim_id, review["spot_id"], observation.signal_type,
+        observation.value_num, observation.value_bool, observation.value_text,
+        observation.extraction_confidence, observation.source_confidence,
+        observation.reviewer_confidence, observation.observation_weight,
+        observation.observed_at
+    )
+
+
+async def upsert_semantic_state(conn: asyncpg.Connection, spot_id: int,
+                                state: dict) -> None:
+    await conn.execute("""
+        INSERT INTO spot_semantic_state (
+            spot_id, quietness_score, safety_score, police_risk_score,
+            beauty_score, crowd_level_score, overnight_safe, stealth_score,
+            signals_data, semantic_dsl, total_observations,
+            consensus_confidence, weight_support, last_snapshot_data,
+            stale, updated_at, last_aggregated_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11,
+            $12, $13, $9::jsonb, FALSE, NOW(), NOW()
+        )
+        ON CONFLICT (spot_id) DO UPDATE SET
+            quietness_score = EXCLUDED.quietness_score,
+            safety_score = EXCLUDED.safety_score,
+            police_risk_score = EXCLUDED.police_risk_score,
+            beauty_score = EXCLUDED.beauty_score,
+            crowd_level_score = EXCLUDED.crowd_level_score,
+            overnight_safe = EXCLUDED.overnight_safe,
+            stealth_score = EXCLUDED.stealth_score,
+            signals_data = EXCLUDED.signals_data,
+            semantic_dsl = EXCLUDED.semantic_dsl,
+            total_observations = EXCLUDED.total_observations,
+            consensus_confidence = EXCLUDED.consensus_confidence,
+            weight_support = EXCLUDED.weight_support,
+            last_snapshot_data = EXCLUDED.last_snapshot_data,
+            stale = FALSE,
+            updated_at = NOW(),
+            last_aggregated_at = NOW()
+    """,
+        spot_id, state.get("quietness_score"), state.get("safety_score"),
+        state.get("police_risk_score"), state.get("beauty_score"),
+        state.get("crowd_level_score"), state.get("overnight_safe"),
+        state.get("stealth_score"), json.dumps(state.get("signals_data", {})),
+        state.get("semantic_dsl"), state.get("total_observations", 0),
+        state.get("consensus_confidence", 0.0), state.get("weight_support", 0.0)
     )
 
 

@@ -5,37 +5,51 @@ from datetime import datetime, timezone
 from loguru import logger
 
 CREDIBILITY = {
-    "precio_info":        ["campercontact", "areasac", "park4night", "furgovw"],
-    "gratuito":           ["campercontact", "areasac", "park4night", "furgovw", "ioverlander"],
-    "agua_potable":       ["areasac", "campercontact", "park4night", "osm", "ioverlander"],
-    "electricidad":       ["areasac", "campercontact", "park4night", "osm", "ioverlander"],
-    "ducha":              ["areasac", "campercontact", "park4night", "ioverlander"],
-    "wifi":               ["campercontact", "park4night", "ioverlander"],
-    "wc_publico":         ["areasac", "campercontact", "park4night", "ioverlander"],
-    "vaciado_negras":     ["areasac", "campercontact", "park4night"],
-    "vaciado_grises":     ["areasac", "campercontact", "park4night"],
-    "num_plazas":         ["campercontact", "areasac", "park4night"],
-    "acceso_grandes":     ["campercontact", "areasac", "park4night"],
-    "canonical_name":     ["campercontact", "park4night", "areasac", "furgovw", "osm", "ioverlander"],
-    "temporada_apertura": ["campercontact", "park4night", "areasac"],
-    "descripcion_es":     ["furgovw", "park4night", "areasac", "campercontact"],
-    "descripcion_en":     ["park4night", "campercontact", "ioverlander"],
-    "descripcion_fr":     ["park4night", "campercontact"],
-    "descripcion_de":     ["park4night", "campercontact"],
+    "tipo":               ["campercontact", "park4night", "thedyrt", "promobil", "areasac", "campingcarinfos", "furgovw", "stayfree", "wtmg", "campspace", "alpacacamping", "vansite", "roadsurfer", "womostell", "searchforsites", "osm", "ioverlander"],
+    "precio_info":        ["campercontact", "promobil", "thedyrt", "alpacacamping", "womostell", "areasac", "campingcarinfos", "park4night", "stayfree", "vansite", "roadsurfer", "searchforsites", "furgovw", "campspace"],
+    "precio_aprox":       ["campercontact", "promobil", "thedyrt", "alpacacamping", "womostell", "areasac", "campingcarinfos", "park4night", "stayfree", "vansite", "roadsurfer", "searchforsites", "furgovw", "campspace"],
+    "gratuito":           ["campercontact", "promobil", "thedyrt", "alpacacamping", "womostell", "areasac", "campingcarinfos", "park4night", "stayfree", "vansite", "roadsurfer", "searchforsites", "furgovw", "wtmg", "campspace", "ioverlander"],
+    "agua_potable":       ["promobil", "areasac", "campingcarinfos", "campercontact", "park4night", "thedyrt", "womostell", "stayfree", "alpacacamping", "wtmg", "vansite", "roadsurfer", "searchforsites", "campspace", "osm", "ioverlander"],
+    "electricidad":       ["promobil", "areasac", "campingcarinfos", "campercontact", "park4night", "thedyrt", "womostell", "stayfree", "alpacacamping", "wtmg", "vansite", "roadsurfer", "searchforsites", "campspace", "osm", "ioverlander"],
+    "ducha":              ["promobil", "areasac", "campingcarinfos", "campercontact", "park4night", "thedyrt", "womostell", "stayfree", "alpacacamping", "wtmg", "vansite", "roadsurfer", "searchforsites", "campspace", "ioverlander"],
+    "wifi":               ["promobil", "campercontact", "park4night", "thedyrt", "womostell", "campingcarinfos", "vansite", "roadsurfer", "alpacacamping", "searchforsites", "campspace", "ioverlander"],
+    "wc_publico":         ["promobil", "areasac", "campingcarinfos", "campercontact", "park4night", "thedyrt", "womostell", "stayfree", "alpacacamping", "wtmg", "vansite", "roadsurfer", "searchforsites", "campspace", "ioverlander"],
+    "vaciado_negras":     ["promobil", "areasac", "campingcarinfos", "campercontact", "park4night", "womostell", "stayfree", "alpacacamping", "roadsurfer", "searchforsites", "campspace"],
+    "vaciado_grises":     ["promobil", "areasac", "campingcarinfos", "campercontact", "park4night", "womostell", "stayfree", "alpacacamping", "roadsurfer", "searchforsites", "campspace"],
+    "num_plazas":         ["promobil", "campercontact", "thedyrt", "areasac", "campingcarinfos", "park4night", "womostell", "wtmg", "vansite", "roadsurfer", "campspace"],
+    "acceso_grandes":     ["promobil", "campercontact", "areasac", "campingcarinfos", "park4night", "thedyrt", "womostell", "wtmg", "vansite", "roadsurfer", "alpacacamping", "searchforsites", "campspace"],
+    "perros":             ["promobil", "campercontact", "park4night", "thedyrt", "womostell", "campingcarinfos", "wtmg", "vansite", "roadsurfer", "alpacacamping", "searchforsites", "campspace", "ioverlander"],
+    "altura_max_m":       ["park4night", "campercontact"],
+    "reserva_req":        ["campspace", "thedyrt", "campercontact", "park4night", "womostell"],
+    "iluminacion":        ["campercontact", "park4night"],
+    "seguridad":          ["campercontact", "park4night"],
+    "canonical_name":     ["promobil", "campercontact", "park4night", "thedyrt", "areasac", "campingcarinfos", "furgovw", "stayfree", "alpacacamping", "womostell", "wtmg", "vansite", "roadsurfer", "searchforsites", "osm", "ioverlander"],
+    "temporada_apertura": ["campercontact", "park4night", "areasac", "womostell", "searchforsites"],
+    "descripcion_es":     ["furgovw", "stayfree", "park4night", "areasac", "campingcarinfos", "wtmg", "campercontact", "vansite"],
+    "descripcion_en":     ["thedyrt", "park4night", "stayfree", "campercontact", "wtmg", "vansite", "roadsurfer", "searchforsites", "campspace", "ioverlander"],
+    "descripcion_fr":     ["park4night", "campingcarinfos", "wtmg", "campercontact", "vansite"],
+    "descripcion_de":     ["promobil", "alpacacamping", "womostell", "park4night", "wtmg", "campercontact", "vansite", "roadsurfer"],
+    "master_rating":      ["promobil", "campercontact", "park4night", "thedyrt", "stayfree", "alpacacamping", "womostell", "areasac", "campingcarinfos", "vansite", "roadsurfer", "searchforsites", "furgovw", "wtmg", "campspace"],
 }
 
-CONFLICT_FIELDS = ["gratuito", "precio_info", "agua_potable", "electricidad", "num_plazas"]
+CONFLICT_FIELDS = ["gratuito", "precio_info", "agua_potable", "electricidad", "num_plazas", "tipo"]
 
+DB_TO_NORM_KEY = {
+    "canonical_name": "nombre",
+    "master_rating": "rating_promedio",
+    "total_reviews": "num_reviews",
+}
 
 def _reconciliar_campo(records: dict, campo: str):
     """Devuelve (valor, fuente) más fiable para un campo."""
+    norm_key = DB_TO_NORM_KEY.get(campo, campo)
     for fuente in CREDIBILITY.get(campo, []):
         data = records.get(fuente, {})
-        val = data.get(campo)
+        val = data.get(norm_key)
         if val is not None:
             return val, fuente
     for fuente, data in records.items():
-        val = data.get(campo)
+        val = data.get(norm_key)
         if val is not None:
             return val, fuente
     return None, None
@@ -69,12 +83,11 @@ async def job_reconciliar(pool) -> dict:
             WHERE activo = TRUE AND array_length(fuentes, 1) > 1
         """)
 
-    logger.info(f"Reconciliación: {len(spot_ids)} spots multi-fuente")
+        logger.info(f"Reconciliación: {len(spot_ids)} spots multi-fuente")
 
-    for row in spot_ids:
-        spot_id = row["id"]
-        try:
-            async with pool.acquire() as conn:
+        for row in spot_ids:
+            spot_id = row["id"]
+            try:
                 records_raw = await conn.fetch(
                     "SELECT source, normalized_data FROM source_records WHERE spot_id = $1",
                     spot_id
@@ -119,11 +132,10 @@ async def job_reconciliar(pool) -> dict:
                 await conn.execute(query, *vals)
                 stats["actualizados"] += 1
                 stats["conflictos_total"] += len(conflictos)
-
-            stats["procesados"] += 1
-        except Exception as e:
-            logger.error(f"Error reconciliando spot {spot_id}: {e}")
-            stats["errores"] += 1
+                stats["procesados"] += 1
+            except Exception as e:
+                logger.error(f"Error reconciliando spot {spot_id}: {e}")
+                stats["errores"] += 1
 
     dur = (datetime.now() - inicio).seconds
     logger.info(f"Reconciliación completada en {dur}s: {stats}")

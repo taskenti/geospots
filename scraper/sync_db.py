@@ -19,7 +19,13 @@ async def main():
               ('campspace', true, 0),
               ('wtmg', true, 0),
               ('roadsurfer', true, 0),
-              ('vansite', true, 0)
+              ('vansite', true, 0),
+              ('caramaps', true, 0),
+              ('stayfree', true, 0),
+              ('promobil', true, 0),
+              ('womostell', true, 0),
+              ('thedyrt', true, 0),
+              ('campingcarinfos', true, 0)
             ON CONFLICT (nombre) DO NOTHING;
         """)
         
@@ -28,7 +34,7 @@ async def main():
         await conn.execute("""
             UPDATE fuentes_config fc
             SET spots_totales = (SELECT COUNT(*) FROM source_records sr WHERE sr.source = fc.nombre)
-            WHERE fc.nombre IN ('ioverlander', 'park4night', 'portugaleasycamp', 'campspace');
+            WHERE fc.nombre IN ('ioverlander', 'park4night', 'portugaleasycamp', 'campspace', 'caramaps', 'stayfree', 'promobil', 'alpacacamping', 'womostell', 'thedyrt', 'campingcarinfos');
         """)
         
         print("Sincronización completada con éxito!")

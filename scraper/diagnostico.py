@@ -1,5 +1,6 @@
 import asyncio
 import asyncpg
+import sys
 from config import Config
 
 async def main():
@@ -54,8 +55,14 @@ async def main():
         """)
         print("\n--- 5 FURGOVW ALEATORIOS CON SU SPOT ---")
         for s in samples:
-            print(f"\n  Furgovw: {s['sr_name']} ({s['sr_lat']:.6f}, {s['sr_lon']:.6f})")
-            print(f"  Spot:    {s['canonical_name']} ({s['spot_lat']:.6f}, {s['spot_lon']:.6f})")
+            try:
+                name_clean = s['sr_name'].encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8')
+                canonical_clean = s['canonical_name'].encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8')
+                print(f"\n  Furgovw: {name_clean} ({s['sr_lat']:.6f}, {s['sr_lon']:.6f})")
+                print(f"  Spot:    {canonical_clean} ({s['spot_lat']:.6f}, {s['spot_lon']:.6f})")
+            except Exception:
+                print(f"\n  Furgovw: (unprintable name) ({s['sr_lat']:.6f}, {s['sr_lon']:.6f})")
+                print(f"  Spot:    (unprintable name) ({s['spot_lat']:.6f}, {s['spot_lon']:.6f})")
             print(f"  Dist: {s['dist_m']:.2f}m | Fuentes: {s['fuentes']}")
 
         # 6. Reviews

@@ -2,6 +2,16 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 logs/
 data/
 *.bak
+output/
+scratch/
+scraper/scratch/
+.venv/
+venv/
+project_context.md
+*.egg-info/
+dist/
+build/

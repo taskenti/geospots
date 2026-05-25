@@ -10,7 +10,7 @@ El scraper `searchforsites.py` interactúa con un endpoint de búsqueda avanzada
    - Ataca a `https://www.searchforsites.co.uk/pdo/getDataAdvanced.php` mediante el envío de formularios codificados en `x-www-form-urlencoded`.
 2. **La Matriz de Búsqueda (Iteración País/Tipo)**:
    - Para evitar que la base de datos de SFS corte los resultados (ej. si pedimos "Todos los de Europa", nos daría solo los primeros 1000), el scraper fragmenta la petición.
-   - Cuenta con una lista fija de **38 países europeos** (`"GB", "FR", "ES"...`).
+   - Carga la lista de países dinámicamente desde la base de datos `countries` para asegurar cobertura mundial, con un fallback a una lista estática de 38 países europeos si la base de datos está vacía.
    - Cuenta con una lista de **15 tipos de localizaciones** (`1` al `15`).
    - El scraper realiza un doble bucle (`for country... for loc_type...`), cruzando País X con Tipo Y, garantizando que el volumen devuelto por cada cruce sea lo suficientemente pequeño como para que el servidor entregue el 100% de los datos.
 
@@ -22,6 +22,17 @@ El scraper `searchforsites.py` interactúa con un endpoint de búsqueda avanzada
 - **Detección de Coste Precisa**: SFS devuelve un objeto `cost` con `min` y `max`. Si ambos son `0`, el scraper marca el sitio categóricamente como `gratuito = True`.
 - **Fotografías**: Reconstruye la URL de la miniatura a partir del nombre del archivo almacenado en su directorio de uploads (`https://www.searchforsites.co.uk/uploads/thumbs/...`).
 
+## 💬 Pipeline de Reseñas (Mayo 2026)
+Se ha implementado el descargador desacoplado `download_reviews` en `searchforsites.py`:
+1. **Endpoint**: `POST https://www.searchforsites.co.uk/pdo/getReviews.php` con payload `x-www-form-urlencoded` conteniendo el parámetro `markerID`.
+2. **Normalización de Escala**: Las valoraciones originales vienen en una escala de 10 puntos (`score` de la API). El scraper las divide por `2.0` para normalizarlas al estándar de 5 estrellas de GeoSpots.
+3. **Mapeo de Campos**:
+   - ID Único: `review.id`.
+   - Texto: Extraído de `review.text`.
+   - Autor: Extraído de `user.name`.
+   - Fecha: Parseada del string `review.updated` usando el formato `%Y-%m-%d %H:%M:%S` con zona horaria UTC.
+   - Idioma: Identificado dinámicamente con `detect_language`.
+
 ## ⚠️ Peligros y Carencias (Riesgos Conocidos)
 
 1. **Truncamiento Silencioso (Silent Truncation)**:
@@ -32,4 +43,9 @@ El scraper `searchforsites.py` interactúa con un endpoint de búsqueda avanzada
    - La API devuelve los servicios como un string de números separados por comas (ej. `"facilities": "1,2,3,5,7,12,18"`). Al desconocer exactamente qué número es electricidad o agua, el scraper actual guarda el campo crudo (`raw_facilities`). Esto requiere una auditoría futura de la web para decodificar qué significa cada número y mapearlo a los campos nativos de GeoSpots.
 
 ---
-**Estado Actual:** Integrado y operativo. Realiza cientos de iteraciones ligeras con un alto índice de éxito y fiabilidad.
+**Estado Actual:** Integrado, operativo y con pipeline de reviews activo.
+
+## 🔄 Cambios Recientes (Mayo 2026)
+- **Carga Dinámica de Países**: Eliminada la lista estática fija. Ahora se realiza una consulta `SELECT DISTINCT UPPER(iso_a2)` sobre la tabla `countries` para barrer todo el planeta, manteniendo la lista estática como fallback.
+- **Pipeline de Reviews**: Añadido soporte para descarga concurrente de valoraciones usando `fetch_and_save_reviews()`.
+

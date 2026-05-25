@@ -26,6 +26,15 @@ def _b(raw: dict, key: str) -> bool | None:
     return str(v).strip() == "1"
 
 
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+]
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=4, min=4, max=16),
@@ -33,13 +42,21 @@ def _b(raw: dict, key: str) -> bool | None:
     reraise=True
 )
 async def _fetch_json(client: httpx.AsyncClient, url: str, params: dict) -> dict:
-    resp = await client.get(url, params=params, timeout=15)
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "application/json",
+    }
+    resp = await client.get(url, params=params, headers=headers, timeout=15)
     if resp.status_code == 429:
         logger.warning("P4N Rate limit 429. Esperando 60s...")
         await asyncio.sleep(60)
         resp.raise_for_status()
     resp.raise_for_status()
-    return resp.json()
+    try:
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error parsing JSON response: {e}")
+        return {}
 
 
 class Park4NightSource(AbstractSource):
@@ -144,6 +161,8 @@ class Park4NightSource(AbstractSource):
 
     def _parse_review(self, raw: dict, spot_id: int) -> dict | None:
         try:
+            from enrichment.review_cleaner import detect_language
+
             texto = (raw.get("commentaire") or raw.get("comment") or "").strip() or None
             rating_val = raw.get("note")
             rating = int(rating_val) if rating_val and 1 <= int(rating_val) <= 5 else None
@@ -164,26 +183,13 @@ class Park4NightSource(AbstractSource):
                 "rating": rating,
                 "fecha": fecha,
                 "autor": raw.get("uuid") or raw.get("pseudo") or raw.get("login"),
-                "idioma": None,
+                "idioma": detect_language(texto),
             }
         except Exception:
             return None
 
-    def _generate_points(self) -> list[tuple[float, float]]:
-        """Genera grid de puntos lat/lon para toda Europa."""
-        puntos = []
-        lat = 35.0
-        while lat <= 71.5:
-            lon = -11.0
-            while lon <= 30.0:
-                puntos.append((round(lat, 4), round(lon, 4)))
-                lon += self.grid_step
-            lat += self.grid_step
-        random.shuffle(puntos)
-        return puntos
-
     async def run(self, pool, config, log_id: int) -> dict:
-        """Override completo: P4N usa puntos, no bbox."""
+        """Adaptive global crawler using queue-based quadtree subdivision."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, upsert_review,
@@ -197,100 +203,241 @@ class Park4NightSource(AbstractSource):
             "errores": 0, "iniciado_en": inicio, "detalle": {}
         }
 
-        puntos = self._generate_points()
-        logger.info(f"[park4night] {len(puntos)} puntos GPS a procesar")
+        # 1. Generate starting grid points (Level 0: 1.0° cells)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT DISTINCT floor(lat) as lat_idx, floor(lon) as lon_idx FROM spots")
+        
+        existing_cells = {(int(r['lat_idx']), int(r['lon_idx'])) for r in rows}
+        
+        if existing_cells:
+            # Dilate cells with a 4-cell buffer to cover all adjacent lands
+            buffered = set()
+            for lat_idx, lon_idx in existing_cells:
+                for dlat in range(-4, 5):
+                    for dlon in range(-4, 5):
+                        buffered.add((lat_idx + dlat, lon_idx + dlon))
+            logger.info(f"[park4night] Dilated {len(existing_cells)} active cells into {len(buffered)} cells for global scanning.")
+            
+            # Start queue with centers of dilated 1.0° cells
+            initial_points = []
+            for lat_idx, lon_idx in buffered:
+                initial_points.append((lat_idx + 0.5, lon_idx + 0.5, 1.0, 0))
+        else:
+            # Fallback to global 2.0° grid if no spots exist
+            logger.info("[park4night] No existing spots in DB. Initializing with global 2.0° grid.")
+            initial_points = []
+            lat = -60.0
+            while lat <= 75.0:
+                lon = -180.0
+                while lon <= 180.0:
+                    initial_points.append((lat + 1.0, lon + 1.0, 2.0, 0))
+                    lon += 2.0
+                lat += 2.0
 
+        random.shuffle(initial_points)
+        
+        # 2. Asynchronous Queue Processing
+        queue = asyncio.Queue()
+        for p in initial_points:
+            await queue.put(p)
+            
         seen_ids: set[str] = set()
-        sem = asyncio.Semaphore(config.max_workers)
+        total_queries = 0
+        max_depth = 3  # depth 0 (1.0°/2.0°), 1 (0.5°/1.0°), 2 (0.25°/0.5°), 3 (0.125°/0.25°)
+        
+        # We will log progress periodically
+        processed_count = 0
+        total_initial = len(initial_points)
 
         async with httpx.AsyncClient(follow_redirects=True, headers=self.HEADERS) as client:
-
-            async def procesar_punto(lat, lon):
-                async with sem:
-                    await asyncio.sleep(self.rate_limit)
+            
+            async def worker():
+                nonlocal total_queries, processed_count
+                while True:
                     try:
+                        lat, lon, step, depth = await queue.get()
+                    except asyncio.CancelledError:
+                        break
+                    
+                    try:
+                        # Rate limit delay per worker query
+                        await asyncio.sleep(self.rate_limit)
+                        
+                        total_queries += 1
                         data = await _fetch_json(client, P4N_LUGARES, {
                             "latitude": lat, "longitude": lon
                         })
+                        
+                        lugares_raw = data.get("lieux") or data.get("tab_lieux") or []
+                        spots_count = len(lugares_raw)
+                        
+                        # Process spots returned
+                        for raw in lugares_raw:
+                            norm = self.normalize(raw)
+                            if not norm:
+                                continue
+                            
+                            sid = norm["source_id"]
+                            if sid in seen_ids:
+                                continue
+                            seen_ids.add(sid)
+                            
+                            try:
+                                async with pool.acquire() as conn:
+                                    async with conn.transaction():
+                                        existente = await find_spot_cercano(
+                                            conn, norm["lat"], norm["lon"],
+                                            self.dedup_radius_m
+                                        )
+                                        
+                                        if existente:
+                                            spot_id = existente["id"]
+                                            await enriquecer_spot(conn, spot_id, norm, self.name)
+                                            stats["actualizados"] += 1
+                                        else:
+                                            norm["fuentes"] = [self.name]
+                                            spot_id = await crear_spot(conn, norm)
+                                            stats["nuevos"] += 1
+                                            
+                                        await upsert_source_record(
+                                            conn, spot_id, self.name, sid, raw, norm
+                                        )
+                            except Exception as e:
+                                logger.error(f"[park4night] Error saving spot '{norm.get('nombre')}': {e}")
+                                stats["errores"] += 1
+                                
+                        # Subdivide if capped (exactly 100 spots returned) and depth < max_depth
+                        if spots_count == 100 and depth < max_depth:
+                            new_step = step / 2.0
+                            new_depth = depth + 1
+                            sub_points = [
+                                (lat - new_step / 2, lon - new_step / 2),
+                                (lat - new_step / 2, lon + new_step / 2),
+                                (lat + new_step / 2, lon - new_step / 2),
+                                (lat + new_step / 2, lon + new_step / 2),
+                            ]
+                            for sub_lat, sub_lon in sub_points:
+                                await queue.put((sub_lat, sub_lon, new_step, new_depth))
+                                
                     except Exception as e:
-                        logger.warning(f"[P4N] Error punto {lat},{lon}: {e}")
+                        logger.warning(f"[park4night] Error scanning point {lat},{lon}: {e}")
                         stats["errores"] += 1
-                        return
+                    finally:
+                        if depth == 0:
+                            processed_count += 1
+                        queue.task_done()
 
-                    lugares_raw = data.get("lieux") or data.get("tab_lieux") or []
+            # Launch workers
+            workers = []
+            for _ in range(config.max_workers):
+                workers.append(asyncio.create_task(worker()))
+                
+            # Log progress in background
+            async def progress_reporter():
+                while not queue.empty() or queue.unfinished_tasks > 0:
+                    await asyncio.sleep(15)
+                    logger.info(
+                        f"[park4night] Grid Scan | level0_progress={processed_count}/{total_initial} | "
+                        f"total_queries={total_queries} | queue_backlog={queue.qsize()} | "
+                        f"uniq_spots={len(seen_ids)} nuevos={stats['nuevos']} upd={stats['actualizados']} err={stats['errores']}"
+                    )
+            
+            reporter_task = asyncio.create_task(progress_reporter())
+            
+            # Wait for queue to finish processing
+            await queue.join()
+            
+            # Stop reporter and workers
+            reporter_task.cancel()
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
 
-                    for raw in lugares_raw:
-                        norm = self.normalize(raw)
-                        if not norm:
-                            continue
-
-                        sid = norm["source_id"]
-                        if sid in seen_ids:
-                            continue
-                        seen_ids.add(sid)
-
-                        try:
-                            async with pool.acquire() as conn:
-                                async with conn.transaction():
-                                    existente = await find_spot_cercano(
-                                        conn, norm["lat"], norm["lon"],
-                                        self.dedup_radius_m
-                                    )
-
-                                    if existente:
-                                        spot_id = existente["id"]
-                                        await enriquecer_spot(conn, spot_id, norm, self.name)
-                                        stats["actualizados"] += 1
-                                    else:
-                                        norm["fuentes"] = [self.name]
-                                        spot_id = await crear_spot(conn, norm)
-                                        stats["nuevos"] += 1
-
-                                    await upsert_source_record(
-                                        conn, spot_id, self.name, sid, raw, norm
-                                    )
-
-                            # Reviews (si el spot tiene y son nuevas)
-                            n_reviews = norm.get("num_reviews", 0)
-                            if n_reviews > 0:
-                                await asyncio.sleep(self.rate_limit)
-                                try:
-                                    rev_data = await _fetch_json(client, P4N_REVIEWS, {
-                                        "lieu_id": int(sid)
-                                    })
-                                    rev_list = rev_data.get("commentaires") or rev_data.get("historique") or []
-                                    async with pool.acquire() as conn:
-                                        for rev_raw in rev_list:
-                                            rev = self._parse_review(rev_raw, spot_id)
-                                            if rev:
-                                                try:
-                                                    await upsert_review(conn, rev)
-                                                    stats["reviews_nuevas"] += 1
-                                                except Exception:
-                                                    pass
-                                except Exception as e:
-                                    logger.warning(f"[P4N] Reviews {sid}: {e}")
-
-                        except Exception as e:
-                            logger.error(f"[P4N] Error '{norm.get('nombre')}': {e}")
-                            stats["errores"] += 1
-
-            LOTE = 50
-            for i in range(0, len(puntos), LOTE):
-                batch = puntos[i:i+LOTE]
-                await asyncio.gather(*[procesar_punto(lat, lon) for lat, lon in batch])
-
-                logger.info(
-                    f"[park4night] {min(i+LOTE, len(puntos))}/{len(puntos)} | "
-                    f"uniq={len(seen_ids)} new={stats['nuevos']} "
-                    f"upd={stats['actualizados']} rev={stats['reviews_nuevas']} "
-                    f"err={stats['errores']}"
-                )
-
+        # 3. Finalize Logs
         async with pool.acquire() as conn:
             await finish_scraper_log(conn, log_id, stats)
             await update_fuente_config(conn, self.name, stats)
-
+ 
         dur = (datetime.now(timezone.utc) - inicio).total_seconds()
         logger.info(f"[park4night] Completado en {dur:.0f}s | {stats}")
+        return stats
+
+    async def download_reviews(self, pool, config) -> dict:
+        from db import upsert_review
+        
+        stats = {
+            "nuevos": 0,
+            "actualizados": 0,
+            "reviews_nuevas": 0,
+            "errores": 0
+        }
+        
+        logger.info(f"[{self.name}] Buscando spots pendientes de reviews...")
+        async with pool.acquire() as conn:
+            review_jobs = await conn.fetch("""
+                SELECT sr.spot_id, sr.source_id, sr.review_count, COALESCE(r.cnt, 0) as db_review_count
+                FROM source_records sr
+                LEFT JOIN (
+                    SELECT spot_id, COUNT(*) as cnt
+                    FROM reviews
+                    WHERE source = 'park4night'
+                    GROUP BY spot_id
+                ) r ON sr.spot_id = r.spot_id
+                WHERE sr.source = 'park4night' 
+                  AND sr.review_count > 0 
+                  AND COALESCE(r.cnt, 0) < sr.review_count
+                ORDER BY sr.review_count DESC;
+            """)
+            
+        logger.info(f"[{self.name}] Encontrados {len(review_jobs)} spots pendientes de reviews.")
+        
+        if not review_jobs:
+            return stats
+            
+        rev_queue = asyncio.Queue()
+        for r in review_jobs:
+            await rev_queue.put(dict(r))
+            
+        async def review_worker(client):
+            while not rev_queue.empty():
+                try:
+                    job = await rev_queue.get()
+                except asyncio.CancelledError:
+                    break
+                
+                spot_id = job["spot_id"]
+                sid = job["source_id"]
+                
+                try:
+                    await asyncio.sleep(self.rate_limit)
+                    rev_data = await _fetch_json(client, P4N_REVIEWS, {
+                        "lieu_id": int(sid)
+                    })
+                    rev_list = rev_data.get("commentaires") or rev_data.get("historique") or []
+                    
+                    async with pool.acquire() as conn:
+                        async with conn.transaction():
+                            for rev_raw in rev_list:
+                                rev = self._parse_review(rev_raw, spot_id)
+                                if rev:
+                                    inserted = await upsert_review(conn, rev)
+                                    stats["reviews_nuevas"] += int(bool(inserted))
+                except Exception as e:
+                    logger.warning(f"[{self.name}] Error fetching reviews for spot {sid}: {e}")
+                    stats["errores"] += 1
+                finally:
+                    rev_queue.task_done()
+                    
+        # Iniciar trabajadores concurrentes compartiendo un único cliente httpx
+        num_workers = min(config.max_workers or 3, 5)
+        async with httpx.AsyncClient(follow_redirects=True, headers=self.HEADERS) as client:
+            workers = []
+            for _ in range(num_workers):
+                workers.append(asyncio.create_task(review_worker(client)))
+                
+            await rev_queue.join()
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+            
         return stats

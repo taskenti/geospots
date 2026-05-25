@@ -49,6 +49,33 @@ services:
       - geospots-logs:/app/logs
       - ./data:/data:ro
       - ./scraper:/app
+      - ./enrichment:/app/enrichment:ro
+      - ./jobs:/app/jobs:ro
+
+  enrichment:
+    build: ./scraper
+    container_name: geospots-enrichment
+    restart: unless-stopped
+    networks:
+      - geospots_net
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      REQUEST_DELAY_SECONDS: 2
+      MAX_WORKERS: 3
+      LOG_LEVEL: INFO
+    volumes:
+      - ./scraper:/app
+      - ./enrichment:/app/enrichment
+      - ./jobs:/app/jobs
+    command: ["python", "-m", "enrichment.worker", "--batch-size", "1000"]
 
   api:
     build: ./api
@@ -73,6 +100,7 @@ services:
     volumes:
       - ./pwa:/pwa
       - ./api:/app
+      - ./enrichment:/app/enrichment:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:18889/health')"]
       interval: 30s

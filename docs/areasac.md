@@ -23,7 +23,7 @@ El scraper `areasac.py` no realiza peticiones a internet. Es un proceso de **Ing
   - `/AN/` = Aguas Negras
   - `/CE/` = Electricidad
 - **Sello de Calidad**: A todos los puntos extraídos se les inyecta la bandera `verificado = True` de forma predeterminada, dada la fiabilidad del equipo editorial de ÁreasAC.
-- **Filtro Geográfico Español**: Ignora cualquier punto fuera de España (Lat: 27 a 44.5, Lon: -19 a 5).
+- **Filtro Geográfico Planetario**: Se eliminó el filtro exclusivo de España y ahora acepta cualquier coordenada planetaria válida en los rangos (-90 a 90 de latitud y -180 a 180 de longitud).
 
 ## ⚠️ Peligros y Carencias (Riesgos Conocidos)
 
@@ -36,3 +36,6 @@ El scraper `areasac.py` no realiza peticiones a internet. Es un proceso de **Ing
 
 ---
 **Estado Actual:** Integrado y operativo. Extrae áreas de autocaravanas de alta calidad en España, aunque depende completamente de la exactitud tipográfica del PDF de origen.
+
+## 🔄 Cambios Recientes (Mayo 2026)
+- **Eliminación del Filtro Geográfico de España**: El parser ya no restringe las coordenadas a la Península e islas de España. Ahora acepta y normaliza puntos en cualquier parte del mundo.

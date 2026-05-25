@@ -8,7 +8,7 @@ El scraper `vansite.py` presenta uno de los mayores desafíos de serialización 
 
 1. **Búsqueda Continental Paginada**:
    - Ataca directamente a la API genérica de Sharetribe: `https://flex-api.sharetribe.com/v1/api/listings/query`.
-   - Se le inyecta un Bounding Box (`bounds`) gigante que cubre todo el continente europeo (`71.5,-25.0, 34.0,45.0`).
+   - Se le inyecta un Bounding Box (`bounds`) a nivel mundial (`90.0,-180.0,-90.0,180.0`).
    - Se establece una paginación lineal masiva (`per_page: 100`, `page: 1, 2, 3...`), barriendo la totalidad de la plataforma mediante un bucle simple hasta que la respuesta viene vacía.
 2. **Traducción al vuelo de Transit JSON**:
    - Sharetribe, al estar programado con el lenguaje Clojure en su backend, utiliza un formato de datos llamado **Transit JSON**. Este formato convierte los diccionarios en listas planas con metadatos extraños como `["^ ", "~:id", "~u62d91553-a967..."]` para ahorrar bytes en la red.
@@ -31,3 +31,6 @@ El scraper `vansite.py` presenta uno de los mayores desafíos de serialización 
 
 ---
 **Estado Actual:** Integrado y funcional mediante parseo nativo de Transit JSON. Requiere monitorización atenta a los códigos de respuesta (Riesgo Alto de 403 Forbidden).
+
+## 🔄 Cambios Recientes (Mayo 2026)
+- **Eliminación de Filtros Geográficos**: Se amplió el Bounding Box de Europa a nivel mundial (`90.0,-180.0,-90.0,180.0`).

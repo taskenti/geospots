@@ -19,6 +19,74 @@ HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 
+def detect_language(text: str) -> str:
+    if not text:
+        return "en"
+    text = text.lower()
+    scores = {
+        "es": sum(1 for w in [" el ", " la ", " con ", " para ", " jardín ", " tienda ", " bienvenidos "] if w in text),
+        "fr": sum(1 for w in [" le ", " la ", " avec ", " pour ", " jardin ", " tente ", " bienvenue "] if w in text),
+        "nl": sum(1 for w in [" het ", " een ", " met ", " voor ", " tuin ", " tent ", " welkom "] if w in text),
+        "de": sum(1 for w in [" der ", " die ", " das ", " mit ", " garten ", " zelt ", " willkommen "] if w in text),
+        "en": sum(1 for w in [" the ", " with ", " for ", " garden ", " tent ", " welcome ", " our "] if w in text)
+    }
+    max_lang = max(scores, key=scores.get)
+    if scores[max_lang] == 0:
+        return "en"
+    return max_lang
+
+def infer_dogs(text: str) -> bool | None:
+    if not text:
+        return None
+    text = text.lower()
+    forbidden_keywords = [
+        "no perros", "sin perros", "perros no", "perros prohibidos", "no mascotas", "mascotas prohibidas", "no se admiten perros", "no se aceptan perros",
+        "no dogs", "no pets", "dogs not allowed", "pets not allowed", "no animals", "without dogs", "without pets",
+        "pas de chien", "chien interdit", "sans chien", "pas d'animaux", "animaux interdits", "sans animaux",
+        "geen honden", "geen huisdieren", "honden niet toegestaan", "huisdieren niet toegestaan",
+        "keine hunde", "keine haustiere", "hunde nicht erlaubt", "hunde verboten"
+    ]
+    allowed_keywords = [
+        "perros bienvenidos", "se aceptan perros", "se admiten perros", "mascotas bienvenidas", "se aceptan mascotas", "se admiten mascotas", "perros ok",
+        "dogs welcome", "dogs allowed", "pets welcome", "pets allowed", "dogs ok", "dog friendly", "pet friendly",
+        "chien bienvenu", "chiens bienvenus", "chien accepté", "chiens acceptés", "animaux acceptés", "animaux bienvenus",
+        "honden welkom", "honden toegestaan", "huisdieren welkom", "huisdieren toegestaan",
+        "hunde willkommen", "hunde erlaubt", "haustiere willkommen", "haustiere erlaubt"
+    ]
+    for kw in forbidden_keywords:
+        if kw in text:
+            return False
+    for kw in allowed_keywords:
+        if kw in text:
+            return True
+    return None
+
+def infer_large_vehicles(text: str) -> bool | None:
+    if not text:
+        return None
+    text = text.lower()
+    tent_only_keywords = [
+        "tent only", "tents only", "only tents", "only for tents", "no campers", "no motorhomes", "no caravans", "no rvs", "no vans", "no cars", "no vehicles",
+        "solo tiendas", "sólo tiendas", "solo tienda", "sólo tienda", "no furgonetas", "no autocaravanas", "no caravanas", "no vehículos",
+        "uniquement tentes", "tentes uniquement", "pas de camping-car", "pas de caravane", "pas de véhicule",
+        "alleen tenten", "geen campers", "geen caravans", "geen voertuigen",
+        "nur zelte", "nur für zelte", "keine wohnmobile", "keine wohnwagen", "keine fahrzeuge"
+    ]
+    vehicle_allowed_keywords = [
+        "camper allowed", "campers allowed", "vans allowed", "van allowed", "motorhome allowed", "motorhomes allowed", "rv allowed", "rvs allowed", "vehicles allowed", "vehicle allowed", "camper van", "campervan", "motorhome ok", "camper ok",
+        "se aceptan campers", "se admiten campers", "furgonetas bienvenidas", "se aceptan furgonetas", "autocaravanas bienvenidas", "se aceptan autocaravanas",
+        "camping-cars bienvenus", "camping-car accepté", "vans acceptés", "fourgon accepté",
+        "campers welkom", "campers toegestaan", "busjes welkom",
+        "wohnmobile willkommen", "wohnmobile erlaubt", "camper willkommen", "camper erlaubt"
+    ]
+    for kw in tent_only_keywords:
+        if kw in text:
+            return False
+    for kw in vehicle_allowed_keywords:
+        if kw in text:
+            return True
+    return None
+
 class WelcomeToMyGardenSource(AbstractSource):
     name = "wtmg"
     rate_limit = 1.0
@@ -82,14 +150,33 @@ class WelcomeToMyGardenSource(AbstractSource):
 
         description = self._extract_firestore_value(fields.get("description"))
 
-        return {
+        # Determinar idioma y asignar a la columna adecuada
+        lang = "en"
+        desc_fields = {}
+        if description and isinstance(description, str) and description.strip():
+            lang = detect_language(description)
+            desc_fields[f"descripcion_{lang}"] = description
+
+        # Inferir perros y vehículos grandes
+        perros = infer_dogs(description)
+        acceso_grandes = infer_large_vehicles(description)
+
+        # Capacidad de plazas
+        num_plazas = facs.get("capacity")
+        if num_plazas is not None:
+            try:
+                num_plazas = int(num_plazas)
+            except (ValueError, TypeError):
+                num_plazas = None
+
+        res = {
             "source_id": doc_id,
             "nombre": f"Jardín WTMG - {doc_id[:6]}", # No tienen nombre público, usamos ID
             "lat": lat,
             "lon": lon,
             "tipo": "naturaleza",
             "gratuito": True,  # WTMG es una plataforma de jardines gratuitos
-            "agua_potable": facs.get("drinkableWater") or facs.get("water") or False,
+            "agua_potable": facs.get("drinkableWater") or False,
             "wc_publico": facs.get("toilet") or False,
             "electricidad": facs.get("electricity") or False,
             "ducha": facs.get("shower") or False,
@@ -97,8 +184,14 @@ class WelcomeToMyGardenSource(AbstractSource):
             "vaciado_grises": False,
             "fotos_urls": fotos,
             "web": f"https://welcometomygarden.org/es/explore",
-            "owner_description": description # Para guardarlo como primera review
+            "owner_description": description, # Para guardarlo como primera review
+            "owner_description_lang": lang,   # Guardar idioma detectado
+            "perros": perros,
+            "acceso_grandes": acceso_grandes,
+            "num_plazas": num_plazas,
         }
+        res.update(desc_fields)
+        return res
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (
@@ -171,6 +264,7 @@ class WelcomeToMyGardenSource(AbstractSource):
 
                     sid = norm["source_id"]
                     desc = norm.pop("owner_description", None)
+                    desc_lang = norm.pop("owner_description_lang", "en")
 
                     try:
                         async with pool.acquire() as conn:
@@ -201,7 +295,7 @@ class WelcomeToMyGardenSource(AbstractSource):
                                         "rating": None,
                                         "fecha": None,
                                         "autor": "Anfitrión del jardín",
-                                        "idioma": "es",
+                                        "idioma": desc_lang,
                                     })
                                     stats["reviews_nuevas"] += 1
 

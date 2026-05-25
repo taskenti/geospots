@@ -22,6 +22,124 @@ FURGOVW_BOARDS = [
 ]
 
 
+def parse_booleano_foro(val: str) -> bool:
+    val_low = val.lower()
+    if val_low.startswith(('no', 'nono', 'ninguno', 'ninguna')):
+        return False
+    if any(x in val_low for x in ('si', 'sí', 'yes', 'dispone', 'existe', 'hay', 'fuente', 'grifo', 'toma')):
+        return True
+    return False
+
+def extract_price_es(price_str: str) -> tuple[float | None, str | None]:
+    if not price_str:
+        return None, None
+    price_str_low = price_str.lower()
+    if any(x in price_str_low for x in ('gratis', 'gratuito', 'libre', '0', 'no tiene', 'sin costo', 'no hay')):
+        return 0.0, "Gratuito"
+    match = re.search(r"(\d+(?:[.,]\d+)?)", price_str)
+    if match:
+        try:
+            val_str = match.group(1).replace(",", ".")
+            val = float(val_str)
+            return val, f"{val:.2f} €"
+        except Exception:
+            pass
+    return None, None
+
+def detect_language(text: str) -> str:
+    if not text:
+        return "es"
+    text = text.lower()
+    scores = {
+        "es": sum(1 for w in [" el ", " la ", " con ", " para ", " jardín ", " tienda ", " bienvenidos "] if w in text),
+        "fr": sum(1 for w in [" le ", " la ", " avec ", " pour ", " jardin ", " tente ", " bienvenue "] if w in text),
+        "nl": sum(1 for w in [" het ", " een ", " met ", " voor ", " tuin ", " tent ", " welkom "] if w in text),
+        "de": sum(1 for w in [" der ", " die ", " das ", " mit ", " garten ", " zelt ", " willkommen "] if w in text),
+        "en": sum(1 for w in [" the ", " with ", " for ", " garden ", " tent ", " welcome ", " our "] if w in text)
+    }
+    max_lang = max(scores, key=scores.get)
+    if scores[max_lang] == 0:
+        return "es"
+    return max_lang
+
+def infer_large_vehicles(text: str) -> bool | None:
+    if not text:
+        return None
+    text = text.lower()
+    tent_only_keywords = [
+        "tent only", "tents only", "only tents", "only for tents", "no campers", "no motorhomes", "no caravans", "no rvs", "no vans", "no cars", "no vehicles",
+        "solo tiendas", "sólo tiendas", "solo tienda", "sólo tienda", "no furgonetas", "no autocaravanas", "no caravanas", "no vehículos", "no ACs", "no ac", "no apto para autocaravanas", "no apto autocaravanas",
+        "uniquement tentes", "tentes uniquement", "pas de camping-car", "pas de caravane", "pas de véhicule",
+        "alleen tenten", "geen campers", "geen caravans", "geen voertuigen",
+        "nur zelte", "nur für zelte", "keine wohnmobile", "keine wohnwagen", "keine fahrzeuge"
+    ]
+    vehicle_allowed_keywords = [
+        "camper allowed", "campers allowed", "vans allowed", "van allowed", "motorhome allowed", "motorhomes allowed", "rv allowed", "rvs allowed", "vehicles allowed", "vehicle allowed", "camper van", "campervan", "motorhome ok", "camper ok",
+        "se aceptan campers", "se admiten campers", "furgonetas bienvenidas", "se aceptan furgonetas", "autocaravanas bienvenidas", "se aceptan autocaravanas", "apto para autocaravanas", "apto autocaravanas",
+        "camping-cars bienvenus", "camping-car accepté", "vans acceptés", "fourgon accepté",
+        "campers welkom", "campers toegestaan", "busjes welkom",
+        "wohnmobile willkommen", "wohnmobile erlaubt", "camper willkommen", "camper erlaubt"
+    ]
+    for kw in tent_only_keywords:
+        if kw in text:
+            return False
+    for kw in vehicle_allowed_keywords:
+        if kw in text:
+            return True
+    return None
+
+def _dms_to_decimal(deg, mins, secs, direction):
+    decimal = float(deg) + float(mins)/60.0 + float(secs)/3600.0
+    if direction.upper() in ('S', 'W', 'O'):
+        decimal = -decimal
+    return decimal
+
+
+def _extraer_coordenadas_foro(html: str) -> tuple[float, float] | None:
+    html_clean = html.replace('&#39;', "'").replace('&quot;', '"').replace('&nbsp;', ' ')
+    
+    # 1. Buscar en enlaces de Google Maps comunes
+    patterns = [
+        r'q=(-?\d{1,2}\.\d{4,9})\s*,\s*(-?\d{1,2}\.\d{4,9})',
+        r'll=(-?\d{1,2}\.\d{4,9})\s*,\s*(-?\d{1,2}\.\d{4,9})',
+        r'dir//(-?\d{1,2}\.\d{4,9})\s*,\s*(-?\d{1,2}\.\d{4,9})',
+        r'@(-?\d{1,2}\.\d{4,9})\s*,\s*(-?\d{1,2}\.\d{4,9})',
+    ]
+    for pattern in patterns:
+        matches = re.findall(pattern, html_clean)
+        for lat_s, lon_s in matches:
+            lat, lon = float(lat_s), float(lon_s)
+            if 30 <= lat <= 65 and -25 <= lon <= 45:
+                return lat, lon
+                
+    # 2. DMS formato tipo 1: 51°02'45.3"N 3°42'10.6"E
+    dms_pat1 = r'(\d{1,2})[\s°º]*(\d{1,2})[\s\']+(\d{1,2}(?:\.\d+)?)[\s\"]*([NnSs])\s+(\d{1,2})[\s°º]*(\d{1,2})[\s\']+(\d{1,2}(?:\.\d+)?)[\s\"]*([EeWwOo])'
+    dms_matches1 = re.findall(dms_pat1, html_clean)
+    for m in dms_matches1:
+        lat = _dms_to_decimal(m[0], m[1], m[2], m[3])
+        lon = _dms_to_decimal(m[4], m[5], m[6], m[7])
+        if 30 <= lat <= 65 and -25 <= lon <= 45:
+            return lat, lon
+            
+    # 3. DMS formato tipo 2: N 36°44'38'' W 03° 35' 59''
+    dms_pat2 = r'([NnSs])\s*(\d{1,2})[\s°º]*(\d{1,2})[\s\']+(\d{1,2}(?:\.\d+)?)[\s\']*[^NnSsEeWwOo]*([EeWwOo])\s*(\d{1,2})[\s°º]*(\d{1,2})[\s\']+(\d{1,2}(?:\.\d+)?)'
+    dms_matches2 = re.findall(dms_pat2, html_clean)
+    for m in dms_matches2:
+        lat = _dms_to_decimal(m[1], m[2], m[3], m[0])
+        lon = _dms_to_decimal(m[5], m[6], m[7], m[4])
+        if 30 <= lat <= 65 and -25 <= lon <= 45:
+            return lat, lon
+            
+    # 4. Buscar pares de decimales genéricos en el texto
+    matches = re.findall(r'(-?\d{1,2}\.\d{4,9})\s*,\s*(-?\d{1,2}\.\d{4,9})', html_clean)
+    for lat_s, lon_s in matches:
+        lat, lon = float(lat_s), float(lon_s)
+        if 30 <= lat <= 65 and -25 <= lon <= 45:
+            return lat, lon
+            
+    return None
+
+
 def _limpiar_html(texto: str) -> str:
     texto = unescape(texto)
     texto = re.sub(r'<br\s*/?>', '\n', texto)
@@ -42,42 +160,106 @@ def _sanitize_xml(text: str) -> str:
 def _parsear_body(body: str) -> dict:
     if not body:
         return {}
+    
+    # 1. Desescapar entidades HTML
+    body_clean = unescape(body)
+    
+    # 2. Reemplazar <br /> o <br> por saltos de línea
+    body_clean = re.sub(r'<br\s*/?>', '\n', body_clean, flags=re.IGNORECASE)
+    
+    # 3. Eliminar otros tags HTML
+    body_clean = re.sub(r'<[^>]+>', '', body_clean)
+    
+    # 4. Reemplazar espacios duros por espacios normales
+    body_clean = body_clean.replace('\xa0', ' ')
+    
+    # 5. Eliminar tachaduras de BBCode [s]...[/s] COMPLETAMENTE con su contenido
+    body_clean = re.sub(r'\[s\].*?\[/s\]', '', body_clean, flags=re.IGNORECASE | re.DOTALL)
+    
+    # 6. Eliminar el resto de etiquetas BBCode [b], [/b], [i], etc.
+    body_clean = re.sub(r'\[/?[a-zA-Z*#]+(?:=[^\]]+)?\]', '', body_clean)
+    
     result = {}
-    lines = body.strip().split('\n')
+    lines = body_clean.strip().split('\n')
     desc_lines = []
     in_desc = False
+    
+    # Pre-calcular texto completo en minúsculas para deducción del tipo
+    texto_completo_limpio = body_clean.lower()
 
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        low = line.lower()
-        if low.startswith('agua:'):
-            result['agua_potable'] = low.split(':', 1)[1].strip() in ('si', 'sí', 'yes')
-        elif low.startswith(('wc:', 'baño:')):
-            result['wc_publico'] = low.split(':', 1)[1].strip() in ('si', 'sí', 'yes')
-        elif low.startswith(('electricidad:', 'luz:')):
-            result['electricidad'] = low.split(':', 1)[1].strip() in ('si', 'sí', 'yes')
-        elif low.startswith('ducha:'):
-            result['ducha'] = low.split(':', 1)[1].strip() in ('si', 'sí', 'yes')
-        elif low.startswith(('vaciado:', 'negras:')):
-            result['vaciado_negras'] = low.split(':', 1)[1].strip() in ('si', 'sí', 'yes')
-        elif low.startswith('grises:'):
-            result['vaciado_grises'] = low.split(':', 1)[1].strip() in ('si', 'sí', 'yes')
-        elif low.startswith(('gratuito:', 'gratis:')):
-            result['gratuito'] = low.split(':', 1)[1].strip() in ('si', 'sí', 'yes', 'gratuito')
-        elif 'descripci' in low and ':' in low:
-            in_desc = True
-            after = line.split(':', 1)[1].strip()
-            if after:
-                desc_lines.append(after)
-        elif in_desc:
+        
+        # Si tiene ':' intentamos parsear campos clave
+        if ':' in line:
+            parts = line.split(':', 1)
+            key = parts[0].strip().lower()
+            val = parts[1].strip()
+            val_low = val.lower()
+            
+            # Evitar falsos positivos si la clave es demasiado larga
+            if len(key) < 30:
+                if 'agua' in key:
+                    result['agua_potable'] = parse_booleano_foro(val)
+                elif 'wc' in key or 'baño' in key or 'baños' in key:
+                    result['wc_publico'] = parse_booleano_foro(val)
+                elif 'electricidad' in key or 'luz' in key:
+                    result['electricidad'] = parse_booleano_foro(val)
+                elif 'ducha' in key:
+                    result['ducha'] = parse_booleano_foro(val)
+                elif 'negras' in key:
+                    result['vaciado_negras'] = parse_booleano_foro(val)
+                elif 'grises' in key:
+                    result['vaciado_grises'] = parse_booleano_foro(val)
+                elif 'vaciado' in key:
+                    if 'vaciado_negras' not in result:
+                        result['vaciado_negras'] = parse_booleano_foro(val)
+                elif 'gratuito' in key or 'gratis' in key:
+                    result['gratuito'] = parse_booleano_foro(val) or any(x in val_low for x in ('gratis', 'gratuito', 'libre'))
+                elif 'precio' in key or 'tarifa' in key:
+                    p_aprox, p_info = extract_price_es(val)
+                    if p_aprox is not None:
+                        result['precio_aprox'] = p_aprox
+                        result['precio_info'] = p_info
+                        if p_aprox == 0.0:
+                            result['gratuito'] = True
+                elif 'tipo' in key:
+                    if 'camping' in val_low:
+                        result['tipo'] = 'camping'
+                    elif any(x in val_low for x in ('area de', 'area ac', 'área ac', 'autocaravanas')):
+                        result['tipo'] = 'area_ac'
+                    elif 'furgoperfecto' in val_low or 'fp' in val_low:
+                        urban_words = ('pueblo', 'ciudad', 'urbano', 'parking', 'aparcamiento', 'calle', 'plaza', 'asfalto')
+                        nature_words = ('playa', 'río', 'rio', 'embalse', 'pantano', 'monte', 'montaña', 'bosque', 'pinar', 'pradera', 'campo', 'vistas', 'mirador', 'senderismo', 'naturaleza', 'parque')
+                        urban_count = sum(1 for w in urban_words if w in texto_completo_limpio)
+                        nature_count = sum(1 for w in nature_words if w in texto_completo_limpio)
+                        if urban_count > nature_count:
+                            result['tipo'] = 'parking'
+                        else:
+                            result['tipo'] = 'naturaleza'
+                
+                # Manejar descripción
+                if 'descripci' in key:
+                    in_desc = True
+                    if val.strip():
+                        desc_lines.append(val.strip())
+                    continue
+        
+        # Si estamos dentro de la descripción, o es una línea informativa
+        if in_desc:
             desc_lines.append(line)
-        elif len(line) > 20:
+        elif len(line) > 20 and not any(k in line.lower() for k in ('nombre:', 'tipo:', 'gratuito:', 'agua:', 'wc:', 'baño:', 'electricidad:', 'ducha:', 'vaciado:', 'grises:', 'coordenadas:')):
             desc_lines.append(line)
 
-    if desc_lines:
-        result['descripcion_es'] = '\n'.join(desc_lines).strip()[:2000]
+    desc_str = '\n'.join(desc_lines).strip()
+    if desc_str:
+        result['descripcion_es'] = desc_str[:2000]
+        result['acceso_grandes'] = infer_large_vehicles(desc_str)
+    else:
+        result['acceso_grandes'] = infer_large_vehicles(body_clean)
+        
     return result
 
 
@@ -132,7 +314,7 @@ class FurgovwSource(AbstractSource):
                 "nombre": nombre,
                 "lat": lat,
                 "lon": lon,
-                "tipo": "naturaleza",
+                "tipo": body_data.get("tipo", "naturaleza"),
                 "gratuito": body_data.get("gratuito", True),
                 "fotos_urls": fotos,
                 "web": web,
@@ -293,7 +475,7 @@ class FurgovwSource(AbstractSource):
                     async with pool.acquire() as conn:
                         async with conn.transaction():
                             existente = await find_spot_cercano(
-                                conn, norm["lat"], norm["lon"], self.dedup_radius_m
+                                conn, norm["lat"], norm["lon"], self.dedup_radius_m, norm["nombre"], norm["tipo"]
                             )
                             if existente:
                                 spot_id = existente["id"]
@@ -334,6 +516,37 @@ class FurgovwSource(AbstractSource):
 
         dur = (datetime.now(timezone.utc) - inicio).total_seconds()
         logger.info(f"[furgovw] Completado en {dur:.0f}s | {stats}")
+        return stats
+
+    async def download_reviews(self, pool, config) -> dict:
+        """Incremental RSS review re-fetch using mapped forum topic IDs."""
+        stats = {"reviews_nuevas": 0, "errores": 0, "topics": 0}
+        topic_to_spot: dict[int, int] = {}
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT spot_id, raw_data
+                FROM source_records
+                WHERE source = $1
+                """,
+                self.name,
+            )
+        for row in rows:
+            raw = row["raw_data"] or {}
+            topic_id = raw.get("topic_id") or raw.get("topicId")
+            if topic_id:
+                try:
+                    topic_to_spot[int(topic_id)] = row["spot_id"]
+                except (TypeError, ValueError):
+                    continue
+
+        stats["topics"] = len(topic_to_spot)
+        async with httpx.AsyncClient(headers=self.HEADERS, follow_redirects=True) as client:
+            try:
+                stats["reviews_nuevas"] = await self._fetch_rss_reviews(client, pool, topic_to_spot)
+            except Exception as e:
+                logger.error(f"[furgovw] Error incremental RSS reviews: {e}")
+                stats["errores"] += 1
         return stats
 
     async def _fetch_papelera_topics(self, client) -> list[dict]:
@@ -449,13 +662,39 @@ class FurgovwSource(AbstractSource):
             tid = topic["topic_id"]
             titulo = topic["titulo"]
 
-            # ¿Tiene coords en la API?
+            # ¿Tiene coords en la API o las extraemos del foro?
             api = api_map.get(tid)
-            if not api:
+            lat, lon = None, None
+            fid_str = None
+            nombre = titulo
+            
+            if api:
+                lat = api["lat"]
+                lon = api["lon"]
+                fid_str = str(api["fid"])
+                nombre = api["nombre"] or titulo
+            else:
+                # No está en la API: scrapear la página del foro para extraer coordenadas
+                url = f"{FURGOVW_FORUM}?topic={tid}.0"
+                try:
+                    logger.info(f"[papelera] Scrapeando topic {tid} sin coords en API: {titulo}...")
+                    resp = await client.get(url, timeout=15)
+                    resp.raise_for_status()
+                    coords = _extraer_coordenadas_foro(resp.text)
+                    if coords:
+                        lat, lon = coords
+                        fid_str = f"papelera_{tid}"
+                        logger.info(f"[papelera] Coordenadas extraídas del foro para topic {tid}: {lat}, {lon}")
+                    else:
+                        logger.warning(f"[papelera] No se pudieron extraer coordenadas del foro para topic {tid}")
+                    await asyncio.sleep(1.0)
+                except Exception as e:
+                    logger.warning(f"[papelera] Error scrapeando topic {tid} del foro: {e}")
+
+            if not lat or not lon or not fid_str:
                 pstats["sin_coords"] += 1
                 continue
 
-            fid_str = str(api["fid"])
             adv = "⚠️ Lugar retirado de Furgoperfectos (papelera del foro)"
 
             # ¿Ya existe en source_records?
@@ -474,15 +713,15 @@ class FurgovwSource(AbstractSource):
             try:
                 norm = {
                     "source_id": fid_str,
-                    "nombre": api["nombre"] or titulo,
-                    "lat": api["lat"], "lon": api["lon"],
+                    "nombre": nombre,
+                    "lat": lat, "lon": lon,
                     "tipo": "naturaleza", "gratuito": True,
                     "country_iso": "es", "fuentes": [self.name],
                 }
                 async with pool.acquire() as conn:
                     async with conn.transaction():
                         cercano = await find_spot_cercano(
-                            conn, norm["lat"], norm["lon"], self.dedup_radius_m
+                            conn, norm["lat"], norm["lon"], self.dedup_radius_m, norm["nombre"], norm["tipo"]
                         )
                         if cercano:
                             spot_id = cercano["id"]
@@ -493,7 +732,7 @@ class FurgovwSource(AbstractSource):
                             "UPDATE spots SET advertencia = $1, updated_at = NOW() WHERE id = $2",
                             adv, spot_id
                         )
-                        await upsert_source_record(conn, spot_id, self.name, fid_str, {"papelera": True}, norm)
+                        await upsert_source_record(conn, spot_id, self.name, fid_str, {"papelera": True, "topic_id": tid}, norm)
                 pstats["nuevos_retirados"] += 1
             except Exception as e:
                 logger.warning(f"[papelera] Error insertando {titulo}: {e}")

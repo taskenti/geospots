@@ -7,7 +7,7 @@
 El scraper `caramaps.py` tiene una particularidad técnica notable: no ataca una API REST tradicional, sino que **se conecta directamente a un endpoint proxy de ElasticSearch** de su panel de administración (`admin.caramaps.com/api/revisions/elastic`). Esto permite búsquedas extremadamente rápidas y filtrados complejos.
 
 1. **Búsqueda Global (Sin Grid)**:
-   - A diferencia de los scrapers que trocean el mapa en celdas, CaraMaps es capaz de gestionar un "Bounding Box" gigantesco que abarca toda Europa en una sola petición.
+   - A diferencia de los scrapers que trocean el mapa en celdas, CaraMaps es capaz de gestionar un "Bounding Box" gigantesco a nivel mundial.
 2. **Paginación Masiva (Deep Pagination)**:
    - Pide los resultados en lotes de **800 elementos por página** (`itemsPerPage=800`). 
    - Realiza el barrido en dos fases separadas: primero extrae los puntos de la comunidad (`isPro=False`) y luego los anfitriones/negocios profesionales (`isPro=True`).
@@ -19,6 +19,23 @@ El scraper `caramaps.py` tiene una particularidad técnica notable: no ataca una
 - **Detección de Coste**: Examina el nodo interno `parkingType.code` para determinar con precisión si el lugar es gratis (`free_parking`) o de pago (`paying_parking`, `paid`).
 - **Mapeo Geopolítico**: Si la API no devuelve el código ISO del país, el scraper cuenta con un diccionario (`COUNTRY_ISO`) para inferir el código de dos letras a partir del nombre del país (ej. "France" -> "FR").
 
+## 💬 Pipeline de Reseñas (Mayo 2026)
+Se ha implementado el descargador desacoplado `download_reviews` en `caramaps.py`:
+1. **Endpoint**: `GET https://admin.caramaps.com/api/point_of_interest_comments`.
+2. **Parámetros**:
+   - `pointOfInterest.uuid`: UUID del spot de CaraMaps.
+   - `deletedAt`: `"false"`
+   - `itemsPerPage`: `"50"`
+   - `page`: Paginación numérica (inicia en 1).
+   - `order[createdAt]`: `"desc"`
+3. **Mapeo de Campos**:
+   - ID Único: `uuid` (UUID nativo de la valoración).
+   - Texto: Extraído de `value` o `defaultValue`.
+   - Calificación: Extraída de `notation` (escala 1-5).
+   - Autor: Reconstruido como `givenName` + `familyName` (con fallback a "Usuario CaraMaps").
+   - Fecha: Parseada a partir del string ISO `createdAt`.
+   - Idioma: Extraído de `authorLocale.alpha2` (con fallback a "es").
+
 ## ⚠️ Peligros y Carencias (Riesgos Conocidos)
 
 1. **Vulnerabilidad de los UUIDs Hardcodeados (Taxonomy Drift)**:
@@ -29,4 +46,10 @@ El scraper `caramaps.py` tiene una particularidad técnica notable: no ataca una
    - Como ocurre con otros scrapers de mapas interactivos masivos, el endpoint de ElasticSearch devuelve las URL de las fotos pero optimizadas para miniaturas, careciendo del peso y calidad de la ficha de detalle.
 
 ---
-**Estado Actual:** Integrado y funcional. Es un scraper muy eficiente en tiempo de ejecución al extraer bloques de 800 en 800, pero requiere vigilancia ante posibles cambios en la estructura de la base de datos origen.
+**Estado Actual:** Integrado, operativo y con pipeline de reviews activo.
+
+## 🔄 Cambios Recientes (Mayo 2026)
+- **Eliminación de Filtros Geográficos**: Se amplió el Bounding Box de Europa a nivel mundial (`WORLD_TOP`, `WORLD_BOTTOM`, `WORLD_LEFT`, `WORLD_RIGHT` de `90.0, -90.0, -180.0, 180.0`).
+- **Validación de Coordenadas**: Se modificó `normalize()` para aceptar cualquier coordenada planetaria válida.
+- **Pipeline de Reviews**: Añadido soporte para descarga concurrente de valoraciones usando `download_reviews()`.
+
