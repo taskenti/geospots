@@ -24,6 +24,7 @@
 | **womostell** | `www.womostell.de` | JSON REST | BBox estándar | Mensual | Activo | DACH |
 | **thedyrt** | `thedyrt.com` | JSON REST | BBox estándar | Mensual | Activo | USA/CAN |
 | **campingcarinfos** | `www.campingcar-infos.com` | ZIP+ASCII (POI) | Descarga global única | Mensual | Activo | EU (43 países, ~24K spots) |
+| **agricamper** | `www.agricamper.com/wp-json/interactive-map/v1/fiches` | JSON bulk (WP REST) | Descarga global única | Semanal | Activo | IT (~605 fiches agroturismo) |
 | **portugaleasycamp** | — | — | — | — | Stub vacío | Portugal |
 
 ---

@@ -38,6 +38,8 @@ SOURCES = {
     "womostell": "sources.womostell:WomoStellplatzSource",
     "thedyrt": "sources.thedyrt:TheDyrtSource",
     "campingcarinfos": "sources.campingcarinfos:CampingcarInfosSource",
+    "agricamper": "sources.agricamper:AgricamperSource",
+    "campendium": "sources.campendium:CampendiumSource",
 }
 
 
