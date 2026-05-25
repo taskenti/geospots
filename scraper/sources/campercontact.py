@@ -18,6 +18,26 @@ TIPO_MAP = {
     "wild": "naturaleza", "picnic": "picnic",
 }
 
+# subtitle viene como "Ciudad, País" donde País está en inglés (free text).
+# Mapeamos los más comunes a ISO2 lowercase. Para los desconocidos dejamos
+# None y dejamos que el trigger geográfico de PostGIS clasifique por lat/lon.
+COUNTRY_NAME_TO_ISO = {
+    "spain": "es", "france": "fr", "germany": "de", "italy": "it",
+    "portugal": "pt", "netherlands": "nl", "belgium": "be", "austria": "at",
+    "switzerland": "ch", "united kingdom": "gb", "ireland": "ie",
+    "denmark": "dk", "norway": "no", "sweden": "se", "finland": "fi",
+    "iceland": "is", "poland": "pl", "czechia": "cz", "czech republic": "cz",
+    "slovakia": "sk", "hungary": "hu", "slovenia": "si", "croatia": "hr",
+    "bosnia and herzegovina": "ba", "serbia": "rs", "montenegro": "me",
+    "north macedonia": "mk", "albania": "al", "greece": "gr",
+    "bulgaria": "bg", "romania": "ro", "moldova": "md", "ukraine": "ua",
+    "turkey": "tr", "morocco": "ma", "tunisia": "tn",
+    "andorra": "ad", "monaco": "mc", "liechtenstein": "li", "malta": "mt",
+    "estonia": "ee", "latvia": "lv", "lithuania": "lt", "luxembourg": "lu",
+    "cyprus": "cy", "san marino": "sm", "vatican city": "va",
+    "russia": "ru", "belarus": "by",
+}
+
 class CamperContactSource(AbstractSource):
     name = "campercontact"
     rate_limit = 0.3
@@ -108,13 +128,18 @@ class CamperContactSource(AbstractSource):
                 except ValueError:
                     pass
 
-        # Ciudad / país del subtitle
+        # Ciudad / país del subtitle (formato "Ciudad, País" en inglés)
         subtitle = raw.get("subtitle", "")
-        ciudad, pais = None, None
+        ciudad, country_iso = None, None
         if subtitle:
             parts = [p.strip() for p in subtitle.split(",")]
             ciudad = parts[0] if parts else None
-            pais = parts[-1] if len(parts) >= 2 else None
+            if len(parts) >= 2:
+                pais_raw = parts[-1].lower()
+                # Mapear inglés -> ISO2. Si no aparece, None para que el trigger
+                # geográfico de PostGIS lo clasifique por lat/lon (evita meter
+                # "Spain" o "S" truncado en una columna que espera ISO2)
+                country_iso = COUNTRY_NAME_TO_ISO.get(pais_raw)
 
         cc_id = str(raw.get("sitecode") or raw.get("id", ""))
         if not cc_id:
@@ -135,7 +160,7 @@ class CamperContactSource(AbstractSource):
             "num_reviews": filters.get("numberOfReviews"),
             "num_plazas": filters.get("maxCamperSpots"),
             "region": ciudad,
-            "country_iso": pais,
+            "country_iso": country_iso,
             "web": (
                 "https://www.campercontact.com/en" + raw.get("permalink", "")
                 if raw.get("permalink") else None
@@ -293,6 +318,8 @@ class CamperContactSource(AbstractSource):
                         norm = self.normalize(raw_item)
                         if not norm:
                             continue
+                        if not self.coords_validas(norm.get("lat"), norm.get("lon")):
+                            continue
 
                         sid = str(norm.get("source_id", ""))
                         if not sid or sid in seen_ids:
@@ -351,8 +378,14 @@ class CamperContactSource(AbstractSource):
 
         logger.info(f"[{self.name}] Buscando spots con reviews/detalles pendientes de descarga...")
         async with pool.acquire() as conn:
+            # IMPORTANTE: la URL de campercontact se reconstruye desde raw_data->>'permalink',
+            # NO desde normalized_data->>'web'. Phase 2 sobreescribe normalized_data.web con
+            # el sitio externo del establecimiento (e.g. sorkwity.pttk.pl), por lo que usar
+            # esa columna provoca scraping de sitios que no son campercontact.
             enrich_jobs = await conn.fetch("""
-                SELECT sr.spot_id, sr.source_id, sr.normalized_data->>'web' as web, sr.review_count, COALESCE(r.cnt, 0) as db_review_count
+                SELECT sr.spot_id, sr.source_id,
+                       raw_data->>'permalink' AS permalink,
+                       sr.review_count, COALESCE(r.cnt, 0) as db_review_count
                 FROM source_records sr
                 LEFT JOIN (
                     SELECT spot_id, COUNT(*) as cnt
@@ -361,6 +394,7 @@ class CamperContactSource(AbstractSource):
                     GROUP BY spot_id
                 ) r ON sr.spot_id = r.spot_id
                 WHERE sr.source = 'campercontact'
+                  AND raw_data->>'permalink' IS NOT NULL
                   AND (
                     (sr.normalized_data->>'details_fetched') IS NULL
                     OR (sr.review_count > 0 AND COALESCE(r.cnt, 0) < sr.review_count)
@@ -388,15 +422,13 @@ class CamperContactSource(AbstractSource):
 
                 spot_id = job["spot_id"]
                 sid = job["source_id"]
-                web_url = job["web"]
-                if web_url:
-                    web_url = web_url.replace("campercontact.com/nl/", "campercontact.com/en/")
-                    if "campercontact.com/" in web_url and not any(f"campercontact.com/{l}/" in web_url for l in ["nl", "en", "de", "fr", "it", "es"]):
-                        web_url = web_url.replace("campercontact.com/", "campercontact.com/en/")
-
-                if not web_url:
+                permalink = job["permalink"]
+                if not permalink:
                     job_queue.task_done()
                     continue
+                # Construir URL canónica /en/ desde el permalink (formato:
+                # "/france/brittany/.../100011/la-ferme-de-tuchennou")
+                web_url = f"https://www.campercontact.com/en{permalink}"
 
                 try:
                     await asyncio.sleep(self.rate_limit)

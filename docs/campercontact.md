@@ -30,5 +30,44 @@ El scraper `campercontact.py` se basa en realizar ingeniería inversa a la API i
 3. **Optimización de Inserción y Prevención de Sobrescritura**:
    - `enriquecer_spot` en la capa de datos actualiza únicamente campos que sean `NULL`, asegurando que CamperContact complemente sin sobrescribir fuentes primarias de mayor credibilidad como Park4Night.
 
+## 🔧 Auditoría y Fixes Mayo 2026
+
+Auditoría completa del scraper tras detectar **2.253 errores** y **62% de URLs corruptas** en la última ejecución (24-05-2026, 4.9h, 30.995 actualizados, 0 nuevos).
+
+### Bugs detectados
+
+1. **URL externa sobreescribía la de campercontact (CRÍTICO)**
+   - En Phase 2, `_normalize_detail` extrae `web = contact.get("website")` que es la URL del establecimiento (e.g. `sorkwity.pttk.pl`), NO la de campercontact.
+   - Esto se guardaba en `source_records.normalized_data.web`.
+   - La query de re-ejecución leía esa columna, intentando scrapear el sitio externo.
+   - **Resultado**: 27.983 de 45.617 spots (62%) intentaban scraping fuera de campercontact y fallaban con `parse_html returned None`, 404, 403, timeouts, certificate errors.
+   - **Fix**: la query de `download_reviews` ahora reconstruye la URL desde `raw_data->>'permalink'` (que siempre tiene `/france/brittany/.../100011/la-ferme-de-tuchennou`).
+
+2. **`country_iso` con valores truncados (GRAVE)**
+   - El `subtitle` viene como `"Madrid, Spain"`, con país en inglés y formato libre.
+   - Se guardaba directamente en `country_iso` (columna varchar(2)), produciendo truncamiento: "Spain"→"S", "France"→"F", "Norway"→"N".
+   - **Resultado**: 117.431 spots con `country_iso` de longitud 1 en toda la DB (9.511 "f", 8.028 "de" correctos, 2.802 "nl", **2.445 "n" corruptos**, etc.).
+   - **Fix**: nuevo dict `COUNTRY_NAME_TO_ISO` con 48 países → ISO2 lowercase. Si no mapea, deja `NULL` y el trigger geográfico de PostGIS clasifica por lat/lon.
+
+3. **Validación de coordenadas no aplicada**
+   - El `run()` propio del scraper no llamaba a `coords_validas()` (convención nueva).
+   - **Fix**: añadido en el loop principal después de `normalize()`.
+
+### Limpieza de datos aplicada (2026-05-25)
+
+```sql
+-- 117.431 country_iso corruptos resetados a NULL (todas las fuentes, no solo cc)
+UPDATE spots SET country_iso = NULL WHERE LENGTH(country_iso) <= 1;
+
+-- 27.983 spots de campercontact marcados para re-fetch en próxima Phase 2
+UPDATE source_records SET normalized_data = normalized_data - 'details_fetched'
+WHERE source='campercontact'
+  AND normalized_data->>'web' NOT LIKE '%campercontact%';
+```
+
+### Validación post-fix
+
+Tests sobre 30 spots aleatorios con la URL reconstruida desde `permalink`: **30/30 OK**, 0 errores.
+
 ---
-**Estado Actual:** Totalmente optimizado, sin sesgos de disponibilidad e ingestando detalles complejos y reviews en segundo plano de manera 100% automatizada.
+**Estado Actual:** Auditado y reparado. Próxima ejecución de Phase 2 (`scheduler.py --reviews campercontact`) re-procesará los 27.983 spots con URL corrupta y rellenará `country_iso` correcto donde falte.
