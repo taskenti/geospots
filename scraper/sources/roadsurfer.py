@@ -188,18 +188,33 @@ class RoadsurferSource(AbstractSource):
                     precio_aprox = float(raw_price)
                     precio_info = f"{precio_aprox:.2f} €"
 
-        # Num plazas
-        num_plazas = detail.get("capacity") if detail else raw.get("capacity")
+        # Num plazas (defensivo: capacity puede ser string "8-12" o "Variable" en algún spot)
+        raw_capacity = detail.get("capacity") if detail else raw.get("capacity")
+        num_plazas = None
+        if raw_capacity is not None:
+            try:
+                num_plazas = int(raw_capacity)
+            except (TypeError, ValueError):
+                # Intenta extraer primer número de un string tipo "8-12"
+                m = re.search(r"\d+", str(raw_capacity))
+                if m:
+                    try:
+                        num_plazas = int(m.group())
+                    except ValueError:
+                        num_plazas = None
 
         # Acceso grandes
         acceso_grandes = None
         if camping_types:
             acceso_grandes = any(t in camping_types for t in ["motorhome", "caravan"])
 
-        # Perros
+        # Perros (defensivo: cat.get("name") puede venir None, no solo missing)
         categories = raw.get("categories", []) or []
         has_dog_cat = any(
-            isinstance(cat, dict) and (cat.get("id") == 68 or "dog" in cat.get("name", "").lower())
+            isinstance(cat, dict) and (
+                cat.get("id") == 68
+                or "dog" in (cat.get("name") or "").lower()
+            )
             for cat in categories
         )
         
@@ -266,7 +281,8 @@ class RoadsurferSource(AbstractSource):
 
         res = {
             "source_id": str(raw.get("id")),
-            "nombre": raw.get("name", "Roadsurfer Spot").strip()[:200],
+            # Defensivo: name puede venir explícitamente null, no solo missing
+            "nombre": (raw.get("name") or "Roadsurfer Spot").strip()[:200],
             "lat": lat,
             "lon": lon,
             "tipo": tipo,
@@ -373,6 +389,8 @@ class RoadsurferSource(AbstractSource):
                     
                     norm = self.normalize(raw, detail)
                     if not norm:
+                        continue
+                    if not self.coords_validas(norm.get("lat"), norm.get("lon")):
                         continue
 
                     try:
