@@ -225,6 +225,7 @@ FUENTES EXTERNAS (20+ scrapers)
 | campingcarinfos | Descarga global ASCII (ZIP+POI) | ✅ Integrada | EU (43 países) |
 | agricamper | API JSON bulk (WP REST) | ✅ Integrada | IT (~605 agroturismos) |
 | campendium | Tiles OSM zoom 8 + REST detail | ✅ Integrada | US/CA |
+| campingcarpark | Bulk API gateway + detail por ID | ✅ Integrada | EU (~906 áreas oficiales CCP) |
 
 ---
 
