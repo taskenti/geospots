@@ -1,0 +1,24 @@
+# Normalizar todos los archivos de texto a LF en el repo
+* text=auto eol=lf
+
+# Forzar LF explícito para archivos de código y config
+*.py text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+*.env text eol=lf
+*.example text eol=lf
+Dockerfile text eol=lf
+
+# Binarios — sin conversión de línea
+*.kmz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
