@@ -9,6 +9,8 @@ Análisis de deuda técnica, riesgos y oportunidades de mejora. Ordenado por imp
 ### 1. ~~`campingcarinfos` en scheduler pero sin implementación~~ ✅ RESUELTO (2026-05-25)
 Implementado en `scraper/sources/campingcarinfos.py` con descarga global única (ZIP+ASCII). Primera carga: 24,132 spots en 103s, 0 errores, 83% deduplicados con spots existentes.
 
+**Pendiente — reviews de campingcarinfos**: el bulk download solo trae coordenadas y categoría. La web sí tiene comentarios, pero solo accesibles por scraping HTML por cada CCI ID (24K páginas, ~7h a 1 req/s). Implementar como `download_reviews()` separado solo si se necesita más profundidad semántica para spots únicamente cubiertos por CCI (~11K spots).
+
 ### 2. `normalized` vs `normalized_data` — campo duplicado en `source_records`
 **Impacto**: Doble escritura en DB, queries ambiguas, consume espacio innecesario.  
 **Esfuerzo**: Bajo (migration + grep para asegurarse de que nada lee `normalized`).  
