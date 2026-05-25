@@ -40,6 +40,7 @@ SOURCES = {
     "campingcarinfos": "sources.campingcarinfos:CampingcarInfosSource",
     "agricamper": "sources.agricamper:AgricamperSource",
     "campendium": "sources.campendium:CampendiumSource",
+    "campingcarpark": "sources.campingcarpark:CampingCarParkSource",
 }
 
 

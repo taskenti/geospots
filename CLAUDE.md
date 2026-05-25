@@ -224,6 +224,7 @@ FUENTES EXTERNAS (20+ scrapers)
 | vansite, nomady, campspace, roadsurfer, wtmg, alpacacamping, womostell, thedyrt, portugaleasycamp | Varios | 🔧 Scraper escrito | EU/WW |
 | campingcarinfos | Descarga global ASCII (ZIP+POI) | ✅ Integrada | EU (43 países) |
 | agricamper | API JSON bulk (WP REST) | ✅ Integrada | IT (~605 agroturismos) |
+| campendium | Tiles OSM zoom 8 + REST detail | ✅ Integrada | US/CA |
 
 ---
 

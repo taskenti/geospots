@@ -25,6 +25,7 @@
 | **thedyrt** | `thedyrt.com` | JSON REST | BBox estándar | Mensual | Activo | USA/CAN |
 | **campingcarinfos** | `www.campingcar-infos.com` | ZIP+ASCII (POI) | Descarga global única | Mensual | Activo | EU (43 países, ~24K spots) |
 | **agricamper** | `www.agricamper.com/wp-json/interactive-map/v1/fiches` | JSON bulk (WP REST) | Descarga global única | Semanal | Activo | IT (~605 fiches agroturismo) |
+| **campendium** | `maps.campendium.com/api/v2/tiles/{z}/{x}/{y}` | GeoJSON tiles + REST detail | Tiles OSM zoom 8 + bbox NA | Mensual | Activo | US/CA (cobertura amplia) |
 | **portugaleasycamp** | — | — | — | — | Stub vacío | Portugal |
 
 ---

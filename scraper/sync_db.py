@@ -27,7 +27,8 @@ async def main():
               ('thedyrt', true, 0),
               ('campingcarinfos', true, 0),
               ('agricamper', true, 0),
-              ('campendium', true, 0)
+              ('campendium', true, 0),
+              ('campingcarpark', true, 0)
             ON CONFLICT (nombre) DO NOTHING;
         """)
         
@@ -38,7 +39,8 @@ async def main():
             VALUES 
               ('agricamper', 'Agricamper Italia', 0.80, 0.70, ARRAY['IT']),
               ('campingcarinfos', 'Campingcar-infos', 0.82, 0.70, ARRAY['EU']),
-              ('campendium', 'Campendium', 0.85, 0.75, ARRAY['US', 'CA'])
+              ('campendium', 'Campendium', 0.85, 0.75, ARRAY['US', 'CA']),
+              ('campingcarpark', 'CampingCar Park', 0.90, 0.85, ARRAY['EU'])
             ON CONFLICT (source) DO NOTHING;
         """)
         
@@ -47,7 +49,7 @@ async def main():
         await conn.execute("""
             UPDATE fuentes_config fc
             SET spots_totales = (SELECT COUNT(*) FROM source_records sr WHERE sr.source = fc.nombre)
-            WHERE fc.nombre IN ('ioverlander', 'park4night', 'portugaleasycamp', 'campspace', 'caramaps', 'stayfree', 'promobil', 'alpacacamping', 'womostell', 'thedyrt', 'campingcarinfos', 'agricamper', 'campendium');
+            WHERE fc.nombre IN ('ioverlander', 'park4night', 'portugaleasycamp', 'campspace', 'caramaps', 'stayfree', 'promobil', 'alpacacamping', 'womostell', 'thedyrt', 'campingcarinfos', 'agricamper', 'campendium', 'campingcarpark');
         """)
         
         print("Sincronización completada con éxito!")
