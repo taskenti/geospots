@@ -23,7 +23,7 @@
 | **alpacacamping** | `www.alpacacamping.de` | JSON REST | BBox estándar | Mensual | Activo | DACH |
 | **womostell** | `www.womostell.de` | JSON REST | BBox estándar | Mensual | Activo | DACH |
 | **thedyrt** | `thedyrt.com` | JSON REST | BBox estándar | Mensual | Activo | USA/CAN |
-| **campingcarinfos** | `www.camping-car-infos.com` | JSON REST | BBox estándar | — | **SIN IMPLEMENTAR** | Francia |
+| **campingcarinfos** | `www.campingcar-infos.com` | ZIP+ASCII (POI) | Descarga global única | Mensual | Activo | EU (43 países, ~24K spots) |
 | **portugaleasycamp** | — | — | — | — | Stub vacío | Portugal |
 
 ---
@@ -188,7 +188,22 @@ Requiere `STAYFREE_XSRF_TOKEN` en `.env`. Token caduca periódicamente — si la
 
 ### campingcarinfos
 
-Listado en `scheduler.py` SOURCES pero sin archivo `scraper/sources/campingcarinfos.py`. Cualquier intento de ejecución falla con `ModuleNotFoundError`.
+Web francesa con cobertura europea. Descarga global única vía `creepoigpstotal.php` que devuelve un ZIP con archivos `.asc` separados por categoría (AC, ACF, ACS, APCC, APN, AS, ASN, AA) y un `ATOTALES_CCI.asc` combinado.
+
+Formato de cada línea:
+```
+LON,LAT,"<CATEGORIA> <PAIS_FR> <LOCALIDAD>  [(<CP>)]  Aire CCI <ID>"
+```
+
+Mapeo de categorías → tipo GeoSpots:
+- `AC`, `APCC`, `AS`, `AA` → `area_ac` (área de servicios)
+- `ACF`, `ACS` → `camping`
+- `APN` → `parking_privado`
+- `ASN` → `parking_publico`
+
+Solo aporta: coordenadas, categoría, país, localidad. **No incluye** servicios, precios, fotos, reviews ni descripciones — es una fuente complementaria pura. Idónea para cross-validation con otras fuentes (en la primera carga real, 83% de spots ya existían en la DB).
+
+`base_score = 0.78`, `review_quality = 0.50`, `geo_accuracy = 0.85`.
 
 ---
 

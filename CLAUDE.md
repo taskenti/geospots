@@ -221,7 +221,7 @@ FUENTES EXTERNAS (20+ scrapers)
 | promobil | API/HTML | 🔧 Scraper escrito | DE/AT/CH |
 | camperstop | API | 🔧 Scraper escrito | EU |
 | vansite, nomady, campspace, roadsurfer, wtmg, alpacacamping, womostell, thedyrt, portugaleasycamp | Varios | 🔧 Scraper escrito | EU/WW |
-| campingcarinfos | — | ❌ Referenciada en scheduler, sin archivo fuente | EU |
+| campingcarinfos | Descarga global ASCII (ZIP+POI) | ✅ Integrada | EU (43 países) |
 
 ---
 
@@ -264,7 +264,7 @@ FUENTES EXTERNAS (20+ scrapers)
 5. **No ejecutar `--all` sin control** — corre los 20+ scrapers secuencialmente. Puede tardar horas
 6. **No usar `describe_it = "..." text` en coordenadas de Furgovw** — el API tiene `lat` y `lng` **intercambiados** (bug conocido del servidor, compensado en `normalize()`)
 7. **No borrar `fuentes_config`** — es la tabla de estado de los scrapers. `source_credibility` es distinta (pesos de confianza)
-8. **No asumir que `campingcarinfos` funciona** — está en `scheduler.py` pero el archivo `sources/campingcarinfos.py` no existe
+8. **Recordar que `campingcarinfos` es bulk-download**: descarga un único ZIP de ~1.1MB con 24K POIs globales. No usa grid. Solo aporta tipo + coordenadas + país (no servicios, ni precios, ni reviews) — es complementaria a fuentes ricas como park4night
 9. **Embeddings solo funcionan para spots que tienen `spot_semantic_state`** — la query de generación hace `JOIN spot_semantic_state`
 
 ---

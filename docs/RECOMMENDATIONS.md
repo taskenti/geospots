@@ -6,10 +6,8 @@ Análisis de deuda técnica, riesgos y oportunidades de mejora. Ordenado por imp
 
 ## PRIORIDAD ALTA — Bugs y Riesgos Activos
 
-### 1. `campingcarinfos` en scheduler pero sin implementación
-**Impacto**: Cualquier `--all` falla con `ModuleNotFoundError` sin aviso claro.  
-**Esfuerzo**: Bajo.  
-**Acción**: O crear `scraper/sources/campingcarinfos.py` (mínimo una semana de trabajo) o eliminarlo de `SOURCES` en `scheduler.py` hasta que esté listo. La opción rápida es eliminarlo del dict.
+### 1. ~~`campingcarinfos` en scheduler pero sin implementación~~ ✅ RESUELTO (2026-05-25)
+Implementado en `scraper/sources/campingcarinfos.py` con descarga global única (ZIP+ASCII). Primera carga: 24,132 spots en 103s, 0 errores, 83% deduplicados con spots existentes.
 
 ### 2. `normalized` vs `normalized_data` — campo duplicado en `source_records`
 **Impacto**: Doble escritura en DB, queries ambiguas, consume espacio innecesario.  
@@ -129,7 +127,7 @@ Análisis de deuda técnica, riesgos y oportunidades de mejora. Ordenado por imp
 
 | # | Recomendación | Impacto | Esfuerzo |
 |---|---|---|---|
-| 1 | campingcarinfos sin implementación | ALTO | Mínimo |
+| 1 | ~~campingcarinfos sin implementación~~ ✅ RESUELTO | ALTO | Mínimo |
 | 5 | debug endpoint en producción | MEDIO | Mínimo |
 | 9 | Validar coordenadas en normalize() | ALTO | Mínimo |
 | 4 | Aviso claro token StayFree | MEDIO | Mínimo |
@@ -150,4 +148,4 @@ Análisis de deuda técnica, riesgos y oportunidades de mejora. Ordenado por imp
 | 19 | Unificar versión Python | BAJO | Mínimo |
 | 20 | Docs en CI | BAJO | Bajo |
 
-**Quick wins (máximo impacto, mínimo esfuerzo)**: items 1, 5, 9, 4, 7, 14 — todos completables en una sesión de trabajo.
+**Quick wins (máximo impacto, mínimo esfuerzo)**: items 5, 9, 4, 7, 14 — todos completables en una sesión de trabajo. (Item 1 ya resuelto.)
