@@ -28,6 +28,26 @@ async def startup():
         min_size=2,
         max_size=10,
     )
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS scraper_jobs (
+                id          SERIAL PRIMARY KEY,
+                source      TEXT NOT NULL,
+                job_type    TEXT NOT NULL DEFAULT 'spots',
+                status      TEXT NOT NULL DEFAULT 'pending',
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                started_at  TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                result      JSONB
+            )
+        """)
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS scraper_jobs_pending_idx "
+            "ON scraper_jobs(status, created_at) WHERE status IN ('pending','running')"
+        )
+        await conn.execute(
+            "ALTER TABLE fuentes_config ADD COLUMN IF NOT EXISTS cron_schedule TEXT"
+        )
     logger.info("GeoSpots API ready")
 
 
@@ -55,17 +75,79 @@ async def health():
 
 
 @app.get("/points")
-async def get_points():
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, canonical_name as n, lat, lon, tipo as t,
-                   gratuito as g, agua_potable as w, master_rating as r,
-                   num_fuentes as nf, fuentes as f
-            FROM spots WHERE activo = TRUE
-            """
+async def get_points(
+    north: float = Query(..., ge=-90, le=90, description="Latitud superior del bbox"),
+    south: float = Query(..., ge=-90, le=90, description="Latitud inferior del bbox"),
+    east:  float = Query(..., ge=-180, le=180, description="Longitud derecha del bbox"),
+    west:  float = Query(..., ge=-180, le=180, description="Longitud izquierda del bbox"),
+    tipo: str | None = Query(None, description="Filtro opcional por tipo"),
+    gratuito: bool | None = Query(None),
+    limit: int = Query(5000, ge=1, le=20000, description="Máx puntos a devolver"),
+):
+    """Spots activos dentro de un bbox. Ordenados por master_rating DESC.
+
+    bbox es obligatorio: a 742K spots, devolver todo de golpe satura el
+    frontend (~70 MB JSON). El cliente debe pasar el viewport del mapa y
+    refetchear en el evento `moveend`. Si el bbox supera el límite, se
+    truncan los puntos con menor rating (los más prominentes ganan).
+    """
+    if north <= south:
+        raise HTTPException(400, "north debe ser > south")
+    if west > east:
+        raise HTTPException(
+            400,
+            "bbox cruza el antimeridiano (±180). El cliente debe partirlo "
+            "en dos llamadas separadas para usar el índice GIST eficientemente."
         )
-    return [dict(r) for r in rows]
+
+    # Usa el índice GIST sobre spots.geog: ST_MakeEnvelope(xmin,ymin,xmax,ymax)
+    # donde x = lon, y = lat
+    conditions = [
+        "activo = TRUE",
+        "geog && ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography",
+    ]
+    params: list = [west, south, east, north]
+    idx = 5
+
+    if tipo:
+        conditions.append(f"tipo = ${idx}")
+        params.append(tipo)
+        idx += 1
+    if gratuito is not None:
+        conditions.append(f"gratuito = ${idx}")
+        params.append(gratuito)
+        idx += 1
+
+    where_clause = " AND ".join(conditions)
+    params_for_count = list(params)
+    params.append(limit)
+
+    query = f"""
+        SELECT id, canonical_name as n, lat, lon, tipo as t,
+               gratuito as g, agua_potable as w, master_rating as r,
+               num_fuentes as nf, fuentes as f
+        FROM spots
+        WHERE {where_clause}
+        ORDER BY master_rating DESC NULLS LAST
+        LIMIT ${idx}
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+        # total real dentro del bbox (sin LIMIT), útil para que el cliente
+        # decida si necesita acercar el zoom para ver todo.
+        total = await conn.fetchval(
+            f"SELECT COUNT(*) FROM spots WHERE {where_clause}",
+            *params_for_count,
+        )
+
+    return {
+        "bbox": {"north": north, "south": south, "east": east, "west": west},
+        "returned": len(rows),
+        "total_in_bbox": total,
+        "truncated": total > len(rows),
+        "spots": [dict(r) for r in rows],
+    }
 
 
 @app.get("/spot/{spot_id}")
@@ -281,21 +363,27 @@ async def dashboard():
     }
 
 
-def _compute_health(ultimo_fin, ultimo_estado, ultimo_errores, ultimo_nuevos, ultimo_actualizados) -> str:
+def _compute_health(ultimo_fin, ultimo_estado, ultimo_errores, ultimo_nuevos, ultimo_actualizados) -> tuple[str, str]:
     if ultimo_fin is None:
-        return "red"
+        return "red", "Sin historial"
     now = datetime.now(timezone.utc)
     fin = ultimo_fin if ultimo_fin.tzinfo else ultimo_fin.replace(tzinfo=timezone.utc)
-    days_since = (now - fin).days
+    days = (now - fin).days
     if ultimo_estado == "error":
-        return "red"
+        return "red", f"Error en ejecución ({days}d)"
     total = (ultimo_nuevos or 0) + (ultimo_actualizados or 0)
     err_pct = (ultimo_errores or 0) / total if total > 0 else 0.0
-    if days_since <= 14 and err_pct < 0.05:
-        return "green"
-    if days_since <= 60 and err_pct < 0.20:
-        return "amber"
-    return "red"
+    if err_pct > 0.20:
+        return "red", f"Errores altos ({err_pct:.0%})"
+    if days > 60:
+        return "red", f"Caducado — {days} días sin ejecutar"
+    if err_pct > 0.05 and days > 14:
+        return "amber", f"Desfasado ({days}d) con errores ({err_pct:.0%})"
+    if err_pct > 0.05:
+        return "amber", f"Con errores ({err_pct:.0%})"
+    if days > 14:
+        return "amber", f"Desfasado — {days} días"
+    return "green", f"Al día — hace {days} día{'s' if days != 1 else ''}"
 
 
 @app.get("/admin/scrapers")
@@ -328,6 +416,15 @@ async def admin_scrapers_list():
                     spots_nuevos, spots_actualizados, reviews_nuevas, errores
                 FROM scraper_log
                 ORDER BY fuente, iniciado_en DESC
+            ),
+            reviews_support AS (
+                SELECT DISTINCT regexp_replace(fuente, '_reviews$', '') AS source
+                FROM scraper_log WHERE fuente LIKE '%_reviews'
+            ),
+            active_jobs AS (
+                SELECT source, array_agg(DISTINCT job_type) AS job_types
+                FROM scraper_jobs WHERE status IN ('pending','running')
+                GROUP BY source
             )
             SELECT
                 ks.nombre,
@@ -345,24 +442,32 @@ async def admin_scrapers_list():
                 lr.spots_nuevos AS ultimo_nuevos,
                 lr.spots_actualizados AS ultimo_actualizados,
                 lr.reviews_nuevas AS ultimo_reviews_nuevas,
-                lr.errores AS ultimo_errores
+                lr.errores AS ultimo_errores,
+                fc.cron_schedule,
+                (rs.source IS NOT NULL OR COALESCE(rc.total_reviews, 0) > 0) AS has_reviews_support,
+                aj.job_types AS active_job_types
             FROM known_sources ks
             LEFT JOIN source_credibility sc ON sc.source = ks.nombre
+            LEFT JOIN fuentes_config fc ON fc.nombre = ks.nombre
             LEFT JOIN src_counts sr ON sr.source = ks.nombre
             LEFT JOIN spot_counts spc ON spc.source = ks.nombre
             LEFT JOIN review_counts rc ON rc.source = ks.nombre
             LEFT JOIN last_run lr ON lr.fuente = ks.nombre
+            LEFT JOIN reviews_support rs ON rs.source = ks.nombre
+            LEFT JOIN active_jobs aj ON aj.source = ks.nombre
             ORDER BY ks.nombre
         """)
 
     result = []
     for row in rows:
         d = dict(row)
-        d["salud"] = _compute_health(
+        color, texto = _compute_health(
             d.get("ultimo_fin"), d.get("ultimo_estado"),
             d.get("ultimo_errores"), d.get("ultimo_nuevos"),
             d.get("ultimo_actualizados"),
         )
+        d["salud"] = color
+        d["salud_texto"] = texto
         result.append(d)
 
     health_order = {"red": 0, "amber": 1, "green": 2}
@@ -417,7 +522,7 @@ async def admin_scraper_detail(nombre: str):
         raise HTTPException(404, f"Fuente '{nombre}' no encontrada")
 
     last_run_d = dict(last_run) if last_run else None
-    salud = _compute_health(
+    salud_color, salud_texto = _compute_health(
         last_run_d.get("terminado_en") if last_run_d else None,
         last_run_d.get("estado") if last_run_d else None,
         last_run_d.get("errores") if last_run_d else None,
@@ -437,8 +542,25 @@ async def admin_scraper_detail(nombre: str):
         },
         "last_run": last_run_d,
         "last_reviews_run": dict(last_reviews_run) if last_reviews_run else None,
-        "salud": salud,
+        "salud": salud_color,
+        "salud_texto": salud_texto,
     }
+
+
+@app.post("/admin/scrapers/{nombre}/run")
+async def admin_scraper_run(nombre: str, job_type: str = Query("spots", pattern="^(spots|reviews)$")):
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            "SELECT id, status FROM scraper_jobs WHERE source=$1 AND job_type=$2 AND status IN ('pending','running')",
+            nombre, job_type,
+        )
+        if existing:
+            raise HTTPException(409, f"Ya hay un job {existing['status']} para {nombre} ({job_type})")
+        job_id = await conn.fetchval(
+            "INSERT INTO scraper_jobs (source, job_type) VALUES ($1,$2) RETURNING id",
+            nombre, job_type,
+        )
+    return {"job_id": job_id, "source": nombre, "job_type": job_type, "status": "pending"}
 
 
 @app.get("/admin/scrapers/{nombre}/history")

@@ -76,10 +76,8 @@ Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizad
 
 ## PRIORIDAD MEDIA — Escalabilidad
 
-### 14. `/points` endpoint sin paginación
-**Impacto**: Retorna TODOS los spots activos al mapa. A 500K+ spots, esto transfiere MBs de JSON y puede tumbar el cliente.  
-**Esfuerzo**: Bajo.  
-**Acción**: Añadir parámetro `bbox` obligatorio o implementar clustering server-side por geohash. Alternativamente, limitar a los N spots más relevantes (mayor rating + más recientes) dentro de un viewport.
+### 14. ~~`/points` endpoint sin paginación~~ ✅ RESUELTO (2026-05-25)
+Añadidos parámetros obligatorios `north/south/east/west` + `limit` (default 5000, max 20000) + filtros opcionales `tipo`/`gratuito`. Usa el índice GIST sobre `spots.geog` vía `ST_MakeEnvelope` (rápido incluso para bbox de Europa entera). Cuando el bbox supera el límite, devuelve los puntos con mayor `master_rating` y marca `truncated: true` para que el cliente decida si necesita acercar zoom. Rechaza explícitamente bbox que cruza el antimeridiano (400) para evitar full-scan. La respuesta incluye `total_in_bbox` para que el frontend muestre "X de Y" sin tener que volver a contar.
 
 ### 15. `review_score` y `reviewer_confidence` no se usan
 **Impacto**: El weight de las observaciones debería ser `extractor_conf × source_conf × reviewer_conf`, pero `reviewer_confidence` actualmente vale 1.0 para todos.  
@@ -129,7 +127,7 @@ Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizad
 | 7 | ~~Bootstrap grid vacío~~ ✅ RESUELTO | ALTO | Bajo |
 | 2 | Eliminar campo normalized duplicado | MEDIO | Bajo |
 | 13 | Trigger para spots.fuentes | MEDIO | Bajo |
-| 14 | Paginar /points | ALTO | Bajo |
+| 14 | ~~Paginar /points~~ ✅ RESUELTO | ALTO | Bajo |
 | 16 | Concurrencia en worker | MEDIO | Bajo |
 | 3 | Deduplicar funciones DB | MEDIO | Medio |
 | 8 | Paralelizar run_all_sources | MEDIO | Medio |
@@ -142,4 +140,4 @@ Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizad
 | 19 | Unificar versión Python | BAJO | Mínimo |
 | 20 | Docs en CI | BAJO | Bajo |
 
-**Quick wins (máximo impacto, mínimo esfuerzo)**: item 14 — completable en una sesión. (Items 1, 4, 5, 7 y 9 ya resueltos.)
+**Quick wins**: todos resueltos (items 1, 4, 5, 7, 9, 14). Próximos pasos sugeridos: items 2 (duplicate column), 3 (duplicated DB functions), 13 (trigger para spots.fuentes), 16 (concurrencia en worker).

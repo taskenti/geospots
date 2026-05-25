@@ -196,7 +196,7 @@ FUENTES EXTERNAS (20+ scrapers)
                   ▼
 ┌─────────────────────────────────────────────────────────┐
 │ API (api/main.py FastAPI)                               │
-│  /points          → todos los spots (mapa)              │
+│  /points          → spots en bbox (paginado, máx 20K)   │
 │  /spot/:id        → detalle + sources + reviews         │
 │  /search          → SQL: geo + tipo + servicios         │
 │  /search/semantic → Gemini intent + vector + geo        │

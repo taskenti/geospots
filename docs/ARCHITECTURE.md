@@ -244,7 +244,7 @@ Fallback heurístico si Gemini falla: `extraer_intencion_heuristica()` mapea pal
 | Endpoint | Tipo | Descripción |
 |---|---|---|
 | `GET /health` | Público | Estado + count de spots activos |
-| `GET /points` | Auth | Todos los spots activos para mapa (sin paginación — cuidado con volumen) |
+| `GET /points` | Auth | Spots activos en bbox (`north/south/east/west` obligatorios, `limit` ≤ 20000, orden por `master_rating DESC`). Filtros opcionales `tipo` y `gratuito`. Respuesta `{bbox, returned, total_in_bbox, truncated, spots[]}`. Usa índice GIST. |
 | `GET /spot/{id}` | Auth | Detalle completo: spot + sources + enrichment + reviews |
 | `GET /search` | Auth | SQL clásico: geo + tipo + gratuito + filtros semánticos materializados |
 | `GET /search/semantic` | Auth | Búsqueda en lenguaje natural (Gemini + vector) |
