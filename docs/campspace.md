@@ -26,6 +26,35 @@ El scraper `campspace.py` utiliza un pipeline híbrido en dos fases diseñado pa
 ## ⚠️ Peligros y Carencias (Riesgos Conocidos)
 1. **Consumo de Cuota de Conexiones**:
    - La Fase 2 realiza dos llamadas HTTP por spot (ficha de detalle + endpoint de opiniones). Se aplica un retraso controlado (`rate_limit`) y concurrencia moderada para evitar bloqueos por Cloudflare u otros mecanismos de protección del servidor.
+2. **Endpoint global limitado a 4.000 spots**:
+   - Auditoría confirmó que `/discover/campsites?_format=json` siempre devuelve 4.000 resultados (top-N). Los endpoints por país aportan spots **exclusivos** no presentes en el global: francia 1.943 exclusivos de 3.995, Países Bajos 453 de 688, Alemania 1.144 de 1.681. **El bucle por países es necesario**, no es redundancia.
+3. **Tipología forzada a `naturaleza`**:
+   - Campspace tiene jardines privados, granjas, glamping y bosques. Por simplicidad se etiquetan todos como `naturaleza`. La reconciliación con otras fuentes puede corregir el tipo más adelante.
+
+## 🔧 Auditoría Mayo 2026
+
+Auditoría completa tras detectar el código como generado por Gemini. Estado pre-auditoría: 4.087 source_records, 3.435 spots, 15.498 reviews, 0 errores reportados en la última ejecución exitosa (22-05). No había errores funcionales, pero sí 3 issues silenciosos:
+
+### Bugs detectados
+
+1. **`reviews_nuevas` inflada (silent counter bug)**:
+   - El insert de reviews usaba SQL crudo con `ON CONFLICT DO NOTHING` pero el contador `stats["reviews_nuevas"] += 1` se incrementaba SIEMPRE, también cuando la fila ya existía. En re-runs, los stats reportaban "N reviews nuevas" aunque ninguna era nueva realmente.
+   - **Fix**: usar la función centralizada `db.upsert_review`, que devuelve `True` solo si la fila se INSERTÓ. El contador ahora refleja inserts reales.
+
+2. **Inconsistencia con otros scrapers**:
+   - Era el único scraper insertando reviews con SQL crudo en lugar de `upsert_review`. Refactor para alinearlo con park4night, campercontact, roadsurfer, etc.
+
+3. **`stats["actualizados"]` mezclaba dos conceptos**:
+   - Phase 1 incrementaba `actualizados` por spots dedup-encontrados, y Phase 2 lo incrementaba otra vez por spots enriquecidos con detalle. **Mismo contador para cosas distintas** → métricas confusas.
+   - **Fix**: Phase 2 ahora usa `stats["detalle"]["enriquecidos_fase2"]` aparte.
+
+4. **`coords_validas` no aplicado** — convención obligatoria nueva. Añadido.
+
+### Validación post-fix
+
+- 20/20 Phase 1 normalize OK (`tipo: naturaleza` x20 como esperado)
+- 10/10 Phase 2 detail parsing OK, 9/10 con amenities, 10/10 con space_id, 8/10 con reviews
+- 0 errores en flujo DB
 
 ---
-**Estado Actual:** Auditado y actualizado. La Fase 2 está completamente integrada, permitiendo almacenar opiniones de usuarios, fotos y amenities completas de forma robusta e integrada en la base de datos PostgreSQL.
+**Estado Actual:** Auditado, fixes aplicados, Phase 2 completamente integrada con contadores precisos y consistente con el resto de scrapers.

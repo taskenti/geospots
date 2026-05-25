@@ -86,6 +86,12 @@ class CampspaceSource(AbstractSource):
     name = "campspace"
     rate_limit = 1.0
     dedup_radius_m = 60.0
+    countries = [
+        "netherlands", "belgium", "germany", "france", "spain", "portugal", "italy",
+        "denmark", "sweden", "norway", "austria", "switzerland", "poland", "czech-republic",
+        "united-kingdom", "ireland", "croatia", "slovenia", "hungary", "slovakia",
+        "luxembourg", "estonia", "latvia", "lithuania", "finland", "greece", "romania"
+    ]
 
     async def fetch_cell(self, client, tl_lat, tl_lon, br_lat, br_lon):
         raise NotImplementedError("Campspace se extrae por lista directa")
@@ -338,35 +344,38 @@ class CampspaceSource(AbstractSource):
         }
 
         async with httpx.AsyncClient(headers=HEADERS) as client:
-            page = 0
             seen_ids = set()
             
-            while True:
-                url = f"{BASE_URL}&page={page}" if page > 0 else BASE_URL
+            # Recorrer todos los países y luego el endpoint global
+            targets = [(c, f"https://campspace.com/en/discover/campsites/{c}?_format=json") for c in self.countries]
+            targets.append(("global", "https://campspace.com/en/discover/campsites?_format=json"))
+            
+            for label, url in targets:
                 try:
-                    logger.info(f"[CAMPSPACE] Obteniendo página {page}...")
+                    logger.info(f"[CAMPSPACE] Obteniendo listado para '{label}'...")
                     resp = await client.get(url, timeout=30)
                     resp.raise_for_status()
                     data = resp.json()
                 except Exception as e:
-                    logger.error(f"[CAMPSPACE] Error obteniendo página {page}: {e}")
+                    logger.error(f"[CAMPSPACE] Error obteniendo listado para '{label}': {e}")
                     stats["errores"] += 1
-                    break
+                    continue
 
-                if not data or not isinstance(data, list) or len(data) == 0:
-                    break
+                if not data or not isinstance(data, list):
+                    continue
 
-                nuevos_en_pagina = 0
+                logger.info(f"[CAMPSPACE] Procesando {len(data)} spots de '{label}'...")
                 for raw in data:
                     sid = str(raw.get("id"))
                     if sid in seen_ids:
                         continue
                         
                     seen_ids.add(sid)
-                    nuevos_en_pagina += 1
                     
                     norm = self.normalize(raw)
                     if not norm:
+                        continue
+                    if not self.coords_validas(norm.get("lat"), norm.get("lon")):
                         continue
 
                     try:
@@ -391,16 +400,6 @@ class CampspaceSource(AbstractSource):
                         logger.error(f"[CAMPSPACE] Error spot '{norm.get('nombre')}': {e}")
                         stats["errores"] += 1
 
-                    if nuevos_en_pagina % 200 == 0:
-                        logger.info(f"[CAMPSPACE] Progreso página {page}: {nuevos_en_pagina} procesados... (new={stats['nuevos']}, upd={stats['actualizados']})")
-
-                logger.info(f"[CAMPSPACE] Página {page}: {len(data)} spots procesados en total.")
-                
-                # Si la página no trajo nuevos o fueron muy pocos, asumimos que no hay paginación o ya dimos la vuelta
-                if nuevos_en_pagina == 0:
-                    break
-                    
-                page += 1
                 await asyncio.sleep(self.rate_limit)
 
         # 2. Fase 2: Enriquecimiento asíncrono y de reviews
@@ -467,35 +466,46 @@ class CampspaceSource(AbstractSource):
                                                 # Cargar reviews si hay space_id
                                                 space_id = detail_norm.get("space_id")
                                                 if space_id:
+                                                    from db import upsert_review
+                                                    import hashlib
                                                     reviews_url = f"https://campspace.com/en/reviews/{space_id}"
                                                     await asyncio.sleep(self.rate_limit)
                                                     r_reviews = await client.get(reviews_url)
                                                     if r_reviews.status_code == 200 and r_reviews.text:
                                                         parsed_reviews = self._parse_reviews_html(r_reviews.text)
                                                         for rev in parsed_reviews:
-                                                            import hashlib
                                                             texto = clean_surrogates(rev.get("texto", ""))
                                                             autor = clean_surrogates(rev.get("autor", "Camper"))
                                                             fecha = rev.get("fecha")
                                                             rating = rev.get("rating")
                                                             idioma = detect_language(texto)
-                                                            
+
                                                             # Identificador único determinista
-                                                            rev_hash = hashlib.md5((autor + str(fecha) + texto[:50]).encode('utf-8')).hexdigest()
+                                                            rev_hash = hashlib.md5(
+                                                                (autor + str(fecha) + texto[:50]).encode('utf-8')
+                                                            ).hexdigest()
                                                             source_review_id = f"cs_{space_id}_{rev_hash}"
 
-                                                            await conn.execute("""
-                                                                INSERT INTO reviews (
-                                                                    spot_id, source, source_review_id, texto, texto_original, rating, autor, fecha, idioma
-                                                                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                                                                ON CONFLICT (source, source_review_id) DO NOTHING
-                                                            """,
-                                                                spot_id, self.name, source_review_id,
-                                                                texto, texto, rating, autor, fecha, idioma
-                                                            )
-                                                            stats["reviews_nuevas"] += 1
+                                                            # upsert_review devuelve True solo si la fila se INSERTÓ
+                                                            # (no actualizada), evitando inflar el contador en re-runs
+                                                            inserted = await upsert_review(conn, {
+                                                                "spot_id": spot_id,
+                                                                "source": self.name,
+                                                                "source_review_id": source_review_id,
+                                                                "texto": texto,
+                                                                "rating": rating,
+                                                                "autor": autor,
+                                                                "fecha": fecha,
+                                                                "idioma": idioma,
+                                                            })
+                                                            if inserted:
+                                                                stats["reviews_nuevas"] += 1
 
-                                                stats["actualizados"] += 1
+                                                # Contar enriquecimientos en detalle aparte para no
+                                                # mezclarlo con "actualizados" de Phase 1 (que mide
+                                                # spots ya existentes en DB encontrados por dedup)
+                                                stats["detalle"].setdefault("enriquecidos_fase2", 0)
+                                                stats["detalle"]["enriquecidos_fase2"] += 1
                             else:
                                 logger.warning(f"[{self.name}] Error cargando {web_url}: status={r_web.status_code}")
                                 stats["errores"] += 1
