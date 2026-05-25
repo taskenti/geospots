@@ -226,6 +226,7 @@ FUENTES EXTERNAS (20+ scrapers)
 | agricamper | API JSON bulk (WP REST) | ✅ Integrada | IT (~605 agroturismos) |
 | campendium | Tiles OSM zoom 8 + REST detail | ✅ Integrada | US/CA |
 | campingcarpark | Bulk API gateway + detail por ID | ✅ Integrada | EU (~906 áreas oficiales CCP) |
+| campy | GraphQL LocationsWithinRadius (90km/grid 1°) | ✅ Integrada | DACH + EU (microcamping) |
 
 ---
 
