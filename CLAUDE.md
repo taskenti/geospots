@@ -138,7 +138,8 @@ psql -h localhost -p 25433 -U geospots -d geospots
 | `POSTGRES_PASSWORD` | Contraseña PostgreSQL | Sí |
 | `GEMINI_API_KEY` | API key de Google (embeddings + LLM enrichment + search) | Sí para Phase 3/4 |
 | `API_SECRET_KEY` | Clave para middleware de autenticación de la API | Opcional (sin key = sin auth) |
-| `STAYFREE_XSRF_TOKEN` | Token XSRF para StayFree (capturar de DevTools) | Solo para StayFree |
+| `STAYFREE_AUTHORIZATION` | JWT Bearer del usuario StayFree (DevTools → Network) | Opcional |
+| `STAYFREE_API_TOKEN` | Token estático de la app móvil (vía MITM del APK) | Opcional |
 | `REQUEST_DELAY_SECONDS` | Delay entre requests (default 2s) | No |
 | `MAX_WORKERS` | Semáforo de concurrencia para scrapers (default 3) | No |
 | `LOG_LEVEL` | Nivel de log loguru (default INFO) | No |

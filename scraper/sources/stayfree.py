@@ -32,6 +32,31 @@ from sources.base import AbstractSource
 BASE_URL    = "https://www.stayfree.app/api/spots"
 DETAIL_URL  = "https://www.stayfree.app/api/spots/{sid}"
 
+# Códigos HTTP que indican credenciales inválidas/expiradas
+AUTH_FAIL_CODES = (401, 403, 419)
+
+
+def _log_token_expired(source_name: str, status: int, where: str, body_snippet: str = "") -> None:
+    """Mensaje muy visible cuando un token caduca o no es válido.
+
+    Se llama desde varios puntos del scraper. Centralizado para que el
+    operador siempre vea las mismas instrucciones."""
+    snippet = f" Body: {body_snippet[:120]}" if body_snippet else ""
+    logger.error(
+        f"\n{'='*70}\n"
+        f"[{source_name}] CREDENCIALES STAYFREE INVÁLIDAS O CADUCADAS (HTTP {status} en {where}).{snippet}\n"
+        f"\n"
+        f"Cómo regenerar:\n"
+        f"  1. Abre la app StayFree en el navegador y autentícate\n"
+        f"  2. DevTools → Network → cualquier request autenticado\n"
+        f"  3. Copia el header 'Authorization' (Bearer ...) y actualiza\n"
+        f"     STAYFREE_AUTHORIZATION en .env\n"
+        f"  4. Si también ha caducado el token de la app móvil:\n"
+        f"     captura tráfico MITM del APK y actualiza STAYFREE_API_TOKEN\n"
+        f"  5. Reinicia el container scraper (no necesita rebuild)\n"
+        f"{'='*70}"
+    )
+
 # Todos los tipos en un solo string CSV (confirmado en captura real)
 SPOT_TYPES_CSV = (
     "AGROTOURISM,PARKING_CAMPER_ACS,CAMPING_ACS,CAMPING_PRIVATE,"
@@ -211,8 +236,8 @@ class StayFreeSource(AbstractSource):
             }
             try:
                 resp = await client.get(url, params=params, timeout=20)
-                if resp.status_code == 401:
-                    logger.warning(f"[{self.name}] API PRIVADA 401 Unauthorized. Intentando recargar .env...")
+                if resp.status_code in AUTH_FAIL_CODES:
+                    # Intento de recarga en caliente del token desde .env
                     new_auth = ""
                     if os.path.exists(".env"):
                         with open(".env", "r", encoding="utf-8") as f:
@@ -226,8 +251,9 @@ class StayFreeSource(AbstractSource):
                         logger.info(f"[{self.name}] Nuevo token detectado en .env. Actualizando y reintentando...")
                         client.headers["Authorization"] = new_auth
                         resp = await client.get(url, params=params, timeout=20)
-                    else:
-                        raise ValueError("TOKEN_EXPIRED: Token expirado (401) y no se detecto un token nuevo en .env.")
+                    if resp.status_code in AUTH_FAIL_CODES:
+                        _log_token_expired(self.name, resp.status_code, "API privada v2", resp.text)
+                        raise ValueError(f"TOKEN_EXPIRED: HTTP {resp.status_code} y no hay token nuevo válido en .env.")
                 resp.raise_for_status()
                 data = resp.json()
                 items = data if isinstance(data, list) else data.get("spots", data.get("data", []))
@@ -387,6 +413,9 @@ class StayFreeSource(AbstractSource):
                     if resp.status_code == 200:
                         logger.info(f"[{self.name}] Credenciales de la API PRIVADA validadas con exito.")
                         use_private = True
+                    elif resp.status_code in AUTH_FAIL_CODES:
+                        _log_token_expired(self.name, resp.status_code, "validación inicial", resp.text)
+                        logger.warning(f"[{self.name}] Fallback a API pública (sin coordenadas).")
                     else:
                         logger.warning(
                             f"[{self.name}] Prueba de API privada fallo con estado {resp.status_code}. "

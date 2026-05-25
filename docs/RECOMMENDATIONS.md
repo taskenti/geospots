@@ -22,10 +22,8 @@ Implementado en `scraper/sources/campingcarinfos.py` con descarga global única 
 **Esfuerzo**: Medio.  
 **Acción**: Mover las funciones de inserción de claims/observaciones a un módulo compartido (`scraper/db.py` o un nuevo `shared/db_phase3.py`) que tanto el scraper como el enrichment worker puedan importar.
 
-### 4. STAYFREE_XSRF_TOKEN caduca sin aviso
-**Impacto**: El scraper de StayFree falla silenciosamente con 403 o 419. Los logs muestran error pero no indican que es el token.  
-**Esfuerzo**: Bajo.  
-**Acción**: En `stayfree.py`, detectar explícitamente el código 403/419 y loguear un mensaje claro: `"STAYFREE_XSRF_TOKEN ha caducado — renovar en .env"`.
+### 4. ~~STAYFREE_AUTHORIZATION/API_TOKEN caducan sin aviso~~ ✅ RESUELTO (2026-05-25)
+Añadido `_log_token_expired()` helper que se llama desde todos los puntos donde se hacen requests a la API privada. Detecta HTTP 401/403/419 (en lugar de solo 401), muestra un banner muy visible con instrucciones paso a paso para regenerar tanto `STAYFREE_AUTHORIZATION` (JWT del navegador) como `STAYFREE_API_TOKEN` (vía MITM del APK). También corregida la doc obsoleta que mencionaba `STAYFREE_XSRF_TOKEN` (variable que nunca existió en el código).
 
 ### 5. ~~Endpoint `debug_furgovw` expuesto en producción~~ ✅ RESUELTO (2026-05-25)
 Eliminado. La información que devolvía la cubre `/dashboard` (counts) y `psql` directo (samples). Era código muerto tras la estabilización de furgovw.
@@ -128,7 +126,7 @@ Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizad
 | 1 | ~~campingcarinfos sin implementación~~ ✅ RESUELTO | ALTO | Mínimo |
 | 5 | ~~debug endpoint en producción~~ ✅ RESUELTO | MEDIO | Mínimo |
 | 9 | ~~Validar coordenadas en normalize()~~ ✅ RESUELTO | ALTO | Mínimo |
-| 4 | Aviso claro token StayFree | MEDIO | Mínimo |
+| 4 | ~~Aviso claro token StayFree~~ ✅ RESUELTO | MEDIO | Mínimo |
 | 6 | Reconciliar incremental | ALTO | Medio |
 | 7 | Bootstrap grid vacío | ALTO | Bajo |
 | 2 | Eliminar campo normalized duplicado | MEDIO | Bajo |
@@ -146,4 +144,4 @@ Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizad
 | 19 | Unificar versión Python | BAJO | Mínimo |
 | 20 | Docs en CI | BAJO | Bajo |
 
-**Quick wins (máximo impacto, mínimo esfuerzo)**: items 4, 7, 14 — todos completables en una sesión de trabajo. (Items 1, 5 y 9 ya resueltos.)
+**Quick wins (máximo impacto, mínimo esfuerzo)**: items 7, 14 — todos completables en una sesión de trabajo. (Items 1, 4, 5 y 9 ya resueltos.)
