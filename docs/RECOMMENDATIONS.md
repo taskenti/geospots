@@ -37,10 +37,8 @@ Eliminado. La información que devolvía la cubre `/dashboard` (counts) y `psql`
 **Esfuerzo**: Medio.  
 **Acción**: Añadir un campo `reconciled_at TIMESTAMPTZ` a `spots`. El job filtra `WHERE reconciled_at IS NULL OR reconciled_at < updated_at` para procesar solo los spots que cambiaron desde la última reconciliación.
 
-### 7. `generate_active_grid()` vacío en DB vacía
-**Impacto**: Un entorno nuevo (dev, staging) no puede arrancar scrapers estándar porque la grilla activa depende de spots existentes, pero no hay spots porque nunca se scrapeó.  
-**Esfuerzo**: Bajo.  
-**Acción**: En `base.py`, si `generate_active_grid()` retorna lista vacía, usar un grid de bootstrap hardcodeado para Europa central (e.g. 20 celdas de 5° × 5° cubriendo el continente). Documentarlo como comportamiento esperado.
+### 7. ~~`generate_active_grid()` vacío en DB vacía~~ ✅ RESUELTO (2026-05-25)
+El fallback existía pero era catastrófico: generaba grid global con step normal (~48.600 celdas con step=1°), suficiente para tirar APIs y banear IPs. Reemplazado por bootstrap **coarse sobre EU_BOUNDS** con step inflado a 5° (~72-110 celdas según la fuente). Tras la primera ingesta, el grid activo normal toma el relevo automáticamente. Loguea WARNING explícito indicando que es bootstrap.
 
 ### 8. `run_all_sources()` es puramente secuencial
 **Impacto**: Un ciclo completo de scraping tarda ~horas aunque la mayoría del tiempo es I/O (HTTP).  
@@ -128,7 +126,7 @@ Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizad
 | 9 | ~~Validar coordenadas en normalize()~~ ✅ RESUELTO | ALTO | Mínimo |
 | 4 | ~~Aviso claro token StayFree~~ ✅ RESUELTO | MEDIO | Mínimo |
 | 6 | Reconciliar incremental | ALTO | Medio |
-| 7 | Bootstrap grid vacío | ALTO | Bajo |
+| 7 | ~~Bootstrap grid vacío~~ ✅ RESUELTO | ALTO | Bajo |
 | 2 | Eliminar campo normalized duplicado | MEDIO | Bajo |
 | 13 | Trigger para spots.fuentes | MEDIO | Bajo |
 | 14 | Paginar /points | ALTO | Bajo |
@@ -144,4 +142,4 @@ Añadido `AbstractSource.coords_validas(lat, lon)` como staticmethod centralizad
 | 19 | Unificar versión Python | BAJO | Mínimo |
 | 20 | Docs en CI | BAJO | Bajo |
 
-**Quick wins (máximo impacto, mínimo esfuerzo)**: items 7, 14 — todos completables en una sesión de trabajo. (Items 1, 4, 5 y 9 ya resueltos.)
+**Quick wins (máximo impacto, mínimo esfuerzo)**: item 14 — completable en una sesión. (Items 1, 4, 5, 7 y 9 ya resueltos.)

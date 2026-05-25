@@ -85,20 +85,34 @@ class AbstractSource(ABC):
                 continue
         
         if not existing_cells:
-            logger.info(f"[{self.name}] No hay spots en la DB. Usando grid global...")
-            lat = -60.0
+            # Bootstrap: DB vacía (entorno nuevo o primera ejecución).
+            # Genera un grid COARSE sobre Europa (~110 celdas de 5°) en vez del
+            # grid global completo (~48k celdas con step=1°) que tumbaría APIs.
+            # Tras la primera ingesta, el grid activo normal toma el relevo.
+            bootstrap_step = max(step * 5, 5.0)
+            logger.warning(
+                f"[{self.name}] DB sin spots. Bootstrap grid Europa "
+                f"(step={bootstrap_step}°, EU_BOUNDS). "
+                f"Tras la primera ingesta, el grid activo se ajustará automáticamente."
+            )
             cells = []
-            while lat <= 75.0:
-                lon = -180.0
-                while lon <= 180.0:
+            lat = self.EU_BOUNDS["lat_max"]
+            while lat > self.EU_BOUNDS["lat_min"]:
+                lon = self.EU_BOUNDS["lon_min"]
+                while lon < self.EU_BOUNDS["lon_max"]:
                     cells.append((
-                        round(lat + step, 4),
-                        round(lon, 4),
                         round(lat, 4),
-                        round(lon + step, 4),
+                        round(lon, 4),
+                        round(lat - bootstrap_step, 4),
+                        round(lon + bootstrap_step, 4),
                     ))
-                    lon += step
-                lat += step
+                    lon += bootstrap_step
+                lat -= bootstrap_step
+            logger.info(
+                f"[{self.name}] Bootstrap grid: {len(cells)} celdas cubriendo Europa "
+                f"(lat {self.EU_BOUNDS['lat_min']}-{self.EU_BOUNDS['lat_max']}, "
+                f"lon {self.EU_BOUNDS['lon_min']}-{self.EU_BOUNDS['lon_max']})"
+            )
             return cells
             
         min_lat_idx = int(floor(-90.0 / step))
