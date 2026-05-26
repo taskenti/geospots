@@ -295,6 +295,7 @@
     <div class="header-right">
         <span id="poll-indicator">⟳ Actualizando automáticamente…</span>
         <span id="last-refresh"></span>
+        <button class="btn" onclick="cleanupZombies()" title="Marca como zombie cualquier job 'running' colgado >12h">🧹 Limpiar zombies</button>
         <button class="btn" id="btn-refresh" onclick="loadAll()">↻ Actualizar</button>
     </div>
 </div>
@@ -559,13 +560,20 @@ function renderDetail(d, history, samples) {
     const lr    = d.last_run;
     const lrr   = d.last_reviews_run;
 
+    const stale = stats.stale_records || 0;
+    const huerf = stats.spots_fuentes_huerfano || 0;
+    const cleanupBtn = huerf > 0
+        ? `<button class="btn-run" style="margin-top:0.5rem;width:100%" onclick="cleanupFuentesHuerfanas('${esc(d.nombre)}')">🧹 Limpiar ${huerf} huérfanos de fuentes[]</button>`
+        : '';
     const statsCard = `
         <div class="detail-card">
             <h4>Volumen</h4>
-            <div class="kv"><span class="kv-key">Source records</span><span class="kv-val mono">${fmtNum(stats.total_records,'0')}</span></div>
-            <div class="kv"><span class="kv-key">Spots activos</span><span class="kv-val mono">${fmtNum(stats.spots_total,'0')}</span></div>
+            <div class="kv"><span class="kv-key">Source records</span><span class="kv-val mono">${fmtNum(stats.active_records ?? stats.total_records,'0')}${stale>0?` <span class="dim" style="font-size:0.7rem">(+${fmtNum(stale)} stale)</span>`:''}</span></div>
+            <div class="kv"><span class="kv-key">Spots con record activo</span><span class="kv-val mono">${fmtNum(stats.spots_total,'0')}</span></div>
+            ${huerf>0?`<div class="kv"><span class="kv-key" style="color:#f87171">Spots huérfanos en fuentes[]</span><span class="kv-val mono" style="color:#f87171">${fmtNum(huerf)}</span></div>`:''}
             <div class="kv"><span class="kv-key">Exclusivos (solo esta fuente)</span><span class="kv-val mono">${fmtNum(stats.spots_exclusive,'0')}</span></div>
             <div class="kv"><span class="kv-key">Reviews totales</span><span class="kv-val mono">${fmtNum(stats.total_reviews,'0')}</span></div>
+            ${cleanupBtn}
         </div>`;
 
     const credCard = `
@@ -700,6 +708,34 @@ async function queueRun(nombre, jobType, rowIdx) {
         console.error('[admin] queueRun failed:', e);
         toast(`✗ Falló al encolar ${jobType}`, `${nombre}: ${e.message}`, 'err', 9000);
         btns.forEach(b => { b.disabled = false; });
+    }
+}
+
+// ─── cleanup zombies ───────────────────────────────────────────────────
+async function cleanupZombies() {
+    if (!confirm('Marcar como zombie cualquier scraper_log/scraper_jobs colgado >12h?\n\nNo cancela los que estén legítimamente en marcha (<12h).')) return;
+    try {
+        const r = await H.post('/admin/cleanup/zombies');
+        toast(
+            '✓ Limpieza zombies',
+            `scraper_log: ${r.scraper_log_updated} · scraper_jobs: ${r.scraper_jobs_updated}`,
+            'ok', 6000
+        );
+        loadAll();
+    } catch(e) {
+        toast('✗ Falló cleanup', e.message, 'err', 9000);
+    }
+}
+
+async function cleanupFuentesHuerfanas(nombre) {
+    if (!confirm(`Eliminar '${nombre}' de spots.fuentes[] donde no exista un source_record activo?\n\nEsto NO borra spots ni records — solo limpia el array para que los conteos cuadren.`)) return;
+    try {
+        const r = await H.post(`/admin/cleanup/fuentes-huerfanas?nombre=${encodeURIComponent(nombre)}`);
+        toast('✓ Huérfanos limpiados', `${r.spots_actualizados} spots actualizados`, 'ok', 6000);
+        delete detailCache[nombre];
+        loadAll();
+    } catch(e) {
+        toast('✗ Falló cleanup', e.message, 'err', 9000);
     }
 }
 

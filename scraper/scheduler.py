@@ -20,6 +20,8 @@ SOURCES = {
     "campercontact": "sources.campercontact:CamperContactSource",
     "park4night": "sources.park4night:Park4NightSource",
     "ioverlander": "sources.ioverlander:IOverlanderSource",
+    "amigosac": "sources.amigosac:AmigosACSource",
+    "freecampsites": "sources.freecampsites:FreeCampsitesSource",
     "furgovw": "sources.furgovw:FurgovwSource",
     "areasac": "sources.areasac:AreasACSource",
     "osm": "sources.osm:OSMSource",
@@ -41,6 +43,9 @@ SOURCES = {
     "agricamper": "sources.agricamper:AgricamperSource",
     "campendium": "sources.campendium:CampendiumSource",
     "campingcarpark": "sources.campingcarpark:CampingCarParkSource",
+    "campy": "sources.campy:CampySource",
+    "bobilguiden": "sources.bobilguiden:BobilguidenSource",
+    "google_maps": "sources.google_maps:GoogleMapsSource",
 }
 
 
@@ -92,8 +97,31 @@ async def run_source_reviews(source_key: str):
             })
 
 
+async def cleanup_zombie_runs(max_hours: int = 12) -> dict:
+    """Marca como zombie scraper_log/scraper_jobs colgados >max_hours en running."""
+    async with pool.acquire() as conn:
+        log_res = await conn.execute(
+            f"UPDATE scraper_log SET estado = 'zombie', terminado_en = NOW() "
+            f"WHERE estado = 'running' AND iniciado_en < NOW() - INTERVAL '{max_hours} hours'"
+        )
+        job_res = await conn.execute(
+            f"UPDATE scraper_jobs SET status = 'error', finished_at = NOW(), "
+            f"result = COALESCE(result,'{{}}'::jsonb) || jsonb_build_object('error', 'timeout: zombie tras {max_hours}h') "
+            f"WHERE status IN ('pending','running') AND created_at < NOW() - INTERVAL '{max_hours} hours'"
+        )
+    return {
+        "scraper_log_updated": int(log_res.split()[-1]) if log_res else 0,
+        "scraper_jobs_updated": int(job_res.split()[-1]) if job_res else 0,
+    }
+
+
 async def run_pending_jobs():
     """Ejecuta los jobs de la cola scraper_jobs. Uso: python scheduler.py --run-pending"""
+    # Primero limpia los zombies. No queremos que un job stuck bloquee la cola.
+    cleanup = await cleanup_zombie_runs(max_hours=12)
+    if cleanup["scraper_log_updated"] or cleanup["scraper_jobs_updated"]:
+        logger.info(f"[queue] Limpieza zombies previa: {cleanup}")
+
     # Marca atómicamente como 'running' hasta 5 jobs pending
     async with pool.acquire() as conn:
         jobs = await conn.fetch(
@@ -126,7 +154,7 @@ async def run_pending_jobs():
             async with pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE scraper_jobs SET status='done', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
-                    json.dumps(stats or {}), job_id,
+                    json.dumps(stats or {}, default=str), job_id,
                 )
             logger.info(f"[queue] Job {job_id} completado: {stats}")
         except Exception as e:
@@ -191,6 +219,12 @@ async def main():
             if source_key == "run-pending":
                 logger.info("Modo: ejecutar jobs pendientes de la cola")
                 await run_pending_jobs()
+                return
+
+            if source_key == "cleanup-zombies":
+                logger.info("Modo: limpiar runs zombie (>12h en 'running')")
+                res = await cleanup_zombie_runs(max_hours=12)
+                logger.info(f"Limpieza completada: {res}")
                 return
 
             if source_key in SOURCES:

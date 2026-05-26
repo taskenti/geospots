@@ -48,7 +48,34 @@ async def startup():
         await conn.execute(
             "ALTER TABLE fuentes_config ADD COLUMN IF NOT EXISTS cron_schedule TEXT"
         )
+        # Limpieza one-shot al arrancar: si algún scraper crasheó en el último
+        # ciclo, su scraper_log row quedó en 'running'. Marcarlo como zombie.
+        cleanup = await _cleanup_stuck_runs(conn, max_hours=12)
+        if cleanup["scraper_log_updated"] or cleanup["scraper_jobs_updated"]:
+            logger.info(f"[startup] Limpieza zombies: {cleanup}")
     logger.info("GeoSpots API ready")
+
+
+async def _cleanup_stuck_runs(conn, max_hours: int = 12) -> dict:
+    """Marca como zombie los runs colgados >max_hours en estado 'running'.
+
+    Aplica tanto a scraper_log (historial de ejecuciones) como a scraper_jobs
+    (cola del panel admin). Idempotente — si no hay nada que limpiar, no
+    altera filas.
+    """
+    log_result = await conn.execute(
+        f"UPDATE scraper_log SET estado = 'zombie', terminado_en = NOW() "
+        f"WHERE estado = 'running' AND iniciado_en < NOW() - INTERVAL '{max_hours} hours'"
+    )
+    job_result = await conn.execute(
+        f"UPDATE scraper_jobs SET status = 'error', finished_at = NOW(), "
+        f"result = COALESCE(result, '{{}}'::jsonb) || jsonb_build_object('error', 'timeout: zombie tras {max_hours}h en running') "
+        f"WHERE status IN ('pending','running') AND created_at < NOW() - INTERVAL '{max_hours} hours'"
+    )
+    return {
+        "scraper_log_updated": int(log_result.split()[-1]) if log_result else 0,
+        "scraper_jobs_updated": int(job_result.split()[-1]) if job_result else 0,
+    }
 
 
 @app.on_event("shutdown")
@@ -438,15 +465,23 @@ async def admin_scrapers_list():
                 SELECT DISTINCT regexp_replace(fuente, '_reviews$', '') FROM scraper_log
             ),
             src_counts AS (
-                SELECT source, COUNT(*) AS total_records
+                SELECT source,
+                       COUNT(*) AS total_records,
+                       COUNT(*) FILTER (WHERE COALESCE(stale, FALSE) = FALSE) AS active_records
                 FROM source_records GROUP BY source
             ),
+            -- Cuenta spots vía JOIN con source_records (NO via spots.fuentes[]):
+            -- evita el problema de entradas huérfanas en fuentes[] cuando se
+            -- eliminó el record pero no se sincronizó el array. Esto explicaba
+            -- por qué CamperContact mostraba más spots (46K) que records (45K).
             spot_counts AS (
-                SELECT unnest(fuentes) AS source,
-                       COUNT(*) AS spots_total,
-                       COUNT(*) FILTER (WHERE cardinality(fuentes) = 1) AS spots_exclusive
-                FROM spots WHERE activo = TRUE
-                GROUP BY 1
+                SELECT sr.source,
+                       COUNT(DISTINCT s.id) AS spots_total,
+                       COUNT(DISTINCT s.id) FILTER (WHERE cardinality(s.fuentes) = 1) AS spots_exclusive
+                FROM source_records sr
+                JOIN spots s ON s.id = sr.spot_id
+                WHERE s.activo = TRUE AND COALESCE(sr.stale, FALSE) = FALSE
+                GROUP BY sr.source
             ),
             review_counts AS (
                 SELECT source, COUNT(*) AS total_reviews
@@ -475,6 +510,7 @@ async def admin_scrapers_list():
                 sc.coverage_region,
                 COALESCE(sc.active, TRUE) AS activa,
                 COALESCE(sr.total_records, 0) AS total_records,
+                COALESCE(sr.active_records, 0) AS active_records,
                 COALESCE(spc.spots_total, 0) AS spots_total,
                 COALESCE(spc.spots_exclusive, 0) AS spots_exclusive,
                 COALESCE(rc.total_reviews, 0) AS total_reviews,
@@ -522,15 +558,36 @@ async def admin_scraper_detail(nombre: str):
     async with pool.acquire() as conn:
         sc = await conn.fetchrow("SELECT * FROM source_credibility WHERE source = $1", nombre)
         fc = await conn.fetchrow("SELECT * FROM fuentes_config WHERE nombre = $1", nombre)
-        total_records = await conn.fetchval(
-            "SELECT COUNT(*) FROM source_records WHERE source = $1", nombre
+        records_row = await conn.fetchrow(
+            "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE COALESCE(stale,FALSE)=FALSE) AS active "
+            "FROM source_records WHERE source = $1",
+            nombre,
         )
+        total_records = records_row["total"] if records_row else 0
+        active_records = records_row["active"] if records_row else 0
+        # Spots con un source_record real (no via fuentes[] huérfano)
         spot_row = await conn.fetchrow(
             """
             SELECT
-                COUNT(*) FILTER (WHERE $1 = ANY(fuentes)) AS spots_total,
-                COUNT(*) FILTER (WHERE $1 = ANY(fuentes) AND cardinality(fuentes) = 1) AS spots_exclusive
-            FROM spots WHERE activo = TRUE
+                COUNT(DISTINCT s.id) AS spots_total,
+                COUNT(DISTINCT s.id) FILTER (WHERE cardinality(s.fuentes) = 1) AS spots_exclusive,
+                COUNT(DISTINCT s.id) FILTER (WHERE NOT ($1 = ANY(s.fuentes))) AS spots_orphan
+            FROM source_records sr
+            JOIN spots s ON s.id = sr.spot_id
+            WHERE s.activo = TRUE AND COALESCE(sr.stale, FALSE) = FALSE AND sr.source = $1
+            """,
+            nombre,
+        )
+        # Spots cuya fuentes[] menciona la fuente pero no hay record activo
+        # (anomalía típica: dedup borró el record pero no actualizó el array)
+        spots_fuentes_only = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM spots s
+            WHERE s.activo = TRUE AND $1 = ANY(s.fuentes)
+              AND NOT EXISTS (
+                SELECT 1 FROM source_records sr
+                WHERE sr.spot_id = s.id AND sr.source = $1 AND COALESCE(sr.stale,FALSE) = FALSE
+              )
             """,
             nombre,
         )
@@ -579,8 +636,11 @@ async def admin_scraper_detail(nombre: str):
         "config": dict(fc) if fc else None,
         "stats": {
             "total_records": total_records,
+            "active_records": active_records,
+            "stale_records": total_records - active_records,
             "spots_total": spot_row["spots_total"] if spot_row else 0,
             "spots_exclusive": spot_row["spots_exclusive"] if spot_row else 0,
+            "spots_fuentes_huerfano": spots_fuentes_only or 0,
             "total_reviews": total_reviews,
         },
         "last_run": last_run_d,
@@ -588,6 +648,35 @@ async def admin_scraper_detail(nombre: str):
         "salud": salud_color,
         "salud_texto": salud_texto,
     }
+
+
+@app.post("/admin/cleanup/zombies")
+async def admin_cleanup_zombies(max_hours: int = Query(12, ge=1, le=168)):
+    """Marca como zombie scraper_log/scraper_jobs colgados > max_hours."""
+    async with pool.acquire() as conn:
+        result = await _cleanup_stuck_runs(conn, max_hours=max_hours)
+    return result
+
+
+@app.post("/admin/cleanup/fuentes-huerfanas")
+async def admin_cleanup_fuentes_huerfanas(nombre: str = Query(..., description="Fuente a limpiar de spots.fuentes[]")):
+    """Elimina `nombre` del array spots.fuentes[] cuando no existe un
+    source_record activo. Útil cuando dedup eliminó records pero
+    no sincronizó el array (causa de spots_total > total_records).
+    """
+    async with pool.acquire() as conn:
+        n = await conn.execute(
+            """
+            UPDATE spots SET fuentes = array_remove(fuentes, $1)
+            WHERE activo = TRUE AND $1 = ANY(fuentes)
+              AND NOT EXISTS (
+                SELECT 1 FROM source_records sr
+                WHERE sr.spot_id = spots.id AND sr.source = $1 AND COALESCE(sr.stale,FALSE) = FALSE
+              )
+            """,
+            nombre,
+        )
+    return {"fuente": nombre, "spots_actualizados": int(n.split()[-1]) if n else 0}
 
 
 @app.post("/admin/scrapers/{nombre}/run")
