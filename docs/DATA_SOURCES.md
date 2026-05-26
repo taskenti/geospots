@@ -29,6 +29,7 @@
 | **campingcarpark** | `gateway.feature.campingcarpark.com` | Bulk API gateway (status + detail) | Lista global IDs + detalle por ID | Semanal | Activo | EU (~906 áreas oficiales red CCP) |
 | **campy** | `graphql-server-...run.app` | GraphQL (LocationsWithinRadius) | Radio 90km en grid 1° | Semanal | Activo | DACH + EU (microcamping) |
 | **bobilguiden** | `api.bobilguiden.no/places/mobile` | Bulk JSON único | Descarga global (no grid) | Semanal | Activo | NO/SE/FI/DK (~1936 spots, NO=95%) |
+| **freecampsites** | `freecampsites.net/.../androidApp.php` + wp-json comments | JSON-en-texto + WP JSON API | Grid 1° filtrado a NA | Mensual | Activo (API inestable) | US/CA/MX (~2248 spots) |
 | **portugaleasycamp** | — | — | — | — | Stub vacío | Portugal |
 
 ---

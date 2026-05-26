@@ -228,6 +228,7 @@ FUENTES EXTERNAS (20+ scrapers)
 | campingcarpark | Bulk API gateway + detail por ID | ✅ Integrada | EU (~906 áreas oficiales CCP) |
 | campy | GraphQL LocationsWithinRadius (90km/grid 1°) | ✅ Integrada | DACH + EU (microcamping) |
 | bobilguiden | Bulk JSON `/places/mobile` (1 request) | ✅ Integrada | NO/SE/FI/DK (~1936 spots) |
+| freecampsites | androidApp.php + wp-json comments | ✅ Integrada | US/CA/MX (~2248 spots, boondocking) |
 
 ---
 
