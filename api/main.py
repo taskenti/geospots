@@ -48,6 +48,13 @@ async def startup():
         await conn.execute(
             "ALTER TABLE fuentes_config ADD COLUMN IF NOT EXISTS cron_schedule TEXT"
         )
+        # Tabla de metadatos compartida API ↔ scraper daemon (heartbeat etc.)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS scraper_jobs_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         # Limpieza one-shot al arrancar: si algún scraper crasheó en el último
         # ciclo, su scraper_log row quedó en 'running'. Marcarlo como zombie.
         cleanup = await _cleanup_stuck_runs(conn, max_hours=12)
@@ -654,6 +661,33 @@ async def admin_scraper_detail(nombre: str):
         "last_reviews_run": dict(last_reviews_run) if last_reviews_run else None,
         "salud": salud_color,
         "salud_texto": salud_texto,
+    }
+
+
+@app.get("/admin/worker/status")
+async def admin_worker_status():
+    """Devuelve si el scraper daemon está vivo (heartbeat < 90s)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value FROM scraper_jobs_meta WHERE key = 'worker_heartbeat'"
+        )
+        pending = await conn.fetchval(
+            "SELECT COUNT(*) FROM scraper_jobs WHERE status IN ('pending','running')"
+        )
+    if not row or not row["value"]:
+        return {"alive": False, "last_heartbeat": None, "seconds_ago": None, "pending_jobs": pending}
+    try:
+        last = datetime.fromisoformat(row["value"])
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        delta_s = int((datetime.now(timezone.utc) - last).total_seconds())
+    except (ValueError, TypeError):
+        return {"alive": False, "last_heartbeat": row["value"], "seconds_ago": None, "pending_jobs": pending}
+    return {
+        "alive": delta_s < 90,  # heartbeat cada 30s, margen 3x
+        "last_heartbeat": row["value"],
+        "seconds_ago": delta_s,
+        "pending_jobs": pending,
     }
 
 

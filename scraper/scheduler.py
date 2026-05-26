@@ -97,6 +97,46 @@ async def run_source_reviews(source_key: str):
             })
 
 
+async def write_worker_heartbeat():
+    """Escribe el heartbeat del daemon en scraper_jobs_meta.
+
+    El panel admin lee este timestamp para saber si el worker está vivo.
+    Si no se actualiza en >90s, asume que el worker está muerto.
+    """
+    async with pool.acquire() as conn:
+        # Crea tabla si no existe (idempotente, no rompe si la creó la API).
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS scraper_jobs_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        await conn.execute("""
+            INSERT INTO scraper_jobs_meta(key, value) VALUES ('worker_heartbeat', NOW()::text)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """)
+
+
+async def daemon_loop(interval_s: int = 30):
+    """Bucle principal del daemon: heartbeat + procesar cola + dormir.
+
+    Se ejecuta indefinidamente. Para parar, basta con stop/restart del
+    contenedor. Cada iteración:
+      1. Heartbeat (para que el panel sepa que estamos vivos)
+      2. Limpieza de zombies (>12h en running)
+      3. Procesar hasta 5 jobs pendientes de scraper_jobs
+      4. Dormir interval_s segundos
+    """
+    logger.info(f"[daemon] Arrancando worker (intervalo {interval_s}s)")
+    while True:
+        try:
+            await write_worker_heartbeat()
+            await run_pending_jobs()
+        except Exception as e:
+            logger.error(f"[daemon] Error en ciclo: {e}")
+        await asyncio.sleep(interval_s)
+
+
 async def cleanup_zombie_runs(max_hours: int = 12) -> dict:
     """Marca como zombie scraper_log/scraper_jobs colgados >max_hours en running."""
     async with pool.acquire() as conn:
@@ -221,10 +261,20 @@ async def main():
                 await run_pending_jobs()
                 return
 
+            if source_key == "daemon":
+                logger.info("Modo: daemon (worker continuo de la cola)")
+                await daemon_loop(interval_s=30)
+                return  # nunca llega — daemon_loop es infinito
+
             if source_key == "cleanup-zombies":
                 logger.info("Modo: limpiar runs zombie (>12h en 'running')")
                 res = await cleanup_zombie_runs(max_hours=12)
                 logger.info(f"Limpieza completada: {res}")
+                return
+
+            if source_key == "run-all":
+                logger.info("Modo: ejecutar todos los scrapers (one-shot)")
+                await run_all_sources()
                 return
 
             if source_key in SOURCES:
@@ -236,9 +286,13 @@ async def main():
             logger.info(f"Fuentes disponibles: {', '.join(SOURCES.keys())}")
             return
 
-    # Modo por defecto: todas las fuentes
-    logger.info("Modo: pipeline completo")
-    await run_all_sources()
+    # Modo por defecto: daemon. ANTES era run_all_sources() que disparaba
+    # los 21 scrapers en cadena al arrancar el contenedor — disruptivo y
+    # dejaba runs en estado 'running' colgado tras cualquier restart.
+    # Si quieres el comportamiento antiguo: python scheduler.py --run-all
+    logger.info("Modo: daemon (default). Usa --run-all para ejecutar todo, "
+                "o --<fuente> para una sola.")
+    await daemon_loop(interval_s=30)
 
 
 if __name__ == "__main__":

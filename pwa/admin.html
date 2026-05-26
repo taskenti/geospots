@@ -293,9 +293,10 @@
         <span class="header-title">/ Admin Scrapers</span>
     </div>
     <div class="header-right">
+        <span id="worker-status" title="Estado del scraper daemon"></span>
         <span id="poll-indicator">⟳ Actualizando automáticamente…</span>
         <span id="last-refresh"></span>
-        <button class="btn" onclick="cleanupZombies()" title="Marca como zombie cualquier job 'running' colgado >12h">🧹 Limpiar zombies</button>
+        <button class="btn" onclick="cleanupZombies()" title="Marca como zombie cualquier job 'running' colgado >Nh">🧹 Limpiar zombies</button>
         <button class="btn" id="btn-refresh" onclick="loadAll()">↻ Actualizar</button>
     </div>
 </div>
@@ -381,7 +382,29 @@ const detailCache = {};
 let pollTimer = null;
 
 function hasPendingJobs() {
-    return allData.some(d => d.active_job_types && d.active_job_types.length > 0);
+    // Auto-refresh si hay jobs en la cola O algún scraper en running (incluso
+    // si fue lanzado por CLI fuera del panel).
+    return allData.some(d =>
+        (d.active_job_types && d.active_job_types.length > 0) ||
+        d.ultimo_estado === 'running'
+    );
+}
+
+async function refreshWorkerStatus() {
+    const el = document.getElementById('worker-status');
+    try {
+        const w = await H.get('/admin/worker/status');
+        if (w.alive) {
+            el.innerHTML = `<span style="color:#4ade80">● Worker vivo</span> <span class="dim" style="font-size:0.72rem">(hace ${w.seconds_ago}s${w.pending_jobs?`, ${w.pending_jobs} en cola`:''})</span>`;
+        } else if (w.last_heartbeat) {
+            const min = Math.floor((w.seconds_ago || 0) / 60);
+            el.innerHTML = `<span style="color:#f87171">● Worker muerto</span> <span class="dim" style="font-size:0.72rem">(último heartbeat hace ${min}min)</span>`;
+        } else {
+            el.innerHTML = `<span style="color:#f87171">● Worker no iniciado</span> <span class="dim" style="font-size:0.72rem">(reinicia el contenedor scraper)</span>`;
+        }
+    } catch(e) {
+        el.innerHTML = '<span class="dim">worker?</span>';
+    }
 }
 
 function schedulePoll() {
@@ -405,6 +428,7 @@ async function loadAll() {
         allData = await H.get('/admin/scrapers');
         renderStats(allData);
         renderTable(allData);
+        refreshWorkerStatus();  // status del daemon en cabecera
         document.getElementById('last-refresh').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
         schedulePoll();
     } catch(e) {
@@ -687,15 +711,22 @@ async function queueRun(nombre, jobType, rowIdx) {
     console.log(`[admin] Encolando job: ${nombre} / ${jobType}`);
     const btns = document.querySelectorAll(`#row-${rowIdx} .btn-run`);
     btns.forEach(b => { b.disabled = true; });
+
+    // Pre-check: avisar si el worker no responde antes de encolar
+    let workerAlive = true;
+    try {
+        const w = await H.get('/admin/worker/status');
+        workerAlive = w.alive;
+    } catch {}
+
     toast(`Encolando ${jobType}…`, nombre, 'info', 2500);
 
     try {
         const res = await H.post(`/admin/scrapers/${encodeURIComponent(nombre)}/run?job_type=${jobType}`);
-        toast(
-            `✓ Job #${res.job_id} en cola`,
-            `${nombre} (${jobType}) — ejecuta scheduler.py --run-pending para procesarlo`,
-            'ok', 7000
-        );
+        const subtitle = workerAlive
+            ? `${nombre} (${jobType}) — el daemon lo procesará en <30s`
+            : `${nombre} (${jobType}) — ⚠ daemon no responde: docker-compose restart scraper`;
+        toast(`✓ Job #${res.job_id} en cola`, subtitle, workerAlive ? 'ok' : 'warn', 8000);
         const d = allData.find(x => x.nombre === nombre);
         if (d) {
             d.active_job_types = d.active_job_types || [];

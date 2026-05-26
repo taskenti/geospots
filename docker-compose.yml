@@ -51,6 +51,11 @@ services:
       - ./scraper:/app
       - ./enrichment:/app/enrichment:ro
       - ./jobs:/app/jobs:ro
+    # IMPORTANTE: el contenedor es un DAEMON que procesa la cola scraper_jobs
+    # cada 30s. NO arranca todos los scrapers automáticamente (eso causaba
+    # crashes en cadena al reiniciar). Para ejecutar uno manualmente:
+    #   docker-compose exec scraper python scheduler.py --park4night
+    command: ["python", "scheduler.py", "--daemon"]
 
   enrichment:
     build: ./scraper
