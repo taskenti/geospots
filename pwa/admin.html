@@ -713,12 +713,24 @@ async function queueRun(nombre, jobType, rowIdx) {
 
 // ─── cleanup zombies ───────────────────────────────────────────────────
 async function cleanupZombies() {
-    if (!confirm('Marcar como zombie cualquier scraper_log/scraper_jobs colgado >12h?\n\nNo cancela los que estén legítimamente en marcha (<12h).')) return;
+    const hoursStr = prompt(
+        "Marcar como zombie scraper_log/scraper_jobs colgados más de N horas en 'running':\n\n" +
+        "• 12 (default, conservador): sólo los muy antiguos\n" +
+        "• 6: agresivo, marca los recientes mostrados como 'Crash probable'\n" +
+        "• 1: emergencia, para todo lo que no esté arrancando ahora\n",
+        '12'
+    );
+    if (hoursStr == null) return;
+    const hours = parseInt(hoursStr, 10);
+    if (isNaN(hours) || hours < 1 || hours > 168) {
+        toast('✗ Valor inválido', 'Debe ser un entero entre 1 y 168', 'err');
+        return;
+    }
     try {
-        const r = await H.post('/admin/cleanup/zombies');
+        const r = await H.post(`/admin/cleanup/zombies?max_hours=${hours}`);
         toast(
-            '✓ Limpieza zombies',
-            `scraper_log: ${r.scraper_log_updated} · scraper_jobs: ${r.scraper_jobs_updated}`,
+            `✓ Limpieza zombies (umbral ${hours}h)`,
+            `scraper_log: ${r.scraper_log_updated} filas · scraper_jobs: ${r.scraper_jobs_updated} filas`,
             'ok', 6000
         );
         loadAll();

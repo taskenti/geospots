@@ -454,15 +454,22 @@ def _compute_health(iniciado_en, terminado_en, estado, errores, nuevos, actualiz
 async def admin_scrapers_list():
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            WITH known_sources AS (
-                -- Sólo fuentes con datos reales o config explícita.
-                -- Excluimos fuentes que sólo existen como seed en source_credibility
-                -- (campernight, campininfo, stellplatz, wikidata, eu_opendata, wikicamps...)
+            WITH all_sources AS (
                 SELECT nombre FROM fuentes_config
                 UNION
                 SELECT DISTINCT source FROM source_records
                 UNION
                 SELECT DISTINCT regexp_replace(fuente, '_reviews$', '') FROM scraper_log
+            ),
+            known_sources AS (
+                -- Sólo fuentes con datos reales o config explícita.
+                -- Excluimos:
+                --   · seeds huérfanos de source_credibility (campernight, campininfo,
+                --     stellplatz, wikidata, eu_opendata, wikicamps...) — ya filtrados
+                --     al no estar en fuentes_config / source_records / scraper_log
+                --   · fuentes scratch de desarrollo: *_test, *_dev, *_staging, *_tmp
+                SELECT nombre FROM all_sources
+                WHERE nombre !~* '_(test|dev|staging|tmp)$'
             ),
             src_counts AS (
                 SELECT source,
