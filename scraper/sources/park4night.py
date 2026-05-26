@@ -198,6 +198,12 @@ class Park4NightSource(AbstractSource):
 
     def _parse_review(self, raw: dict, spot_id: int) -> dict | None:
         try:
+            import sys
+            import os
+            # Ensure root folder is in sys.path so we can import from enrichment
+            root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            if root_dir not in sys.path:
+                sys.path.append(root_dir)
             from enrichment.review_cleaner import detect_language
 
             texto = (raw.get("commentaire") or raw.get("comment") or "").strip() or None
@@ -222,7 +228,8 @@ class Park4NightSource(AbstractSource):
                 "autor": raw.get("uuid") or raw.get("pseudo") or raw.get("login"),
                 "idioma": detect_language(texto),
             }
-        except Exception:
+        except Exception as e:
+            logger.error(f"[{self.name}] Error parsing review for spot {spot_id}: {e}")
             return None
 
     async def run(self, pool, config, log_id: int) -> dict:
@@ -426,6 +433,7 @@ class Park4NightSource(AbstractSource):
                 ) r ON sr.spot_id = r.spot_id
                 WHERE sr.source = 'park4night' 
                   AND sr.review_count > 0 
+                  AND (sr.normalized_data->>'reviews_fetched') IS NULL
                   AND COALESCE(r.cnt, 0) < sr.review_count
                 ORDER BY sr.review_count DESC;
             """)
@@ -463,6 +471,14 @@ class Park4NightSource(AbstractSource):
                                 if rev:
                                     inserted = await upsert_review(conn, rev)
                                     stats["reviews_nuevas"] += int(bool(inserted))
+                            
+                            # Mark as reviews_fetched in source_records
+                            await conn.execute("""
+                                UPDATE source_records
+                                SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb,
+                                    last_seen = NOW()
+                                WHERE source = 'park4night' AND source_id = $1
+                            """, sid)
                 except Exception as e:
                     logger.warning(f"[{self.name}] Error fetching reviews for spot {sid}: {e}")
                     stats["errores"] += 1

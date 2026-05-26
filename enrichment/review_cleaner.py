@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
+from langdetect import detect
 
 BOILERPLATE_PATTERNS = [
     r"^\s*(merci|thanks|thank you|gracias|danke|grazie|super|ok|top|perfecto|genial)[\s!.]*$",
@@ -28,8 +29,6 @@ def detect_language(text: str | None) -> str | None:
     if not text:
         return None
     try:
-        from langdetect import detect
-
         return detect(text)
     except Exception:
         lowered = f" {text.lower()} "

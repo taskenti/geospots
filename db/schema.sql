@@ -566,7 +566,19 @@ INSERT INTO signal_types (id, parent_id, display_name, value_type, decay_class, 
 ('overnight_safe', NULL, 'Pernocta Posible', 'boolean', 'volatile', 120, 'consensus_boolean', 'recent_wins', 2.0),
 ('crowd_level', NULL, 'Nivel de Masificacion', 'numeric', 'volatile', 30, 'weighted_mean', 'recent_wins', 1.0),
 ('wind_exposure', NULL, 'Exposicion al Viento', 'numeric', 'slow', 730, 'weighted_mean', 'majority_consensus', 0.6),
-('stealth', NULL, 'Discrecion del Spot', 'numeric', 'slow', 365, 'weighted_mean', 'majority_consensus', 0.8)
+('stealth', NULL, 'Discrecion del Spot', 'numeric', 'slow', 365, 'weighted_mean', 'majority_consensus', 0.8),
+-- Phase 3 v2
+('noise_source', 'noise', 'Fuente de Ruido', 'text', 'slow', 180, 'recent_wins', 'recent_wins', 1.2),
+('parking_capacity', NULL, 'Capacidad de Parking', 'text', 'slow', 1825, 'recent_wins', 'recent_wins', 0.6),
+('cell_coverage', NULL, 'Cobertura Movil', 'numeric', 'slow', 365, 'weighted_mean', 'majority_consensus', 0.7),
+('wild_camping_legal', NULL, 'Acampada Libre Legal', 'boolean', 'slow', 730, 'consensus_boolean', 'recent_wins', 2.0),
+('mosquitoes', NULL, 'Mosquitos', 'numeric', 'volatile', 180, 'weighted_mean', 'recent_wins', 0.5),
+('dog_friendly', NULL, 'Apto Perros', 'boolean', 'slow', 1825, 'consensus_boolean', 'majority_consensus', 0.6),
+('family_friendly', NULL, 'Apto Familias', 'boolean', 'slow', 1825, 'consensus_boolean', 'majority_consensus', 0.6),
+('accessible_pmr', NULL, 'Accesible PMR', 'boolean', 'slow', 1825, 'consensus_boolean', 'majority_consensus', 0.6),
+('water_working', NULL, 'Agua Operativa', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.5),
+('electricity_working', NULL, 'Electricidad Operativa', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.5),
+('dump_station_working', NULL, 'Vaciado Aguas Operativo', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.5)
 ON CONFLICT (id) DO UPDATE SET
     parent_id = EXCLUDED.parent_id,
     display_name = EXCLUDED.display_name,
@@ -579,7 +591,7 @@ ON CONFLICT (id) DO UPDATE SET
 
 CREATE TABLE IF NOT EXISTS extracted_claims (
     id BIGSERIAL PRIMARY KEY,
-    review_id BIGINT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+    review_id BIGINT REFERENCES reviews(id) ON DELETE CASCADE,  -- nullable: v2 admite claims desde descripciones del spot
     spot_id INT NOT NULL REFERENCES spots(id) ON DELETE CASCADE,
     signal_type TEXT NOT NULL REFERENCES signal_types(id),
     raw_value TEXT NOT NULL,
@@ -636,12 +648,66 @@ CREATE TABLE IF NOT EXISTS spot_semantic_state (
     last_aggregated_at TIMESTAMPTZ DEFAULT NOW(),
     last_snapshot_data JSONB,
     stale BOOLEAN DEFAULT FALSE,
+    -- Phase 3 v2
+    enrichment_version INT DEFAULT 1,
+    llm_model TEXT,
+    last_observation_at TIMESTAMPTZ,
+    noise_sources TEXT[],
+    parking_capacity TEXT,
+    cell_coverage REAL,
+    wild_camping_legal BOOLEAN,
+    avoid_season TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_sss_stale ON spot_semantic_state(stale) WHERE stale = TRUE;
 CREATE INDEX IF NOT EXISTS idx_sss_filters ON spot_semantic_state(quietness_score, police_risk_score, crowd_level_score) WHERE stale = FALSE;
+CREATE INDEX IF NOT EXISTS idx_sss_enrichment_version ON spot_semantic_state(enrichment_version);
+CREATE INDEX IF NOT EXISTS idx_sss_last_observation ON spot_semantic_state(last_observation_at DESC NULLS LAST);
+
+-- Vista con freshness_warning calculado (NOW() no es immutable → no se puede usar en GENERATED STORED)
+CREATE OR REPLACE VIEW v_spot_semantic_state AS
+SELECT
+    sss.*,
+    (sss.last_observation_at IS NOT NULL
+     AND sss.last_observation_at < NOW() - INTERVAL '24 months') AS freshness_warning
+FROM spot_semantic_state sss;
+
+-- Phase 3 v2: batches enviados a Gemini Batch API
+CREATE TABLE IF NOT EXISTS enrichment_batches (
+    id                  BIGSERIAL PRIMARY KEY,
+    batch_name          TEXT UNIQUE NOT NULL,
+    enrichment_version  INT  NOT NULL,
+    llm_model           TEXT NOT NULL,
+    spot_ids            INT[] NOT NULL,
+    state               TEXT NOT NULL DEFAULT 'pending'
+                            CHECK (state IN ('pending','running','succeeded','failed','partial','cancelled')),
+    n_requested         INT  NOT NULL,
+    n_succeeded         INT,
+    n_failed            INT,
+    tokens_input        BIGINT,
+    tokens_output       BIGINT,
+    cost_estimated_usd  REAL,
+    error_msg           TEXT,
+    submitted_at        TIMESTAMPTZ DEFAULT NOW(),
+    completed_at        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_eb_state ON enrichment_batches(state) WHERE state IN ('pending','running');
+
+-- Phase 3 v2: estado del system-prompt cache (Gemini context caching)
+CREATE TABLE IF NOT EXISTS enrichment_cache_state (
+    id                  BIGSERIAL PRIMARY KEY,
+    enrichment_version  INT  NOT NULL,
+    llm_model           TEXT NOT NULL,
+    cache_name          TEXT NOT NULL UNIQUE,
+    cache_token_count   INT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    expires_at          TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ecs_active ON enrichment_cache_state(enrichment_version, llm_model, expires_at DESC);
 
 CREATE TABLE IF NOT EXISTS spot_semantic_snapshots (
     id BIGSERIAL PRIMARY KEY,

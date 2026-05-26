@@ -1,0 +1,208 @@
+{
+  "by_model": {
+    "deepseek/deepseek-v4-flash": {
+      "n": 12,
+      "errors": 0,
+      "parse_fail": 0,
+      "parse_ok": 12,
+      "latency_p50": 4.98,
+      "latency_p95": 11.94,
+      "cost_avg": 0.00029,
+      "cost_total": 0.00346,
+      "claims_avg": 8.1,
+      "distinct_signals_avg": 8.1,
+      "summary_es_pct": 100.0,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_pct": 100.0,
+      "summary_en_english_pct": 91.7,
+      "tags_avg": 5.9,
+      "best_for_avg": 2.4,
+      "noise_sources_avg": 0.17
+    },
+    "gemini/gemini-2.5-flash-lite": {
+      "n": 12,
+      "errors": 1,
+      "parse_fail": 0,
+      "parse_ok": 11,
+      "latency_p50": 5.6,
+      "latency_p95": 11.99,
+      "cost_avg": 0.00053,
+      "cost_total": 0.00581,
+      "claims_avg": 9.7,
+      "distinct_signals_avg": 9.5,
+      "summary_es_pct": 100.0,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "tags_avg": 4.9,
+      "best_for_avg": 2.3,
+      "noise_sources_avg": 0.55
+    },
+    "gemini/gemini-2.5-flash": {
+      "n": 12,
+      "errors": 0,
+      "parse_fail": 0,
+      "parse_ok": 12,
+      "latency_p50": 12.36,
+      "latency_p95": 35.56,
+      "cost_avg": 0.00244,
+      "cost_total": 0.02924,
+      "claims_avg": 8.2,
+      "distinct_signals_avg": 8.2,
+      "summary_es_pct": 100.0,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "tags_avg": 6.6,
+      "best_for_avg": 2.8,
+      "noise_sources_avg": 0.42
+    }
+  },
+  "by_country": {
+    "es|deepseek/deepseek-v4-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 6,
+      "cost_avg": 0.00019
+    },
+    "es|gemini/gemini-2.5-flash-lite": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 7,
+      "cost_avg": 0.00039
+    },
+    "es|gemini/gemini-2.5-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 4.5,
+      "cost_avg": 0.00151
+    },
+    "pt|deepseek/deepseek-v4-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 7,
+      "cost_avg": 0.00022
+    },
+    "pt|gemini/gemini-2.5-flash-lite": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 7,
+      "cost_avg": 0.00043
+    },
+    "pt|gemini/gemini-2.5-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 6,
+      "cost_avg": 0.00195
+    },
+    "nl|deepseek/deepseek-v4-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 8.5,
+      "cost_avg": 0.00031
+    },
+    "nl|gemini/gemini-2.5-flash-lite": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 15.5,
+      "cost_avg": 0.0007
+    },
+    "nl|gemini/gemini-2.5-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 11,
+      "cost_avg": 0.00312
+    },
+    "fr|deepseek/deepseek-v4-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 6,
+      "cost_avg": 0.00018
+    },
+    "fr|gemini/gemini-2.5-flash-lite": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 5.5,
+      "cost_avg": 0.00034
+    },
+    "fr|gemini/gemini-2.5-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 7.5,
+      "cost_avg": 0.00209
+    },
+    "it|deepseek/deepseek-v4-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 50.0,
+      "claims_avg": 14.5,
+      "cost_avg": 0.0006
+    },
+    "it|gemini/gemini-2.5-flash-lite": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 14.5,
+      "cost_avg": 0.00083
+    },
+    "it|gemini/gemini-2.5-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 11,
+      "cost_avg": 0.00335
+    },
+    "de|deepseek/deepseek-v4-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 6.5,
+      "cost_avg": 0.00023
+    },
+    "de|gemini/gemini-2.5-flash-lite": {
+      "n": 2,
+      "parse_ok": 1,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 8,
+      "cost_avg": 0.00044
+    },
+    "de|gemini/gemini-2.5-flash": {
+      "n": 2,
+      "parse_ok": 2,
+      "summary_es_spanish_pct": 100.0,
+      "summary_en_english_pct": 100.0,
+      "claims_avg": 9.5,
+      "cost_avg": 0.00259
+    }
+  },
+  "n_results": 36
+}

@@ -1,0 +1,177 @@
+SPOT 139647: 'Parcheggio Vicino Supermercato Coop'  [IT]
+reviews total=60 seleccionadas=57
+prompt chars=13463  tokens~3365
+
+
+== deepseek/deepseek-v4-flash ==================================================
+latency=11.7s  in=6459  out=1675  cost=$0.00050
+
+CLAIMS (23):
+   1. [quietness                     ]  val=0.9                   conf=0.9  rev_idx=None
+      excerpt: 'Ci siamo stati un giorno e una notte in tranquillità.'
+   2. [noise                         ]  val=0.1                   conf=0.9  rev_idx=None
+      excerpt: 'notte in tranquillità'
+   3. [road_noise                    ]  val=0.2                   conf=0.7  rev_idx=None
+      excerpt: 'Calme la nuit malgré la proximité de la route.'
+   4. [safety                        ]  val=0.8                   conf=0.8  rev_idx=None
+      excerpt: 'Ci siamo sempre sentiti molto sicuri.'
+   5. [police_risk                   ]  val=0.3                   conf=0.7  rev_idx=None
+      excerpt: "Ci siamo trasferiti in quest'area dopo che la polizia ci ha trasferito dal fronte."
+   6. [theft_risk                    ]  val=0.3                   conf=0.7  rev_idx=None
+      excerpt: 'I did not feel safe to remain so in order to avoid potential problems we did actually move on.'
+   7. [beauty                        ]  val=0.7                   conf=0.7  rev_idx=None
+      excerpt: 'facile andare in bicicletta per andare a Orbetello, una bellissima città.'
+   8. [cleanliness                   ]  val=0.7                   conf=0.7  rev_idx=None
+      excerpt: 'pianeggiante, su asfalto'
+   9. [large_vehicle                 ]  val=0.7                   conf=0.8  rev_idx=None
+      excerpt: 'Gute Einfahrt auch mit großen Wohnmobilen'
+  10. [road_quality                  ]  val=0.9                   conf=0.8  rev_idx=None
+      excerpt: 'pianeggiante, su asfalto'
+  11. [crowd_level                   ]  val=0.3                   conf=0.7  rev_idx=None
+      excerpt: "C'erano solo altri 2 vecchi camper"
+  12. [stealth                       ]  val=0.6                   conf=0.7  rev_idx=None
+      excerpt: 'From one side forbidden motorhomes sign, not from the other.'
+  13. [cell_coverage                 ]  val=0.2                   conf=0.7  rev_idx=None
+      excerpt: 'ricezione internet, 5/4g quasi assente.'
+  14. [mosquitoes                    ]  val=0.6                   conf=0.7  rev_idx=None
+      excerpt: 'a lot of mosquitos.'
+  15. [sea_view                      ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'vicino al supermercato coop, senza servizi'
+  16. [mountain_view                 ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'vicino al supermercato coop, senza servizi'
+  17. [lake_nearby                   ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'en longeant la lagune'
+  18. [overnight_safe                ]  val=True                  conf=0.9  rev_idx=None
+      excerpt: 'Ci siamo stati un giorno e una notte in tranquillità.'
+  19. [wild_camping_legal            ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'From one side forbidden motorhomes sign'
+  20. [dog_friendly                  ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'Wege für Hundespaziergang vorhanden.'
+  21. [family_friendly               ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'Passeggiata di un paio di km fatta con 3 bimbi 5/3 e 4 mesi!'
+  22. [noise_source                  ]  val=road                  conf=0.7  rev_idx=None
+      excerpt: 'Calme la nuit malgré la proximité de la route.'
+  23. [parking_capacity              ]  val=medium                conf=0.7  rev_idx=None
+      excerpt: 'parcheggio gratuito per una decina di camper'
+
+SUMMARY_ES:
+  Parking gratuito junto al supermercado Coop, sin servicios, con espacio para unos 10 camper. Muy tranquilo por la noche, ideal para una noche de paso. Cerca de Orbetello, accesible en bici o a pie. Algunas reseñas mencionan mosquitos y cobertura móvil deficiente. Hay cartel de prohibido motorhomes en un lado, pero se aparca por el otro sin problemas. Ocasionalmente presencia de policía o personas sospechosas, pero en general seguro.
+
+SUMMARY_EN:
+  Free parking next to the Coop supermarket, no services, space for about 10 campers. Very quiet at night, ideal for an overnight stop. Close to Orbetello, accessible by bike or on foot. Some reviews mention mosquitoes and poor mobile coverage. There is a no motorhomes sign on one side, but parking on the other side is fine. Occasional police presence or suspicious individuals, but generally safe.
+
+TAGS:     ['gratuito', 'supermercado', 'tranquilo', 'sin servicios', 'bicicleta', 'orbetello', 'mosquitos', 'cobertura movil baja']
+BEST_FOR: ['parejas', 'ciclistas', 'viajeros de paso']
+BEST_SEASON: primavera-otoño
+
+== gemini/gemini-2.5-flash-lite ================================================
+latency=9.0s  in=6536  out=2048  cost=$0.00102
+
+CLAIMS (25):
+   1. [wild_camping_legal            ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'From one side forbidden motorhomes sign, not from the other.'
+   2. [large_vehicle                 ]  val=0.8                   conf=0.8  rev_idx=None
+      excerpt: 'Gute Einfahrt auch mit großen Wohnmobilen, Nachts ruhig und beleuchtet, gu zu empfehlen'
+   3. [quietness                     ]  val=0.9                   conf=0.9  rev_idx=None
+      excerpt: 'Notte molto tranquilla'
+   4. [safety                        ]  val=0.7                   conf=0.8  rev_idx=None
+      excerpt: 'Wir haben uns immer sehr sicher gefühlt.'
+   5. [road_noise                    ]  val=0.2                   conf=0.7  rev_idx=None
+      excerpt: 'Calme la nuit malgré la proximité de la route.'
+   6. [beauty                        ]  val=0.7                   conf=0.8  rev_idx=None
+      excerpt: 'centro storico di Orbetello, una bellissima città.'
+   7. [cleanliness                   ]  val=0.6                   conf=0.7  rev_idx=None
+      excerpt: 'Parcheggio silenzioso, spazioso e vicino alla coop (dove ci sono i bagni).'
+   8. [crowd_level                   ]  val=0.3                   conf=0.8  rev_idx=None
+      excerpt: 'Notte molto tranquilla'
+   9. [wind_exposure                 ]  val=0.4                   conf=0.7  rev_idx=None
+      excerpt: 'Wir haben eine ruhige Nacht verbracht und eine wunderschöne Radtour nach Porto San Stefano gemacht.'
+  10. [stealth                       ]  val=0.7                   conf=0.8  rev_idx=None
+      excerpt: 'Rustige plaats ondanks de supermarkt vlakbij. De meeste bezoekers komen langs de andere kant.'
+  11. [cell_coverage                 ]  val=0.2                   conf=0.7  rev_idx=None
+      excerpt: 'poca copertura vdf/w3.'
+  12. [mosquitoes                    ]  val=0.3                   conf=0.8  rev_idx=None
+      excerpt: 'The only drawback is that there were a lot of mosquitos.'
+  13. [sea_view                      ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'Comoda camminata fino in paese e nella lingua di terra in mezzo al mare'
+  14. [shade_morning                 ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'Notte molto tranquilla'
+  15. [shade_afternoon               ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'Notte molto tranquilla'
+  16. [overnight_safe                ]  val=True                  conf=0.8  rev_idx=None
+      excerpt: 'Good parking, calm, close to a supermarket.'
+  17. [dog_friendly                  ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'Wege für Hundespaziergang vorhanden.'
+  18. [family_friendly               ]  val=True                  conf=0.8  rev_idx=None
+      excerpt: 'Passeggiata di un paio di km fatta con 3 bimbi 5/3 e 4 mesi!'
+  19. [water_working                 ]  val=False                 conf=1.0  rev_idx=None
+      excerpt: 'Agua potable: No'
+  20. [electricity_working           ]  val=False                 conf=1.0  rev_idx=None
+      excerpt: 'Electricidad: No'
+  21. [dump_station_working          ]  val=False                 conf=1.0  rev_idx=None
+      excerpt: 'Vaciado grises: No | Vaciado negras: No'
+  22. [police_risk                   ]  val=0.7                   conf=0.8  rev_idx=None
+      excerpt: 'We were told in no uncertain terms by an individual that we could not stay overnight at this location.'
+  23. [noise_source                  ]  val=road                  conf=0.7  rev_idx=None
+      excerpt: 'Calme la nuit malgré la proximité de la route.'
+  24. [noise_source                  ]  val=crowd                 conf=0.7  rev_idx=None
+      excerpt: 'Tagsüber oft von PKW belegt und zwei Fahrzeuge scheinen den Anwohnern zu gehören und stehen unbenutzt herum.'
+  25. [parking_capacity              ]  val=medium                conf=0.8  rev_idx=None
+      excerpt: "passata una notte c'erano anche altri camper ( il parcheggio e piccolo )"
+
+SUMMARY_ES:
+  Este es un aparcamiento gratuito junto a un supermercado Coop, ideal para pernoctar tranquilamente. Aunque carece de servicios como agua o electricidad, su cercanía a Orbetello y a rutas ciclistas lo hace muy conveniente. Los usuarios se sienten seguros, pero algunos advierten de la presencia de mosquitos y de una posible prohibición para autocaravanas en ciertas zonas. Recientemente, hubo un incidente donde se indicó a los usuarios que no podían pernoctar.
+
+SUMMARY_EN:
+  This is a free parking area next to a Coop supermarket, ideal for a quiet overnight stay. Although it lacks services like water or electricity, its proximity to Orbetello and cycle paths makes it very convenient. Users feel safe, but some warn of mosquitoes and a potential prohibition for motorhomes in certain areas. Recently, there was an incident where users were told they could not stay overnight.
+
+TAGS:     ['gratuito', 'tranquilo', 'supermercado', 'ciclismo', 'orbetello', 'pernocta']
+BEST_FOR: ['ciclistas', 'familias', 'parejas', 'perros']
+AVOID_SEASON: verano
+
+== gemini/gemini-2.5-flash =====================================================
+latency=39.7s  in=6536  out=1550  cost=$0.00584
+
+CLAIMS (16):
+   1. [quietness                     ]  val=0.9                   conf=0.9  rev_idx=None
+      excerpt: 'Ottimo parcheggio per passare una notte tranquilla e silenziosa.'
+   2. [noise_source                  ]  val=road                  conf=0.7  rev_idx=None
+      excerpt: 'Calme la nuit malgré la proximité de la route.'
+   3. [wild_camping_legal            ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: 'We were told in no uncertain terms by an individual that we could not stay overnight at this location.'
+   4. [police_risk                   ]  val=0.7                   conf=0.8  rev_idx=None
+      excerpt: 'We were told in no uncertain terms by an individual that we could not stay overnight at this location.'
+   5. [theft_risk                    ]  val=0.7                   conf=0.7  rev_idx=None
+      excerpt: 'Tavsiye etmiyorum bence güvenli bir yer değil en azından bu sezonda kalınmaz.'
+   6. [large_vehicle                 ]  val=0.4                   conf=0.7  rev_idx=None
+      excerpt: 'consigliato per camper non oltre 7 MT.'
+   7. [road_quality                  ]  val=0.8                   conf=0.6  rev_idx=None
+      excerpt: 'Met onze camper (7,5 mtr) schuurden wij over de bodem. Beter om de uitgang te nemen om op deze parking te komen, die is '
+   8. [crowd_level                   ]  val=0.5                   conf=0.6  rev_idx=None
+      excerpt: 'Tagsüber oft von PKW belegt und zwei Fahrzeuge scheinen den Anwohnern zu gehören und stehen unbenutzt herum.'
+   9. [dog_friendly                  ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'Wege für Hundespaziergang vorhanden.'
+  10. [family_friendly               ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'Passeggiata di un paio di km fatta con 3 bimbi 5/3 e 4 mesi!'
+  11. [overnight_safe                ]  val=False                 conf=0.6  rev_idx=None
+      excerpt: 'We were told in no uncertain terms by an individual that we could not stay overnight at this location.'
+  12. [cell_coverage                 ]  val=0.3                   conf=0.6  rev_idx=None
+      excerpt: 'Uninico appunto rispetto a quanto già detto riguarda la ricezione internet, 5/4g quasi assente.'
+  13. [mosquitoes                    ]  val=0.7                   conf=0.7  rev_idx=None
+      excerpt: 'The only drawback is that there were a lot of mosquitos.'
+  14. [lake_nearby                   ]  val=True                  conf=0.9  rev_idx=None
+      excerpt: 'longeant la lagune'
+  15. [beauty                        ]  val=0.8                   conf=0.8  rev_idx=None
+      excerpt: 'easy to cycle onto orbetello which is beautiful and there are lots of walks and cycle trails'
+  16. [parking_capacity              ]  val=medium                conf=0.7  rev_idx=None
+      excerpt: 'Ottimo parcheggio gratuito per una decina di camper'
+
+SUMMARY_ES:
+  El Parcheggio Vicino Supermercato Coop es un aparcamiento gratuito y generalmente tranquilo, ideal para pasar una noche y visitar Orbetello en bicicleta. Aunque muchas reviews lo consideran seguro para pernoctar, hay reportes recientes de riesgo policial y de ser instado a moverse, además de una mención de inseguridad por una persona sospechosa. No ofrece servicios, pero el supermercado Coop adyacente tiene baños. Puede haber mosquitos, especialmente en otoño.
+
+SUMMARY_EN:
+  Parcheggio Vicino Supermercato Coop is a free and generally quiet parking spot, ideal for an overnight stay and visiting Orbetello by bike. While many reviews consider it safe for overnight parking, there are recent reports of police risk and being asked to move, as well as a mention of feeling unsafe due to a suspicious person. It offers no services, but the adjacent Coop supermarket has restrooms. Mosquitoes can be an issue, especially in autumn.
+
+TAGS:     ['gratuito', 'tranquilo', 'supermercado', 'orbetello', 'bicicletas', 'laguna', 'riesgo-policial', 'mosquitos']
+BEST_FOR: ['parejas', 'ciclistas', 'compras', 'pernocta-corta', 'familias', 'perros']
+AVOID_SEASON: otoño

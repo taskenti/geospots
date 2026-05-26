@@ -1,15 +1,28 @@
-"""iOverlander — importación offline desde fichero KMZ."""
+"""iOverlander — importación offline desde fichero KMZ + descarga autenticada de check-ins.
 
+Fase 1 (activa): import KMZ offline → spots + descriptions.
+Fase 2 (requiere cuenta): download_reviews autenticado:
+  - Configura IOV_EMAIL y IOV_PASSWORD en .env
+  - El método hace login via CSRF token, luego:
+    1. Para cada spot de iOverlander busca su UUID en /places.json?lat=&lng=
+    2. Descarga /places/{uuid}.json con los check-ins (comentarios de usuarios)
+    3. Inserta cada check-in como review en la tabla reviews
+
+Nota: iOverlander no tiene API pública. El endpoint .json requiere sesión autenticada.
+iOverlander 2.0 (2025+) puede requerir suscripción premium para acceso completo.
+"""
+
+import asyncio
 import os
 import json
+import re
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from loguru import logger
+import httpx
 
 from sources.base import AbstractSource
-
-import re
 
 KMZ_PATH_DEFAULT = "data/ioverlander.kmz"
 
@@ -439,4 +452,334 @@ class IOverlanderSource(AbstractSource):
 
         dur = (datetime.now(timezone.utc) - inicio).total_seconds()
         logger.info(f"[ioverlander] Completado en {dur:.0f}s | {stats}")
+        return stats
+
+    # ─────────────────────────────────────────────────────────────────
+    # FASE 2: Descarga autenticada de check-ins como reviews
+    # Requiere: IOV_EMAIL y IOV_PASSWORD en entorno/.env
+    # ─────────────────────────────────────────────────────────────────
+
+    async def download_reviews(self, pool, config) -> dict:
+        """Descarga check-ins de iOverlander como reviews mediante sesión autenticada.
+
+        Prerrequisitos:
+            IOV_EMAIL    — email de la cuenta iOverlander
+            IOV_PASSWORD — contraseña de la cuenta iOverlander
+
+        Flujo:
+            1. GET /users/sign_in  → extrae CSRF token del HTML
+            2. POST /users/sign_in → autentica y obtiene cookie de sesión
+            3. Para cada spot de iOverlander en DB:
+               a. GET /places.json?lat=&lng=&radius_m=50  → encuentra UUID
+               b. GET /places/{uuid}.json                  → descarga check-ins
+               c. Inserta cada check-in como review
+        """
+        from db import upsert_review
+
+        email = os.environ.get("IOV_EMAIL", "").strip()
+        password = os.environ.get("IOV_PASSWORD", "").strip()
+
+        if not email or not password:
+            logger.warning(
+                "[ioverlander] download_reviews requiere IOV_EMAIL e IOV_PASSWORD. "
+                "Configúralos en .env para activar la descarga de check-ins."
+            )
+            return {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0,
+                    "skipped": "no_credentials"}
+
+        stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}
+
+        BASE_URL = "https://ioverlander.com"
+        HEADERS = {
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/124.0.0.0 Safari/537.36",
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-language": "en-US,en;q=0.5",
+        }
+        JSON_HEADERS = {
+            **HEADERS,
+            "accept": "application/json",
+            "x-requested-with": "XMLHttpRequest",
+        }
+
+        async with httpx.AsyncClient(
+            headers=HEADERS,
+            follow_redirects=True,
+            timeout=20,
+            cookies=httpx.Cookies(),
+        ) as client:
+
+            # ── PASO 1: Obtener CSRF token ──────────────────────────────────
+            logger.info("[ioverlander] Obteniendo CSRF token del formulario de login...")
+            try:
+                resp = await client.get(f"{BASE_URL}/users/sign_in")
+                resp.raise_for_status()
+                csrf_match = re.search(
+                    r'<meta name="csrf-token" content="([^"]+)"', resp.text
+                )
+                if not csrf_match:
+                    # Fallback: buscar en el formulario
+                    csrf_match = re.search(
+                        r'name="authenticity_token" value="([^"]+)"', resp.text
+                    )
+                if not csrf_match:
+                    logger.error("[ioverlander] No se encontró CSRF token. "
+                                 "Estructura HTML puede haber cambiado.")
+                    stats["errores"] += 1
+                    return stats
+                csrf_token = csrf_match.group(1)
+                logger.info(f"[ioverlander] CSRF token obtenido: {csrf_token[:20]}...")
+            except Exception as e:
+                logger.error(f"[ioverlander] Error obteniendo CSRF token: {e}")
+                stats["errores"] += 1
+                return stats
+
+            # ── PASO 2: Autenticar ──────────────────────────────────────────
+            logger.info(f"[ioverlander] Autenticando con {email}...")
+            try:
+                login_resp = await client.post(
+                    f"{BASE_URL}/users/sign_in",
+                    data={
+                        "authenticity_token": csrf_token,
+                        "user[email]": email,
+                        "user[password]": password,
+                        "user[remember_me]": "0",
+                        "commit": "Log in",
+                    },
+                    headers={**HEADERS, "content-type": "application/x-www-form-urlencoded",
+                             "referer": f"{BASE_URL}/users/sign_in"},
+                )
+                # Login exitoso → redirige a / o /explore (no a /sign_in)
+                if "/sign_in" in str(login_resp.url):
+                    logger.error(
+                        "[ioverlander] Login fallido. Verifica IOV_EMAIL e IOV_PASSWORD. "
+                        f"URL final: {login_resp.url}"
+                    )
+                    stats["errores"] += 1
+                    return stats
+                logger.info(f"[ioverlander] Login OK. URL final: {login_resp.url}")
+            except Exception as e:
+                logger.error(f"[ioverlander] Error en login: {e}")
+                stats["errores"] += 1
+                return stats
+
+            # Actualizar headers para requests JSON autenticados
+            client.headers.update({"accept": "application/json",
+                                    "x-requested-with": "XMLHttpRequest"})
+
+            # ── PASO 3: Cargar spots pendientes de reviews ──────────────────
+            async with pool.acquire() as conn:
+                jobs = await conn.fetch("""
+                    SELECT sr.spot_id, sr.source_id, sr.lat, sr.lon,
+                           COALESCE(r.cnt, 0) as db_review_count
+                    FROM source_records sr
+                    LEFT JOIN (
+                        SELECT spot_id, COUNT(*) as cnt
+                        FROM reviews
+                        WHERE source = 'ioverlander'
+                        GROUP BY spot_id
+                    ) r ON sr.spot_id = r.spot_id
+                    WHERE sr.source = 'ioverlander'
+                      AND (sr.normalized_data->>'checkins_fetched') IS NULL
+                    ORDER BY sr.spot_id
+                """)
+
+            total = len(jobs)
+            logger.info(f"[ioverlander] {total} spots pendientes de check-ins.")
+            if not jobs:
+                return stats
+
+            # ── PASO 4: Para cada spot, buscar UUID y descargar check-ins ───
+            for i, job in enumerate(jobs):
+                spot_id = job["spot_id"]
+                lat = job["lat"]
+                lon = job["lon"]
+
+                if (i + 1) % 500 == 0:
+                    logger.info(
+                        f"[ioverlander] Progreso: {i+1}/{total} | "
+                        f"reviews={stats['reviews_nuevas']} errores={stats['errores']}"
+                    )
+
+                await asyncio.sleep(self.rate_limit or 1.0)
+
+                # 4a. Buscar UUID del lugar por coordenadas
+                place_uuid = None
+                try:
+                    search_resp = await client.get(
+                        f"{BASE_URL}/places.json",
+                        params={"lat": f"{lat:.6f}", "lng": f"{lon:.6f}"},
+                        timeout=15,
+                    )
+                    if search_resp.status_code == 200:
+                        places_data = search_resp.json()
+                        # La API devuelve lista de lugares cercanos
+                        places_list = places_data if isinstance(places_data, list) \
+                            else places_data.get("places", [])
+                        if places_list:
+                            # Tomar el más cercano (primero)
+                            place_uuid = places_list[0].get("id") or \
+                                         places_list[0].get("uuid")
+                    elif search_resp.status_code == 401:
+                        logger.error("[ioverlander] Sesión expirada (401). Abortando.")
+                        stats["errores"] += 1
+                        break
+                    else:
+                        logger.debug(
+                            f"[ioverlander] Search {search_resp.status_code} "
+                            f"para ({lat:.4f},{lon:.4f})"
+                        )
+                except Exception as e:
+                    logger.debug(f"[ioverlander] Error buscando UUID para spot {spot_id}: {e}")
+                    stats["errores"] += 1
+                    continue
+
+                if not place_uuid:
+                    # Marcar como procesado aunque no encontremos UUID
+                    # para no reintentar infinitamente
+                    try:
+                        async with pool.acquire() as conn:
+                            await conn.execute("""
+                                UPDATE source_records
+                                SET normalized_data = normalized_data ||
+                                    '{"checkins_fetched": true, "uuid_not_found": true}'::jsonb
+                                WHERE source = 'ioverlander' AND spot_id = $1
+                            """, spot_id)
+                    except Exception:
+                        pass
+                    continue
+
+                await asyncio.sleep(self.rate_limit or 1.0)
+
+                # 4b. Descargar detalle del lugar (incluye check-ins)
+                try:
+                    place_resp = await client.get(
+                        f"{BASE_URL}/places/{place_uuid}.json",
+                        timeout=15,
+                    )
+                    if place_resp.status_code != 200:
+                        logger.debug(
+                            f"[ioverlander] Place detail {place_resp.status_code} "
+                            f"para UUID {place_uuid}"
+                        )
+                        stats["errores"] += 1
+                        continue
+                    place_data = place_resp.json()
+                except Exception as e:
+                    logger.debug(f"[ioverlander] Error descargando place {place_uuid}: {e}")
+                    stats["errores"] += 1
+                    continue
+
+                # 4c. Parsear check-ins como reviews
+                check_ins = place_data.get("check_ins") or \
+                            place_data.get("checkins") or \
+                            place_data.get("verifications") or []
+
+                if check_ins:
+                    try:
+                        async with pool.acquire() as conn:
+                            async with conn.transaction():
+                                for ci in check_ins:
+                                    # Texto del check-in
+                                    texto = (
+                                        ci.get("description") or
+                                        ci.get("comment") or
+                                        ci.get("body") or
+                                        ""
+                                    ).strip() or None
+
+                                    # Rating (iOverlander usa 1-5 o thumb up/down)
+                                    rating = None
+                                    rating_raw = ci.get("rating") or ci.get("score")
+                                    if rating_raw is not None:
+                                        try:
+                                            rating = float(rating_raw)
+                                        except (ValueError, TypeError):
+                                            pass
+
+                                    # Fecha
+                                    fecha = None
+                                    fecha_str = (
+                                        ci.get("created_at") or
+                                        ci.get("date") or
+                                        ci.get("visited_at") or
+                                        ""
+                                    )
+                                    if fecha_str:
+                                        try:
+                                            fecha = datetime.fromisoformat(
+                                                fecha_str.replace("Z", "+00:00")
+                                            )
+                                            if fecha.tzinfo is None:
+                                                fecha = fecha.replace(tzinfo=timezone.utc)
+                                        except Exception:
+                                            try:
+                                                fecha = datetime.strptime(
+                                                    fecha_str[:10], "%Y-%m-%d"
+                                                ).replace(tzinfo=timezone.utc)
+                                            except Exception:
+                                                pass
+
+                                    # Autor
+                                    user = ci.get("user") or {}
+                                    autor = (
+                                        user.get("username") or
+                                        user.get("name") or
+                                        ci.get("username") or
+                                        "iOverlander User"
+                                    )
+
+                                    # ID único del check-in
+                                    ci_id = ci.get("id") or ci.get("uuid") or ""
+                                    source_review_id = f"iov_{ci_id}" if ci_id else None
+
+                                    # Saltar si no tiene texto ni rating
+                                    if texto is None and rating is None:
+                                        continue
+
+                                    if source_review_id is None:
+                                        continue
+
+                                    rev_dict = {
+                                        "spot_id": spot_id,
+                                        "source": self.name,
+                                        "source_review_id": source_review_id,
+                                        "texto": texto,
+                                        "rating": rating,
+                                        "autor": autor,
+                                        "fecha": fecha,
+                                        "idioma": None,  # multilingüe
+                                    }
+                                    inserted = await upsert_review(conn, rev_dict)
+                                    stats["reviews_nuevas"] += int(bool(inserted))
+
+                        stats["actualizados"] += 1
+                    except Exception as e:
+                        logger.error(
+                            f"[ioverlander] Error insertando check-ins para spot {spot_id}: {e}"
+                        )
+                        stats["errores"] += 1
+
+                # Marcar como procesado
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.execute("""
+                            UPDATE source_records
+                            SET normalized_data = normalized_data ||
+                                jsonb_build_object(
+                                    'checkins_fetched', true,
+                                    'iov_uuid', $1::text,
+                                    'checkins_count', $2::int
+                                )
+                            WHERE source = 'ioverlander' AND spot_id = $3
+                        """, str(place_uuid), len(check_ins), spot_id)
+                except Exception as e:
+                    logger.debug(f"[ioverlander] Error marcando checkins_fetched: {e}")
+
+        logger.info(
+            f"[ioverlander] download_reviews completado: "
+            f"reviews_nuevas={stats['reviews_nuevas']} "
+            f"errores={stats['errores']}"
+        )
         return stats

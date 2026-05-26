@@ -1,0 +1,313 @@
+=== DISTRIBUCION DE TIPOS ===
+
+  otro                  63949 spots    723417 reviews
+  parking               46458 spots    527097 reviews
+  area_ac               31716 spots    704348 reviews
+  camping               30871 spots    620889 reviews
+  wild                   7121 spots     87258 reviews
+  naturaleza             1400 spots     34719 reviews
+  parking_publico         558 spots     16622 reviews
+  parking_privado         182 spots      3864 reviews
+  gasolinera                5 spots       105 reviews
+
+
+=== MUESTRA: 2 SPOTS POR CATEGORIA ===
+
+
+################################################################################
+# TIPO: otro
+################################################################################
+
+--- spot_id=496459 [si] 'Cerknica,70c Dolenja vas' (25 reviews) gratuito=None agua=True elec=None ---
+
+--- spot_id=583298 [es] 'Quintanar de la Sierra, 7 BU-822' (25 reviews) gratuito=None agua=None elec=None ---
+
+
+################################################################################
+# TIPO: parking
+################################################################################
+
+--- spot_id=636446 [None] 'Saint-Nectaire,  D150' (25 reviews) gratuito=None agua=None elec=None ---
+
+--- spot_id=557378 [hr] 'Staništa,  D8' (25 reviews) gratuito=None agua=None elec=None ---
+
+
+################################################################################
+# TIPO: area_ac
+################################################################################
+
+--- spot_id=61376 [se] 'Bölesjön Norra' (25 reviews) gratuito=True agua=True elec=False ---
+  [2026-05] [campercontact] [nl] [4.0/5] drinking water, toilet cassette drain present and clean. no grey water drain
+  [2025-04] [campercontact] [NL] [3.0/5] nice clean and heated facilities, no pit for grey water
+  [2021-08] [campercontact] [EN] [4.0/5] we approached from the north using routing by Waze… it directed us beyond the destination with a U turn 1km later to approach the opposite side of E4 from the south…  In fact their are similar facilities on both sides of the road, so save yourself the U turn!
+
+--- spot_id=149578 [no] 'Parking Løpsvika' (25 reviews) gratuito=False agua=True elec=True ---
+  [2025-07] [womostell] [de] [4.599999904632568/5] Herrlicher Platz direkt am Wasser. 20€ für den Platz und 5€ für den Strom. Sanitäranlagen haben wir, ebenso wie V+E, nicht benötigt. Wir kamen von der Fähre und freuen uns, so einen tollen und preiswerten Platz (im Vergleich zu den Lofoten) gefunden zu haben. Der Platzwart war Deutscher und sehr freundlich.
+  [2025-06] [womostell] [de] [3.5999999046325684/5] Keine Duschen
+  [2024-08] [campercontact] [NL] [4.0/5] A number of 'drop in' places available for short stay. Pay with vipps or cash in an envelope in the mailbox. In Euros or Norwegian Kroner (200NOK or 20 euros without electricity or 250NOK/25 euros with electricity).   Now end of August not busy so a nice spot right on the sea! Electricity, water and toilets available, no other facilities.
+  [2024-08] [campercontact] [NL] [4.0/5] A number of 'drop in' places available for short stay. Pay with vipps or cash in an envelope in the mailbox. In Euros or Norwegian Kroner (200NOK or 20 euros without electricity or 250NOK/25 euros with electricity).   Now end of August not busy so a nice spot right on the sea! Electricity, water and toilets available, no other facilities.
+  [2024-08] [campercontact] [NL] [4.0/5] A number of 'drop in' places available for short stay. Pay with vipps or cash in an envelope in the mailbox. In Euros or Norwegian Kroner (200NOK or 20 euros without electricity or 250NOK/25 euros with electricity).   Now end of August not busy so a nice spot right on the sea! Electricity, water and toilets available, no other facilities.
+  [2024-06] [womostell] [de] [4.199999809265137/5] Perfekte Lage, direkt am Wasser, weiter Blick in den Atlantik, keine Dusche, nur Plumpsklos. Chemietoilette kann entleert werden.  Viele Dauercamper.  Preis liegt bei 250 NOK
+  [2024-05] [womostell] [de] [3.799999952316284/5] Im Sommer gibt es eine deutschsprachige Rezeption.
+  [2023-07] [womostell] [de] [2.4000000953674316/5] Recht eng. Nur ein kleiner Teil des Platzes steht zur allgemeinen Verfügung, offenbar vieles fest vergeben an Dauercamper.
+  [2022-07] [promobil] [de] [3.0/5] Nach zwei Jahren wieder hier - wunderschöne Lage direkt m Wasser. Entsorgung und WC immer noch rudimentär, aber auch nicht notwendig, wenn man autark ist. Kostet jetzt 170 NOK und ggf. 30 NOK für Strom. Die Aussicht ist aber einfach unbezahlbar, wenn das Wasser nur wenige Meter vom WoMo entfernt ist.
+  [2022-06] [promobil] [de] [2.0/5] Der Platz hat eine super Lage in einer Bucht. Er wird vorwiegend von Dauercampern  genutzt, aber es finden sich auch Plätze für Kurzcamper. Mit Strom 200 KR. Einziger MakelMakel, es gibt nur 2 Tixi ToilettenToiletten, die allerdings sehr sauber waren.
+  [2018-07] [promobil] [de] [4.0/5] Schöner Platz , wurden auf Deutsch empfangen, unkompliziert und  nette Leute. Können den Platz empfehlen. Uns hat es sehr gefallen.
+  [2018-06] [promobil] [de] [4.0/5] netter Platz an einer schönen Bucht. Sehr zu empfehlen!
+
+
+################################################################################
+# TIPO: camping
+################################################################################
+
+--- spot_id=151044 [at] 'Camping zur Muhle' (25 reviews) gratuito=False agua=True elec=True ---
+  [2026-02] [park4night] [de] [4.0/5] Gute Lage zum Ski fahren
+  [2026-01] [park4night] [de] [5.0/5] Ich war am 28.12. für eine Nacht mit dem Wohnwagen am Campingplatz. Tolle Lage und toller Service. Warme Duschen und Toiletten.
+  [2025-12] [park4night] [en] [1.0/5] On arrival, over 1 hour waiting, all vehicles kept outside; greeted in a loud, tense manner. Very rude owners!  Despite being checked in, we were asked to leave in the evening, without help or alternatives and without a reason for why we should leave. Statement that guests are chosen, giving the impression we are not covering their expectations.  Dark, uncomfortable atmosphere. Not recommended.
+  [2025-12] [park4night] [en] [5.0/5] Very nice and chilled camping, you choose your spot, we were there in a high season and we had no problem finding a place. Paid 58€ for a night, 2 ppl and electrify. Very good WiFi, showers, toilets. It’s not the most modern camping, but it has all you need.
+  [2025-12] [park4night] [de] [1.0/5] Äußerst unfreundlich! Sie hatten Unterkünfte für uns reserviert, und nachdem wir vier E-Mails zur Bestätigung geschrieben hatten, teilten sie uns bei unserer Ankunft mit, dass sie uns nicht unterbringen könnten, weil wir ein Unternehmen seien – obwohl wir dies angegeben hatten. Ich kann dieses Hotel nicht empfehlen. Sehr unfreundlich und verlogen. Machen Sie nicht den Fehler, dort hinzugehen!
+  [2025-12] [womostell] [de] [1.7999999523162842/5] Viel zu teuer für diesen ungepflegten Platz Strompreis ist eine Frechheit wobei das anschließen extra verrechnet wird, der Zähler nicht geeicht ist und für eine Nacht (ohne Kühlschrank, Klimaanlage usw) 11Kw verrechnet wurde! Also 1x und nie wieder
+  [2025-09] [park4night] [nl] [2.0/5] Deze plek bied te weinig voor het geld dat ze vragen. Voor 1 nachtje op doorreis misschien prima maar voor de rest snel iets anders zoeken. Sanitair wel prima en schoon
+  [2025-09] [campercontact] [NL] [2.0/5] This place doesn't offer enough value for the money they're asking. It might be fine for one night while traveling, but otherwise, find something else quickly. The restrooms are fine and clean.
+  [2025-09] [park4night] [es] [2.0/5] Camping muy caro (50 € por noche) para los servicios que ofrece. Las duchas están viejas y mal mantenidas, y la zona de llenado de agua solo permite atender a una furgoneta a la vez, lo que genera esperas innecesarias. Lo único positivo es que está muy cerca de las cataratas Klamm, a las que se puede llegar fácilmente en bici. Una experiencia decepcionante y nada acorde al precio.
+  [2025-08] [park4night] [de] [4.0/5] Einfacher Platz mit vielen großen Bäumen. An der Straße zu Stauseen, Kraftwerk und Bahn zum Kitzsteinhorn. Nur tagsüber vielbefahren, nachts sehr ruhig. Auf der anderen Seite verläuft die Kapruner Ache. Sanitäranlagen in die Jahre gekommen, aber sauber und Duschen kostenlos. Kartenzahlung möglich. Täglich frische Brötchen. BILLA ca. 650 m entfernt.
+  [2025-08] [park4night] [it] [3.0/5] Costa poco rispetto alla media della zona (41,10 € per due persone con tenda e auto) ed è abbastanza pulito. Molto grande, si arriva senza prenotazione e ci si può mettere dove si vuole. Compreso anche l'ingresso alla piscina. Alla mattina è possibile acquistare pane fresco. Personale gentile.
+  [2025-08] [park4night] [es] [3.0/5] Llegados a las 20h, fuera de horario de recepción, nos han dado lugar en una campa enfrente. 42€ autocaravana y 2 personas, sin electricidad. Sí que hay en el lado del camping aguas limpias, grises y negras (chemical WC al fondo del pasillo a los baños).
+
+--- spot_id=808358 [us] 'Black Moshannon State Park Campground' (25 reviews) gratuito=False agua=True elec=None ---
+  [2025-11] [thedyrt] [en] [5.0/5] Ive camped at Black Moshannon State Park many times both in a tent and our camper. The Park has tent only, electric and full hookup sites. It is well cared for and clean. The bathhouses are nice and well maintained.  The Park itself offers a lot to do with fishing. Hiking, the beach, kayak rentals, etc. I've never had a bad time at Black Moshannon and will keep coming back.
+  [2024-09] [thedyrt] [en] [5.0/5] In the middle of the woods vibe. The sites had good privacy and it was just a pretty area. Neighbors were respectful and relatively quiet.. There was zero cell service at this campground. Bathrooms were clean.
+  [2023-09] [thedyrt] [en] [5.0/5] Getting to the park had some sharp turns and windy roads.  Small campground but nicely equipped.  2 bath houses were dated but clean.  Nice playground at the campground and also one at the beach.  Small camp concessions with a few camping items as well as ice cream cones.  Great hiking and a beautiful lake for kayaking.  Site 22 is a full hookup.  Utilities worked nicely.  However, our picnic table had seen better days.  The site sat down off the road but once you were backed in the spot it was pretty level.  This site also had a separate tent pad located down a few stone steps.  Verizon and AT&amp;T cell service were basically non existent.  Every once in a while a text would come in or send but very spotty.  Sorry I failed to get a pic of the site in the daylight.  It was spacious and we had plenty of room for our 30' trailer, truck, and easy up over the table.  6+ chairs around the fire pit, cooking ring could have been better.  Grassy area for cornhole or playing.
+  [2023-03] [thedyrt] [en] [5.0/5] **General:** 73-site campground; most have electric hookups, and some are FHU. Pets are only permitted at selected sites. There are also 20 (13 rustic and 6 modern) cabins. Cell service is extremely limited to non-existent (Verizon).       **Site Quality:** Pads are gravel and most appeared to be level. Site 70 was at the end of the loop which is why we picked it. A picnic table, fire ring, and lantern hook complete each site.       **Bathhouse:** As has been our experience in all PA state parks, the bathhouse was pristine, and the shower (for no additional cost) was clean with plentiful hot water and was very much appreciated.       Activities/Amenities: Coin-operated laundry. A playground is in the campground and there is an additional one at the swimming beach. The swimming beach is open from mid-May to mid-September, from 8 am– sunset. Electric motorboats are permitted on Moshannon Lake. Boat rentals are available in season. Permits are required. 24 miles of hiking trails, including two trails directly from the campground to the lake. In the summer, there is a camper store/concession stand. Hunting is allowed in season. There are 4.3 miles of mountain biking trails.       I used to think Oregon State Parks were the best, but Pennsylvania State Parks have them beat by a mile. We have yet to be disappointed by the amenities(especially the clean bathrooms) offered at the half-dozen state parks we have visited so far.
+  [2022-10] [thedyrt] [en] [5.0/5] This entire park is beautiful! There are plenty of well-maintained, well-marked trails for all experience levels. The lake is lovely with a very nice swimming beach (although I imagine that the water is cold even in the summer). The campground is wonderful! The sites are large and relatively private. The showers in the bath house are clean and nice. There wasn't much in the camp store when we were there, but it was the end of the season. Note: there is NO Internet or cell service there, but the locations where you can get cell service are posted. There is also no firewood available in the camp, but nearby locations where you can buy it are posted.
+  [2022-03] [thedyrt] [en] [5.0/5] I was lucky enough to stay when all the leaves were changing and the views were amazing. Love camping here, nice HOT showers! Also had some critters visit my tent at night.
+  [2021-10] [thedyrt] [en] [3.0/5] Let’s just start this review with our grading of the park it’s self. Five stars! Well maintained facilities, clean bath houses and gorgeous views at both the lake and multiple forest trails.  Free Park map was very helpful in getting to trailheads and park office.    The park loses stars quickly for us, starting with the lack of cell or WiFi service.  Though we did see a couple payphones at both the Ranger office and one of the bath house by the beach.  We know that for many, camping means off the grid, but we like to be in touch with family or our business, at least for a phone call. The camp store and boat rentals were closed for the season and no firewood to be bought anywhere.  Finally, our biggest complaint is the use of a commercial gas powered leaf blower, both hand held and an enormous one on the back of a large tractor, blowing leaves in the campground for the entire day, from early morning until 4pm.  It was loud, constant and took away any chance of enjoying the serene environment of the park.    Had there been no blowers going, I think the beauty and serenity of this park would outweigh the lack of phone or WiFi.  We’ll definitely come back but I think we’ll ask about the blower schedule and where to buy firewood before entering the park.
+  [2021-09] [thedyrt] [en] [5.0/5] So Beautiful, so nice. Bathrooms were great. I’ll be back!
+  [2021-08] [thedyrt] [en] [5.0/5] Have shower, flush toilets, coin laundry and wash area for dishes. Sites are well kept, shaded.
+  [2021-06] [thedyrt] [en] [5.0/5] Nice clean and quiet campground. The address online took us to the ranger station. Turn left BEFORE bridge. Couldn’t see sign from the road. The section we were in was “no pets allowed”.  My kids loved the beach, swimming was not deep. Beach was big with adjacent playground. Lots of pavilions all over.  The area was a little crowded for my liking.
+  [2020-10] [thedyrt] [en] [4.0/5] The volunteers that maintain this loop trail do an excellent job.  Views are gorgeous, you never fear for water and there are plenty of established camp sites with fire rings.  My first "thru hike" and I will definitely go back for seconds.
+  [2020-10] [thedyrt] [en] [5.0/5] Great camping area stop a mountain...nice unique lake that is incredibly dark in color. Lilly pads abound with great flowers
+
+
+################################################################################
+# TIPO: wild
+################################################################################
+
+--- spot_id=795492 [us] 'Peak One Campground' (25 reviews) gratuito=None agua=None elec=False ---
+  [2025-09] [campendium] [en] [4.0/5] We had a heck of a time finding a spot to stay in the area and we decided to stay here. The site was fine but they are all super close together and not much tree coverage, lots of baby trees. Overall would stay here again if I absolutely had to.
+  [2025-08] [campendium] [en] [4.0/5] I booked a week here. During the summer months, weekend reservations fill up pretty quick so keep that in mind for planning. There was a stage 2 fire ban during my stay, so that means only propane fires (ones you can turn off…no wood). However, I saw 2 campfires going on my first night. Please be respectful of the rules…it is for our safety. Don’t be the reason a forest fire starts. Trails are easy to access from the campground. Little pricey for dry camping with no showers or anything, but I suppose the demand is there so prices will continue to rise. Great location, can walk to Frisco or catch a bus to Breck.
+  [2024-09] [campendium] [en] [5.0/5] nice campground with easy access to the lake shoreline, we arrived on a Saturday afternoon and all the campgrounds around the lake were full except for this one spot we found, the camp host had forgotten to place the reserved tag on this space so 45 minutes later a woman showed up that had reserved it, fortunately the host was able to place her into a canceled site, extensive bike trails here and lots of activity
+  [2023-07] [campendium] [en] [5.0/5] We loved this campground. Our site (46) was amazing. We could ride our bikes straight from the site onto the Perimeter Trail which carried us to the Rec Trail. We rode into Frisco to walk around one night. The next day, we rode our bikes to the library to catch the Summit Stage Bus to Breck. We enjoyed exploring the town, riding the free gondola, and eating lunch. We then rode our bikes back from Breck to the campground. Lots of opportunities to hike and bike nearby. This is a great place to camp right off I-70. Plenty of shopping nearby including a Walmart and Whole Foods. I only wish it had a dump station and water refill. We had to go to a nearby sanitation station for dump/water.
+  [2021-11] [campendium] [en] [3.0/5] Great place to get away
+  [2021-10] [campendium] [en] [3.0/5] We would have stayed at this beautiful place but they close for the Winter.  Just leaving this review so people know October 3rd it closes.
+  [2021-09] [campendium] [en] [5.0/5] This was a great site with a view of the mountains and the lake. Only downside would be the site to the right was a little close but had great neighbors that were not out much so it was all good. Wished we would have had our own kayak or paddle board as we could have just walked a short distance and gotten right on the lake. Rented e-bikes in Frisco and road the rec path around the Reservoir for a half day.
+  [2021-07] [campendium] [en] [5.0/5] We stayed before in a site on the lower loop right on the water side (#45? Maybe) and I forgot that the upper loop had a huge hill in between the lake and the campsites, so I was a little disappointed when we arrived to find we were nestled away from the lake with a long hike up and down hill to reach the water.  The reservation webpage said this site could accommodate a 30 ft trailer and two cars. We had our 26 ft trailer all the way backed up against the parking bumper and could barely get our SUV off the road. This made the back stabilizers about three feet off the ground and the outdoor kitchen useless.  A campsite host barked at us for parking the second car half on the driveway or get fined $500. They didn’t have any overflow parking nearby so we ready had to do some maneuvering to get them closer together which meant opening the door into the tree.  There’s no way we could have made that work with a 30ft trailer pulled by a full sized truck.   There is a dump station in town, heading back into Breckinridge.  Gorgeous views and great location close to bike trails made it all worth the effort!
+  [2021-07] [campendium] [en] [5.0/5] Beautiful campground with quick access to Frisco and Breckinridge via the bike path. Disc Golf course is close to the campground along with plenty of water adventures from the Frisco Marina!
+  [2021-06] [campendium] [en] [4.0/5] Stayed here June 2021.  Rate reflects Golden Access Pass discount.  Beautiful NFS campground next to Dillon Reservoir, between Breckenridge and Frisco.  This is a no body contact lake so no swimming, but boating allowed and Frisco has a marina with boat rentals.  Minimal views of lake from campsites, but multiple short trails get you lakeside quickly.  Views of surrounding peaks are what makes this location special.  Interior roads are narrow, but we had no trouble navigating our 42' 5th in and out, and our site, while not level front to back, was plenty long enough for our rig and truck parked diagonally.  Many sites are on the smaller side, so I definitely wouldn't pull in here with a big-rig without a reservation.
+  [2021-06] [campendium] [en] [5.0/5] Great location. Some of the pines are about ten feet tall, most are four to five feet tall so lots of privacy. Beautiful views and great T Mobile service.
+  [2020-09] [campendium] [en] [4.0/5] Nice spot close to lake beach.  Nearby views were excellent.  Spots were close together but everyone was respectful and it wasn’t noisy.  Arrived late on a Sunday night- plenty of spots with a self-help pay station.  I don’t know why they don’t have any, but there were no water or electric hookups. There was no fresh water fill either. For $25, there should be something.
+
+--- spot_id=52292 [se] 'Vittangi,Rastplats Suptallen, E45' (25 reviews) gratuito=True agua=False elec=False ---
+
+
+################################################################################
+# TIPO: naturaleza
+################################################################################
+
+--- spot_id=728508 [ch] 'Hofparadiesli - Wiesenplatz Tanne' (25 reviews) gratuito=False agua=True elec=False ---
+  [2026-04] [nomady] [de] [5.0/5] Alles hat super gepasst. Wir durften zwei Nächte auf dem Hofparadiesli verbringen, alles war wie beschrieben. Der Platz ist etwas abgelegen vom Hof und doch ist man schnell bei der sanitären Anlage, welche alles bietet was man braucht, WC Dusche und Waschbecken. Crista und Jakim sind sehr nett, unkompliziert und zuvorkommend, wir haben sogar eine zusätzliche Decke bekommen, da es doch noch etwas frisch in der Nacht war. Und zu Ostern gab es einen sehr leckeren, selbst gemachten Osterkuchen :-) Die Lage ist super und man kann vom Camp aus einiges unternehmen, zu Fuss, oder mit dem Fahrrad. Wir haben uns sehr wohl und willkommen gefühlt, gerne kommen wir wiedereinmal zu Besuch. Liebe Grüsse Carmen und Patrick
+  [2024-08] [nomady] [de] [5.0/5] Wir wurden sehr herzlich empfangen und es wurde und alles gezeigt. Der Platz ist etwas abseits vom Hof. Ein wunderbar ruhiges Plätzchen in mitten der Natur. Die Emme ist ca. 10 Gehminuten entfernt. Wir genossen ein kühles Bad. Wir kommen sehr gerne wieder. Marcel + Andrea
+  [2024-08] [nomady] [de] [5.0/5] Die Buchungsanfrage wurde sehr schnell bearbeitet und akzeptiert. Die Gastgeberfamilie sehr freundlich und immer Tipps wie Bikeroute oder Ausgang😂auf Lager. Wunderschöner Platz nah an der Emme mit mehreren Bademöglichkeiten. Wir hatten ein sehr schönes Wochenende. Vieöen Dank Christa
+  [2024-08] [nomady] [de] [5.0/5] Wir durften vier tolle Tage bei Christa und ihrer Familie verbringen.  Der Platz liegt etwas ausserhalb des Hofes im Grünen, mit Blick auf die emmentaler Hügel und den Sonnenuntergang.  Die Gastfamilie empfanden wir als sehr zuvorkommend und hilfsbereit, die Gaslieferung kam genau zum richtigen Zeitpunkt ;-). Wir haben uns jederzeit sehr wohl gefühlt.  Danke für die schöne Zeit und den interessanten Austausch. Bis bald! Manuela & Georg
+  [2024-07] [nomady] [de] [5.0/5] Wir wurden herzlich empfangen und alles verlief sehr unkompliziert. Der Platz ist bestens ausgestattet und wir haben unseren Aufenthalt sehr genossen. Wir kommen gerne wieder! Danke für alles! Johanna und Familie
+  [2024-07] [nomady] [en] [4.0/5] Super schöner Ort und sehr gastfreundliche Familie! Ein Stern Abzug wegen den Mücken - es hatte wirklich krass viele..
+  [2024-07] [nomady] [de] [5.0/5] Super sympathische Gastgeberin. Idyllischer Stellplatz au einem authentischen Emmentaler Bauernhof, nur wenige Gehminuten von der wunderschönen Emme entfernt. Wir kommen wieder!
+  [2024-05] [nomady] [de] [4.0/5] Schöner Platz zwischen Kuhweiden und Obstbäumen. Die Gastgeber waren sehr nett und das Badezimmer sehr gemütlich. Die Zufahrt zum Platz war allerdings mit unserem Campingbus ohne 4x4 etwas erschwert, da der Weg ziemlich schmal und holprig war und die Wiese aufgrund des Regens etwas sumpfig.
+  [2024-05] [nomady] [de] [5.0/5] Wir waren zu Fuss und mit dem Zelt unterwegs.  Super freundliche und flexible Gastgeber. Gute Kommunikation. Luxuriöse Dusche. Es waren Gewitter angesagt und wir hätten auf der Heubühne übernachten dürfen, was wir am Schluss aber nicht gebraucht haben. Cool ist das kleine Hüttchen beim Camp, weil man dort auch mal im Regen kurz rein konnte, zum Beispiel zum Kochen. Fließend Quellwasser beim Camp ein grosser Pluspunkt. Tolles Ambiente beim Camp, ruhig, romantisch, in der Natur.  Wir hätten uns gewünscht, dass das Gras gemäht gewesen wäre. Weniger nasse Schuhe, weniger nasses Zelt :-)
+  [2024-05] [nomady] [de] [5.0/5] Christa und Ihre Familie sind ein fantastischer Gastgeber. Es ist ein tolles Camp und die Umgebung ideal für Velotouren. Wir kommen bestimmt wieder.
+  [2024-04] [nomady] [de] [5.0/5] Das Plätzchen bei Christa war wirklich ein Glückstreffer. Ein schöner Stellplatz nahe beim Hof mit Wasser, eine sehr freundliche Gastgeberin und ein sehr gepflegtes Bad mit Dusche. Wir durften ein schöne Wochenende mit unserem Hund verbringen und die direkte Einbettung ins Wanderweg-Netz rund um den Hof geniessen :) Danke!
+  [2023-09] [nomady] [de] [5.0/5] Wunderbar freundliche und hilfsbereite Gastgeber! Der Wiesenplatz ist sehr gemütlich, mit 2 Stühlen, einem kleinen Tisch, Holz und Grill, Dusche und WC sind liebevoll eingerichtet und wir haben uns sehr wohl und willkommen gefühlt. Perfekt mit 2 kleinen Zelten. Am Tag kann man die Hauptstrasse manchmal hören, aber die Vögel und angenehmen Kuhglocken, die süssen Katzen und die frische Luft, machen das locker wieder wett. Herzlichen Dank! :)
+
+--- spot_id=564419 [de] 'Wiese am alten Hirtenteich - our little paradise🤗' (25 reviews) gratuito=False agua=False elec=False ---
+  [2026-05] [vansite] [en] [5.0/5] Toll toll toll...einfach nur toll.  Wir haben uns sehr wohl gefühlt.  Selbst bei unüblichen Problemen wurde uns super geholfen. Wir kommen definitiv wieder.
+  [2026-04] [vansite] [de] [5.0/5] Ein ganz wunderbares Fleckchen Erde, mit super lieben Gastgebern und dem süßesten Kater 🐈🥰 Man hat auf dem Rasen ganz viel Platz und einen tollen Blick in den schönen Garten. Mit dem Rad kann man schnell an die umliegenden Seen fahren oder einfach den sonnigen Tag im Garten verbringen. Ich komme definitiv wieder und kann den Stellplatz sehr empfehlen. Lieben Dank für eure Gastfreundschaft, das Rad und den tollen Austausch ☺️
+  [2026-02] [vansite] [de] [5.0/5] Auf der Durchreise eine Nacht verbracht. Kommunikation top, sehr freundlicher Empfang und da es die letzten Tage geregnet hatte und die Wiese zu feucht war haben die zwei sogar kurzerhand ihren eigenen Camper unterm Carport weggefahren damit ich dort parken konnte. Vielen Dank noch einmal für den Angenehmen Aufenthalt.  Ach und natürlich schön ruhig gelegen sehr gut geschlafen. Immer wieder gerne
+  [2025-09] [vansite] [en] [5.0/5] Super ruhiger toller Schlafplatz von super freundlichen Gastgebern. Wir kommen gerne wieder...
+  [2025-09] [vansite] [en] [5.0/5] Hallo Kathrin, wir waren zwar nicht lange da, aber es war sehr schön bei Dir und Du bist eine sehr nette Gastgeberin. Vielen Dank!
+  [2025-08] [vansite] [de] [5.0/5] Sehr schöner Platz! Und ich wurde ganz toll unsorgt mit Eier und Äpfeln. Das Netz is prima zum Arbeiten.. Vielen Dank an Kathrin für den unkomplizierten und entspannten Aufenthalt!
+  [2025-06] [vansite] [de] [5.0/5] Ich hatte mit meinen drei Hunden zwei ganz gemütliche und ruhige Tage bei Kathrin und konnte gut entspannen. Vor Ort kann man direkt eine kleine Mini Hunderunde laufen oder aber auch eine Riesenrunde über die Felder drehen. Ich komme sehr gerne wieder. Vielen Dank auch nochmal für die „Verköstigung“🤗
+  [2025-06] [vansite] [de] [5.0/5] Super toller, ruhiger und schön gestalteter Platz. Der Spielplatz nebenan war die perfekte Beschäftigung für die Kinder. Einer der besten Plätze, die wir bisher angesteuert haben
+  [2025-05] [vansite] [de] [5.0/5] Eine super unkomplizierte Kommunikation mit Kathrin. Wir haben uns zwar nicht persönlich gesehen, aber es hat alles geklappt und wir hatten eine sehr ruhige Nacht und einen schönen sonnigen Morgen.  Wir waren nur für eine Nacht zur Durchreise dort. Vielen Dank und bis zum nächsten Mal. VG
+  [2025-05] [vansite] [de] [5.0/5] Wir hatten zwei wundervolle Tage bei Kathrin, Jens und Garfield. Obwohl  super kurzfristig gebucht, bekamen wir blitzschnell eine Antwort und wurden sehr herzlich willkommen geheißen. Auch durften wir das tolle Baumhaus benutzen, bekamen Tips und Kartenmaterial und hatten interessante Gespräche. Vielen Dank für das Probieren der Wachtelfeier und Faltfahrräder. Viele Grüße an Garfield. Wir haben uns sehr gut erholt. Wir kommen sicher wieder.
+  [2024-09] [vansite] [de] [5.0/5] Ein sehr schöner Stellplatz, der sich als idealer Ausgangspunkt erwies, die nahegelegenen Tagebauseen mit den Fahrrädern zu erkunden. Kathrin hat uns sehr herzlich willkommen geheißen. Wir kommen gern wieder!
+  [2024-08] [vansite] [de] [5.0/5] Sehr nette Gastgeber Sehr schöner und ruhiger Platz danke für die erholsamen Tage und die netten Gespräche
+
+
+################################################################################
+# TIPO: parking_publico
+################################################################################
+
+--- spot_id=549994 [es] 'Villamesías,Unnamed Road' (25 reviews) gratuito=True agua=None elec=None ---
+
+--- spot_id=859184 [us] 'Mohegan Sun Casino' (25 reviews) gratuito=False agua=None elec=True ---
+
+
+################################################################################
+# TIPO: parking_privado
+################################################################################
+
+--- spot_id=226867 [it] 'Agriturismo Finagliosu di Gavino Ventura' (25 reviews) gratuito=False agua=False elec=False ---
+
+--- spot_id=49818 [es] 'Parking La Bardera' (25 reviews) gratuito=False agua=True elec=None ---
+
+
+################################################################################
+# TIPO: gasolinera
+################################################################################
+
+--- spot_id=225956 [es] 'Dueñas,5D Carretera General' (19 reviews) gratuito=None agua=True elec=True ---
+
+
+=== FRASES MAS COMUNES (top 30 ngrams) ===
+
+Top 40 palabras (excl. stopwords muy obvias):
+   1974 und
+    846 platz
+    762 für
+    756 très
+    746 wir
+    540 super
+    493 camping
+    488 man
+    456 que
+    426 den
+    421 nous
+    414 eine
+    408 sind
+    379 aber
+    365 parking
+    362 place
+    357 calme
+    347 avec
+    342 bien
+    340 auch
+    332 alles
+    324 nuit
+    322 hier
+    320 haben
+    314 schöner
+    307 stellplatz
+    304 war
+    299 nacht
+    296 nice
+    291 mais
+    283 great
+    283 sauber
+    275 night
+    267 nur
+    248 dem
+    245 wieder
+    243 zum
+    240 waren
+    238 water
+    235 park
+    232 camper
+    226 merci
+    226 clean
+    225 aire
+    213 uns
+    211 direkt
+    210 area
+    210 spot
+    210 einen
+    200 hat
+    199 gut
+    197 good
+    194 top
+    193 strom
+    191 ruhig
+    190 car
+    189 site
+    185 endroit
+    185 een
+    183 here
+    178 kommen
+    175 from
+    174 services
+    174 qui
+    172 schön
+    170 stay
+    164 plus
+    163 our
+    163 quiet
+    162 kann
+    162 restaurant
+    161 campingplatz
+    161 noche
+    159 gibt
+    159 avons
+    155 sich
+    154 van
+    154 sanitäranlagen
+    153 all
+    144 etwas
+    143 one
+    143 noch
+    142 par
+    140 tout
+    138 leider
+    138 hay
+    137 beautiful
+    137 bei
+    136 friendly
+    135 ich
+    133 only
+    131 facilities
+    131 propre
+    131 village
+    130 accueil
+    128 service
+    128 campground
+    128 het
+    125 sont
+    125 vue
+    124 can
+    124 toller
+    123 gerne
+    122 free
+    122 euro
+    121 wasser
+
+Top 50 bigramas (potenciales boilerplate):
+    143 'nous avons'
+    137 'eine nacht'
+    125 'für eine'
+    125 'wir haben'
+    103 'schöner platz'
+    101 'très calme'
+     92 'wir waren'
+     91 'gerne wieder'
+     85 'wir kommen'
+     80 'très bien'
+     77 'sauber und'
+     65 'camping car'
+     64 'merci commune'
+     62 'nous sommes'
+     57 'très bon'
+     54 'kommen gerne'
+     51 'kann man'
+     51 'très agréable'
+     51 'haben wir'
+     50 'haben uns'
+     49 'man braucht'
+     49 'für den'
+     49 'one night'
+     46 'wenn man'
+     44 'avons passé'
+     44 'très propre'
+     43 'für einen'
+     43 'ruhig und'
+     43 'vielen dank'
+     41 'merci municipalité'
+     40 'schöner stellplatz'
+     40 'den platz'

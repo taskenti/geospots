@@ -19,6 +19,15 @@ MATERIALIZED_SCORE_COLUMNS = {
     "stealth": "stealth_score",
 }
 
+# Señales numéricas v2 con columna materializada (además de las score_*)
+MATERIALIZED_V2_NUMERIC = {
+    "cell_coverage": "cell_coverage",
+}
+# Señales booleanas v2 con columna materializada
+MATERIALIZED_V2_BOOL = {
+    "wild_camping_legal": "wild_camping_legal",
+}
+
 
 def _json_object(value) -> dict:
     if not value:

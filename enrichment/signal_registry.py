@@ -37,6 +37,18 @@ STATIC_SIGNALS = {
     "crowd_level": SignalType("crowd_level", "numeric", 30, "weighted_mean", 1.0),
     "wind_exposure": SignalType("wind_exposure", "numeric", 730, "weighted_mean", 0.6),
     "stealth": SignalType("stealth", "numeric", 365, "weighted_mean", 0.8),
+    # Phase 3 v2
+    "noise_source": SignalType("noise_source", "text", 180, "recent_wins", 1.2, "noise"),
+    "parking_capacity": SignalType("parking_capacity", "text", 1825, "recent_wins", 0.6),
+    "cell_coverage": SignalType("cell_coverage", "numeric", 365, "weighted_mean", 0.7),
+    "wild_camping_legal": SignalType("wild_camping_legal", "boolean", 730, "consensus_boolean", 2.0),
+    "mosquitoes": SignalType("mosquitoes", "numeric", 180, "weighted_mean", 0.5),
+    "dog_friendly": SignalType("dog_friendly", "boolean", 1825, "consensus_boolean", 0.6),
+    "family_friendly": SignalType("family_friendly", "boolean", 1825, "consensus_boolean", 0.6),
+    "accessible_pmr": SignalType("accessible_pmr", "boolean", 1825, "consensus_boolean", 0.6),
+    "water_working": SignalType("water_working", "boolean", 60, "consensus_boolean", 1.5),
+    "electricity_working": SignalType("electricity_working", "boolean", 60, "consensus_boolean", 1.5),
+    "dump_station_working": SignalType("dump_station_working", "boolean", 60, "consensus_boolean", 1.5),
 }
 
 

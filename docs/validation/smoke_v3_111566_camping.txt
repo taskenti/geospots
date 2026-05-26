@@ -1,0 +1,32 @@
+SPOT 111566: 'Camping La Vall'  [ES]
+reviews total=3 seleccionadas=3
+prompt chars=1471  tokens~367
+
+
+== deepseek/deepseek-v4-flash ==================================================
+latency=6.8s  in=2871  out=605  cost=$0.00057
+
+CLAIMS (7):
+   1. [water_working                 ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Agua potable: Sí'
+   2. [dump_station_working          ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Vaciado grises: Sí, Vaciado negras: Sí'
+   3. [electricity_working           ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Electricidad: Sí'
+   4. [cleanliness                   ]  val=0.9                   conf=0.8  rev_idx=None
+      excerpt: 'super clean sanitary facilities with the most wonderful showers so far!'
+   5. [road_quality                  ]  val=0.3                   conf=0.7  rev_idx=None
+      excerpt: 'followed a narrow dirt road for miles'
+   6. [large_vehicle                 ]  val=0.5                   conf=0.6  rev_idx=None
+      excerpt: 'large site'
+   7. [noise_source                  ]  val=other                 conf=0.5  rev_idx=None
+      excerpt: 'no swimming fun here either'
+
+SUMMARY_ES:
+  Camping La Vall es un camping grande y bien cuidado en el bosque, con instalaciones limpias y duchas excelentes. Sin embargo, el acceso puede ser complicado por caminos de tierra estrechos si sigues el GPS, y es caro (49.50€ para dos personas con electricidad) incluso con servicios cerrados. No recomendado para estancias de paso.
+
+SUMMARY_EN:
+  Camping La Vall is a large, well-maintained campsite in the forest with clean facilities and excellent showers. However, access can be tricky via narrow dirt roads if following GPS, and it is expensive (€49.50 for two people with electricity) even when facilities are closed. Not recommended for short stays.
+
+TAGS:     ['camping', 'bosque', 'instalaciones limpias', 'caro', 'acceso complicado', 'duchas excelentes']
+BEST_FOR: ['familias', 'estancias largas']

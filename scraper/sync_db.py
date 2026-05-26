@@ -28,7 +28,12 @@ async def main():
               ('campingcarinfos', true, 0),
               ('agricamper', true, 0),
               ('campendium', true, 0),
-              ('campingcarpark', true, 0)
+              ('campingcarpark', true, 0),
+              ('campy', true, 0),
+              ('google_maps', true, 0),
+              ('bobilguiden', true, 0),
+              ('amigosac', true, 0),
+              ('freecampsites', true, 0)
             ON CONFLICT (nombre) DO NOTHING;
         """)
         
@@ -40,7 +45,13 @@ async def main():
               ('agricamper', 'Agricamper Italia', 0.80, 0.70, ARRAY['IT']),
               ('campingcarinfos', 'Campingcar-infos', 0.82, 0.70, ARRAY['EU']),
               ('campendium', 'Campendium', 0.85, 0.75, ARRAY['US', 'CA']),
-              ('campingcarpark', 'CampingCar Park', 0.90, 0.85, ARRAY['EU'])
+              ('campingcarpark', 'CampingCar Park', 0.90, 0.85, ARRAY['EU']),
+              ('campspace', 'Campspace', 0.74, 0.76, ARRAY['EU']),
+              ('campy', 'Campy', 0.75, 0.72, ARRAY['DE', 'AT', 'CH']),
+              ('google_maps', 'Google Maps', 0.90, 0.95, ARRAY['GL']),
+              ('bobilguiden', 'Bobilguiden', 0.85, 0.80, ARRAY['NO', 'SE', 'DK']),
+              ('amigosac', 'AmigosAC España/Portugal', 0.85, 0.70, ARRAY['ES', 'PT']),
+              ('freecampsites', 'FreeCampsites.net', 0.78, 0.80, ARRAY['US', 'CA', 'AU'])
             ON CONFLICT (source) DO NOTHING;
         """)
         
@@ -49,7 +60,7 @@ async def main():
         await conn.execute("""
             UPDATE fuentes_config fc
             SET spots_totales = (SELECT COUNT(*) FROM source_records sr WHERE sr.source = fc.nombre)
-            WHERE fc.nombre IN ('ioverlander', 'park4night', 'portugaleasycamp', 'campspace', 'caramaps', 'stayfree', 'promobil', 'alpacacamping', 'womostell', 'thedyrt', 'campingcarinfos', 'agricamper', 'campendium', 'campingcarpark');
+            WHERE fc.nombre IN ('ioverlander', 'park4night', 'portugaleasycamp', 'campspace', 'caramaps', 'stayfree', 'promobil', 'alpacacamping', 'womostell', 'thedyrt', 'campingcarinfos', 'agricamper', 'campendium', 'campingcarpark', 'campy', 'bobilguiden', 'google_maps', 'amigosac', 'freecampsites');
         """)
         
         print("Sincronización completada con éxito!")
