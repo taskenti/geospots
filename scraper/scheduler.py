@@ -117,20 +117,32 @@ async def write_worker_heartbeat():
         """)
 
 
-async def daemon_loop(interval_s: int = 30):
-    """Bucle principal del daemon: heartbeat + procesar cola + dormir.
-
-    Se ejecuta indefinidamente. Para parar, basta con stop/restart del
-    contenedor. Cada iteración:
-      1. Heartbeat (para que el panel sepa que estamos vivos)
-      2. Limpieza de zombies (>12h en running)
-      3. Procesar hasta 5 jobs pendientes de scraper_jobs
-      4. Dormir interval_s segundos
-    """
-    logger.info(f"[daemon] Arrancando worker (intervalo {interval_s}s)")
+async def _heartbeat_task(period_s: int = 20):
+    """Task de fondo: escribe heartbeat cada N segundos, independiente del
+    trabajo. Crítico — antes el heartbeat estaba dentro del bucle principal
+    y se 'congelaba' mientras un scrape largo bloqueaba run_pending_jobs(),
+    haciendo creer al panel que el worker estaba muerto."""
     while True:
         try:
             await write_worker_heartbeat()
+        except Exception as e:
+            logger.error(f"[heartbeat] {e}")
+        await asyncio.sleep(period_s)
+
+
+async def daemon_loop(interval_s: int = 30):
+    """Bucle principal del daemon. Lanza heartbeat en background y procesa
+    la cola en primer plano. El heartbeat sigue beat-eando incluso durante
+    scrapes que tardan horas.
+    """
+    logger.info(f"[daemon] Arrancando worker (poll cada {interval_s}s, heartbeat cada 20s)")
+    # Primer heartbeat inmediato para que el panel lo vea en <1s
+    await write_worker_heartbeat()
+    # Background task — nunca termina (no se await-ea explícitamente)
+    asyncio.create_task(_heartbeat_task(period_s=20))
+
+    while True:
+        try:
             await run_pending_jobs()
         except Exception as e:
             logger.error(f"[daemon] Error en ciclo: {e}")

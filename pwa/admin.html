@@ -308,6 +308,17 @@
     <div class="loading"><span class="spinner"></span> Cargando fuentes…</div>
 </div>
 
+<!-- Actividad reciente: feed cronológico de scraper_log -->
+<div style="margin-top:1.5rem">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.5rem">
+        <h3 style="font-size:0.9rem;font-weight:500;color:#888">Actividad reciente del scraper_log</h3>
+        <span class="dim" style="font-size:0.72rem">Verifica aquí si tu comando CLI registró su row</span>
+    </div>
+    <div class="table-wrap" id="activity-wrap">
+        <div class="loading" style="padding:1rem"><span class="spinner"></span> Cargando…</div>
+    </div>
+</div>
+
 <script>
 const API_KEY = 'clave_secreta_inventada_por_ti_123';
 
@@ -428,7 +439,8 @@ async function loadAll() {
         allData = await H.get('/admin/scrapers');
         renderStats(allData);
         renderTable(allData);
-        refreshWorkerStatus();  // status del daemon en cabecera
+        refreshWorkerStatus();    // status del daemon en cabecera
+        refreshActivityFeed();    // feed cronológico al pie
         document.getElementById('last-refresh').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
         schedulePoll();
     } catch(e) {
@@ -739,6 +751,69 @@ async function queueRun(nombre, jobType, rowIdx) {
         console.error('[admin] queueRun failed:', e);
         toast(`✗ Falló al encolar ${jobType}`, `${nombre}: ${e.message}`, 'err', 9000);
         btns.forEach(b => { b.disabled = false; });
+    }
+}
+
+// ─── feed de actividad ─────────────────────────────────────────────────
+async function refreshActivityFeed() {
+    try {
+        const rows = await H.get('/admin/scraper_log/recent?limit=25');
+        const html = rows.length === 0
+            ? '<div class="loading" style="padding:1rem">Sin actividad reciente</div>'
+            : `<table>
+                <thead><tr>
+                    <th style="width:50px">ID</th>
+                    <th>Fuente</th>
+                    <th>Estado</th>
+                    <th>Inicio</th>
+                    <th>Fin</th>
+                    <th>Elapsed</th>
+                    <th class="mono">N</th>
+                    <th class="mono">U</th>
+                    <th class="mono">R</th>
+                    <th class="mono">Err</th>
+                    <th>Acción</th>
+                </tr></thead>
+                <tbody>${rows.map(r => {
+                    const isRev = r.fuente && r.fuente.endsWith('_reviews');
+                    const baseSrc = isRev ? r.fuente.replace(/_reviews$/, '') : r.fuente;
+                    const isRunning = r.estado === 'running';
+                    const errStyle = (r.errores||0)>0 ? 'color:#f87171' : '';
+                    return `<tr style="cursor:default" onclick="event.stopPropagation()">
+                        <td class="mono dim">${r.id}</td>
+                        <td>
+                            <span style="font-weight:500">${esc(baseSrc)}</span>
+                            ${isRev?' <span class="badge badge-reviews" style="font-size:0.62rem">reviews</span>':''}
+                        </td>
+                        <td>${statusBadge(r.estado)}</td>
+                        <td class="mono" style="font-size:0.74rem">${fmtDate(r.iniciado_en)}</td>
+                        <td class="mono" style="font-size:0.74rem">${r.terminado_en?fmtDate(r.terminado_en):'<span class="dim">—</span>'}</td>
+                        <td class="mono">${fmtDuration(r.elapsed_s)}</td>
+                        <td class="mono">${fmtNum(r.spots_nuevos,'0')}</td>
+                        <td class="mono">${fmtNum(r.spots_actualizados,'0')}</td>
+                        <td class="mono">${fmtNum(r.reviews_nuevas,'0')}</td>
+                        <td class="mono" style="${errStyle}">${fmtNum(r.errores,'0')}</td>
+                        <td>${isRunning
+                            ? `<button class="btn-run" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.3);color:#f87171" onclick="event.stopPropagation();forceZombie('${esc(baseSrc)}')">⊘ Zombie</button>`
+                            : ''}</td>
+                    </tr>`;
+                }).join('')}</tbody>
+            </table>`;
+        document.getElementById('activity-wrap').innerHTML = html;
+    } catch(e) {
+        document.getElementById('activity-wrap').innerHTML =
+            `<div class="error-msg" style="padding:1rem">Error: ${esc(e.message)}</div>`;
+    }
+}
+
+async function forceZombie(nombre) {
+    if (!confirm(`Marcar como zombie cualquier scraper_log 'running' actual de '${nombre}' (y su _reviews)?\n\nÚtil para liberar manualmente un slot colgado.`)) return;
+    try {
+        const r = await H.post(`/admin/scrapers/${encodeURIComponent(nombre)}/force-zombie`);
+        toast('✓ Forzado zombie', `${r.filas_actualizadas} fila(s) actualizadas en scraper_log`, 'ok', 5000);
+        loadAll();
+    } catch(e) {
+        toast('✗ Falló', e.message, 'err', 8000);
     }
 }
 

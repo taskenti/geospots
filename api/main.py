@@ -691,6 +691,38 @@ async def admin_worker_status():
     }
 
 
+@app.get("/admin/scraper_log/recent")
+async def admin_scraper_log_recent(limit: int = Query(25, ge=1, le=200)):
+    """Feed cronológico de las últimas N entradas de scraper_log.
+
+    Útil para verificar que un comando lanzado por CLI realmente está
+    creando rows (si no aparece aquí, el comando falló antes de init).
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, fuente, estado, iniciado_en, terminado_en,
+                   EXTRACT(EPOCH FROM (COALESCE(terminado_en, NOW()) - iniciado_en))::INT AS elapsed_s,
+                   spots_nuevos, spots_actualizados, reviews_nuevas, errores
+            FROM scraper_log
+            ORDER BY iniciado_en DESC
+            LIMIT $1
+        """, limit)
+    return [dict(r) for r in rows]
+
+
+@app.post("/admin/scrapers/{nombre}/force-zombie")
+async def admin_force_zombie(nombre: str):
+    """Marca como zombie el último 'running' de esta fuente (y su variante
+    _reviews) sin esperar el umbral de 12h. Para desatascar manualmente."""
+    async with pool.acquire() as conn:
+        n = await conn.execute(
+            "UPDATE scraper_log SET estado='zombie', terminado_en=NOW() "
+            "WHERE fuente IN ($1, $1 || '_reviews') AND estado='running'",
+            nombre,
+        )
+    return {"fuente": nombre, "filas_actualizadas": int(n.split()[-1]) if n else 0}
+
+
 @app.post("/admin/cleanup/zombies")
 async def admin_cleanup_zombies(max_hours: int = Query(12, ge=1, le=168)):
     """Marca como zombie scraper_log/scraper_jobs colgados > max_hours."""
