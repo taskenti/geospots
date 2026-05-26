@@ -242,6 +242,47 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .error-msg { text-align: center; padding: 2rem; color: #f87171; font-size: 0.88rem; }
+
+        /* ── Toasts ── */
+        #toast-container {
+            position: fixed;
+            top: 1.5rem;
+            right: 1.5rem;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-width: 380px;
+        }
+        .toast {
+            background: #1a1a24;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-left-width: 4px;
+            border-radius: 6px;
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem;
+            color: #e0e0e0;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+            opacity: 1;
+            transition: opacity 0.3s;
+        }
+        .toast.ok    { border-left-color: #22c55e; }
+        .toast.err   { border-left-color: #ef4444; color: #f87171; }
+        .toast.info  { border-left-color: #00d4ff; }
+        .toast.warn  { border-left-color: #f59e0b; }
+        .toast small { display: block; color: #777; font-size: 0.72rem; margin-top: 0.2rem; }
+
+        /* ── Cron help ── */
+        .cron-help {
+            font-size: 0.72rem;
+            color: #666;
+            margin-top: 0.4rem;
+            padding: 0.4rem 0.55rem;
+            background: rgba(0,212,255,0.04);
+            border-radius: 4px;
+            font-family: monospace;
+            border: 1px dashed rgba(0,212,255,0.2);
+        }
     </style>
 </head>
 <body>
@@ -258,6 +299,8 @@
     </div>
 </div>
 
+<div id="toast-container"></div>
+
 <div class="stats-bar" id="stats-bar"></div>
 <div class="table-wrap" id="main-wrap">
     <div class="loading"><span class="spinner"></span> Cargando fuentes…</div>
@@ -267,11 +310,37 @@
 const API_KEY = 'clave_secreta_inventada_por_ti_123';
 
 const H = {
-    get:  (url) => fetch(url, { headers: { 'X-API-Key': API_KEY } })
-                    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
-    post: (url) => fetch(url, { method: 'POST', headers: { 'X-API-Key': API_KEY } })
-                    .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail || `HTTP ${r.status}`); }); return r.json(); }),
+    get: async (url) => {
+        const r = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
+        if (!r.ok) throw new Error(`GET ${url} → HTTP ${r.status}`);
+        return r.json();
+    },
+    post: async (url) => {
+        console.log('[admin] POST', url);
+        const r = await fetch(url, { method: 'POST', headers: { 'X-API-Key': API_KEY } });
+        const body = await r.text();
+        let parsed;
+        try { parsed = JSON.parse(body); } catch { parsed = { _raw: body }; }
+        console.log('[admin] ←', r.status, parsed);
+        if (!r.ok) {
+            const msg = parsed.detail || parsed.error || parsed._raw || `HTTP ${r.status}`;
+            throw new Error(`${r.status} — ${msg}`);
+        }
+        return parsed;
+    },
 };
+
+// ─── toasts ────────────────────────────────────────────────────────────
+function toast(title, detail, type='info', durationMs=5000) {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.innerHTML = `<div>${esc(title)}</div>${detail ? `<small>${esc(detail)}</small>` : ''}`;
+    document.getElementById('toast-container').appendChild(el);
+    setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 300);
+    }, durationMs);
+}
 
 // ─── helpers ───────────────────────────────────────────────────────────
 function fmtDate(iso) {
@@ -375,20 +444,20 @@ function renderTable(data) {
 
         // Botón spots
         const btnSpots = spotsQueued
-            ? `<button class="btn-run queued" disabled onclick="event.stopPropagation()">⏳ Spots</button>`
-            : `<button class="btn-run" onclick="event.stopPropagation();queueRun('${esc(d.nombre)}','spots',${i})">▶ Spots</button>`;
+            ? `<button class="btn-run queued" disabled onclick="event.stopPropagation()">⏳ Spots en cola</button>`
+            : `<button class="btn-run" onclick="clickRun(event,'${esc(d.nombre)}','spots',${i})">▶ Spots</button>`;
 
         // Botón reviews (solo si la fuente los soporta)
         const btnReviews = d.has_reviews_support
             ? reviewsQueued
-                ? `<button class="btn-run reviews queued" disabled onclick="event.stopPropagation()">⏳ Reviews</button>`
-                : `<button class="btn-run reviews" onclick="event.stopPropagation();queueRun('${esc(d.nombre)}','reviews',${i})">▶ Reviews</button>`
+                ? `<button class="btn-run reviews queued" disabled onclick="event.stopPropagation()">⏳ Reviews en cola</button>`
+                : `<button class="btn-run reviews" onclick="clickRun(event,'${esc(d.nombre)}','reviews',${i})">▶ Reviews</button>`
             : '';
 
         // Cron
         const cronTxt = d.cron_schedule
             ? `<span class="muted mono" style="font-size:0.72rem">${esc(d.cron_schedule)}</span>`
-            : '';
+            : `<span class="dim" title="Sin programar — configurar en fuentes_config.cron_schedule">—</span>`;
 
         return `
         <tr onclick="toggleRow('${esc(d.nombre)}')" class="${isExp?'expanded':''}" id="row-${i}">
@@ -508,13 +577,21 @@ function renderDetail(d, history, samples) {
             ${cred.notes?`<div class="kv" style="margin-top:0.4rem"><span class="kv-key" style="font-size:0.72rem;color:#444">${esc(cred.notes)}</span></div>`:''}
         </div>`;
 
+    const cronHelp = fc.cron_schedule
+        ? ''
+        : `<div class="cron-help">
+            psql: UPDATE fuentes_config SET cron_schedule = '0 3 * * *'<br>
+            WHERE nombre = '${esc(d.nombre)}';
+           </div>`;
+
     const configCard = `
         <div class="detail-card">
             <h4>Configuración</h4>
             <div class="kv"><span class="kv-key">Activa</span><span class="kv-val">${fc.activa!=null?(fc.activa?'Sí':'No'):'—'}</span></div>
             <div class="kv"><span class="kv-key">Spots en config</span><span class="kv-val mono">${fmtNum(fc.spots_totales,'0')}</span></div>
-            <div class="kv"><span class="kv-key">Cron schedule</span><span class="kv-val mono">${fc.cron_schedule?esc(fc.cron_schedule):'<span class="dim">sin configurar</span>'}</span></div>
+            <div class="kv"><span class="kv-key">Cron schedule</span><span class="kv-val mono">${fc.cron_schedule?esc(fc.cron_schedule):'<span class="dim">sin programar</span>'}</span></div>
             ${fc.notas?`<div class="kv"><span class="kv-key">Notas</span><span class="kv-val dim" style="font-size:0.73rem">${esc(fc.notas)}</span></div>`:''}
+            ${cronHelp}
         </div>`;
 
     const runCard = (run, title) => {
@@ -593,13 +670,24 @@ function renderDetail(d, history, samples) {
 }
 
 // ─── lanzar job ────────────────────────────────────────────────────────
+function clickRun(ev, nombre, jobType, rowIdx) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    queueRun(nombre, jobType, rowIdx);
+}
+
 async function queueRun(nombre, jobType, rowIdx) {
+    console.log(`[admin] Encolando job: ${nombre} / ${jobType}`);
     const btns = document.querySelectorAll(`#row-${rowIdx} .btn-run`);
     btns.forEach(b => { b.disabled = true; });
+    toast(`Encolando ${jobType}…`, nombre, 'info', 2500);
 
     try {
         const res = await H.post(`/admin/scrapers/${encodeURIComponent(nombre)}/run?job_type=${jobType}`);
-        // Actualiza estado local para reflejar el job encolado
+        toast(
+            `✓ Job #${res.job_id} en cola`,
+            `${nombre} (${jobType}) — ejecuta scheduler.py --run-pending para procesarlo`,
+            'ok', 7000
+        );
         const d = allData.find(x => x.nombre === nombre);
         if (d) {
             d.active_job_types = d.active_job_types || [];
@@ -609,7 +697,8 @@ async function queueRun(nombre, jobType, rowIdx) {
         renderTable(allData);
         schedulePoll();
     } catch(e) {
-        alert(`Error: ${e.message}`);
+        console.error('[admin] queueRun failed:', e);
+        toast(`✗ Falló al encolar ${jobType}`, `${nombre}: ${e.message}`, 'err', 9000);
         btns.forEach(b => { b.disabled = false; });
     }
 }

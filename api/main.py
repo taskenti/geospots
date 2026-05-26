@@ -363,20 +363,57 @@ async def dashboard():
     }
 
 
-def _compute_health(ultimo_fin, ultimo_estado, ultimo_errores, ultimo_nuevos, ultimo_actualizados) -> tuple[str, str]:
-    if ultimo_fin is None:
+def _compute_health(iniciado_en, terminado_en, estado, errores, nuevos, actualizados) -> tuple[str, str]:
+    """Devuelve (color, texto descriptivo) para el semáforo de salud.
+
+    Maneja todos los estados conocidos del scraper_log: ok, ok_con_errores,
+    error, running (incluido running viejo = crash probable), zombie, y la
+    ausencia total de historial.
+    """
+    if iniciado_en is None:
         return "red", "Sin historial"
+
     now = datetime.now(timezone.utc)
-    fin = ultimo_fin if ultimo_fin.tzinfo else ultimo_fin.replace(tzinfo=timezone.utc)
+    inicio = iniciado_en if iniciado_en.tzinfo else iniciado_en.replace(tzinfo=timezone.utc)
+    hours_since_start = (now - inicio).total_seconds() / 3600
+
+    # Job todavía en marcha (o quedó colgado)
+    if estado == "running":
+        if hours_since_start > 6:
+            return "red", f"Crash probable — {int(hours_since_start)}h colgado en 'running'"
+        if hours_since_start >= 1:
+            return "amber", f"Ejecutándose ({int(hours_since_start)}h)"
+        return "amber", f"Ejecutándose ({int(hours_since_start * 60)}min)"
+
+    if estado == "zombie":
+        return "red", "Job zombie — quedó sin terminar correctamente"
+
+    if estado == "error":
+        return "red", "Error en última ejecución"
+
+    # Estados terminales (ok / ok_con_errores) — usa terminado_en o cae a iniciado_en
+    fin = terminado_en if terminado_en else iniciado_en
+    if fin.tzinfo is None:
+        fin = fin.replace(tzinfo=timezone.utc)
     days = (now - fin).days
-    if ultimo_estado == "error":
-        return "red", f"Error en ejecución ({days}d)"
-    total = (ultimo_nuevos or 0) + (ultimo_actualizados or 0)
-    err_pct = (ultimo_errores or 0) / total if total > 0 else 0.0
+
+    total = (nuevos or 0) + (actualizados or 0)
+    err_pct = (errores or 0) / total if total > 0 else 0.0
+    n_errs = errores or 0
+
+    # ok_con_errores: nunca verde, mínimo ámbar
+    if estado == "ok_con_errores":
+        if days > 60:
+            return "red", f"Caducado con errores ({days}d, {n_errs} errs)"
+        if n_errs > 1000 or err_pct > 0.30:
+            return "red", f"Errores altos — {n_errs} errs ({err_pct:.0%})"
+        return "amber", f"Con errores ({n_errs}) hace {days}d"
+
+    # Estado ok normal
     if err_pct > 0.20:
         return "red", f"Errores altos ({err_pct:.0%})"
     if days > 60:
-        return "red", f"Caducado — {days} días sin ejecutar"
+        return "red", f"Caducado — {days} días"
     if err_pct > 0.05 and days > 14:
         return "amber", f"Desfasado ({days}d) con errores ({err_pct:.0%})"
     if err_pct > 0.05:
@@ -391,9 +428,14 @@ async def admin_scrapers_list():
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
             WITH known_sources AS (
-                SELECT source AS nombre FROM source_credibility
-                UNION SELECT DISTINCT source FROM source_records
-                UNION SELECT nombre FROM fuentes_config
+                -- Sólo fuentes con datos reales o config explícita.
+                -- Excluimos fuentes que sólo existen como seed en source_credibility
+                -- (campernight, campininfo, stellplatz, wikidata, eu_opendata, wikicamps...)
+                SELECT nombre FROM fuentes_config
+                UNION
+                SELECT DISTINCT source FROM source_records
+                UNION
+                SELECT DISTINCT regexp_replace(fuente, '_reviews$', '') FROM scraper_log
             ),
             src_counts AS (
                 SELECT source, COUNT(*) AS total_records
@@ -462,7 +504,7 @@ async def admin_scrapers_list():
     for row in rows:
         d = dict(row)
         color, texto = _compute_health(
-            d.get("ultimo_fin"), d.get("ultimo_estado"),
+            d.get("ultimo_inicio"), d.get("ultimo_fin"), d.get("ultimo_estado"),
             d.get("ultimo_errores"), d.get("ultimo_nuevos"),
             d.get("ultimo_actualizados"),
         )
@@ -523,6 +565,7 @@ async def admin_scraper_detail(nombre: str):
 
     last_run_d = dict(last_run) if last_run else None
     salud_color, salud_texto = _compute_health(
+        last_run_d.get("iniciado_en") if last_run_d else None,
         last_run_d.get("terminado_en") if last_run_d else None,
         last_run_d.get("estado") if last_run_d else None,
         last_run_d.get("errores") if last_run_d else None,
