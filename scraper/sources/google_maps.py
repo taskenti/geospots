@@ -56,6 +56,29 @@ def name_similarity(name1: str, name2: str) -> float:
         return 0.0
     return SequenceMatcher(None, name1.lower().strip(), name2.lower().strip()).ratio()
 
+
+# Patrones de nombres "fuente_in_X" que GeoSpots hereda de los agregadores
+# (Campspace, WTMG, etc.) pero que NO son el nombre real del POI. Para la búsqueda
+# en Google Maps los limpiamos para mejorar el matching.
+_NAME_CLEANUP_PATTERNS = [
+    re.compile(r"^Campspace\s+in\s+", re.IGNORECASE),
+    re.compile(r"^WTMG\s+in\s+", re.IGNORECASE),
+    re.compile(r"^Nomady\s+", re.IGNORECASE),
+    re.compile(r"^Park4Night\s+", re.IGNORECASE),
+    # Limpia sufijos administrativos largos: ", Rhineland-Palatinate", ", Moravskoslezský kraj"
+    re.compile(r",\s+[A-Za-zÀ-ž\-\s]{6,}$"),
+]
+
+
+def _clean_search_name(name: str) -> str:
+    """Quita prefijos/sufijos de agregadores para mejorar la búsqueda en Google."""
+    if not name:
+        return ""
+    cleaned = name
+    for pat in _NAME_CLEANUP_PATTERNS:
+        cleaned = pat.sub("", cleaned).strip()
+    return cleaned or name  # nunca devolver vacío
+
 class GoogleMapsSource(AbstractSource):
     """Google Maps Source — Diseñado exclusivamente para enriquecer spots existentes."""
 
@@ -116,16 +139,59 @@ class GoogleMapsSource(AbstractSource):
                 await finish_scraper_log(conn, log_id, stats)
             return stats
 
-        # 1. Obtener spots candidatos de la base de datos (con coordenadas válidas y sin google_maps registrado)
+        # 1. Obtener spots candidatos PRIORIZADOS:
+        #    - Solo tipos camping y area_ac (los más importantes en GeoSpots)
+        #    - País: ES > PT > FR > IT > DE > AT > CH > BE > NL > resto EU > resto mundo
+        #    - Dentro de cada bucket: spots más populares primero (más reviews acumuladas)
+        #
+        # 1M de candidatos potenciales — vamos por capas. Cuando ES+PT+FR estén cubiertos
+        # de camping+area_ac, los siguientes runs irán naturalmente al resto EU.
         async with pool.acquire() as conn:
             candidatos = await conn.fetch("""
-                SELECT id, canonical_name, lat, lon, tipo
+                SELECT id, canonical_name, lat, lon, tipo, country_iso
                 FROM spots
-                WHERE activo = TRUE 
-                  AND lat IS NOT NULL 
+                WHERE activo = TRUE
+                  AND lat IS NOT NULL
                   AND lon IS NOT NULL
+                  AND tipo IN ('camping', 'area_ac')
                   AND NOT 'google_maps' = ANY(fuentes)
-                ORDER BY total_reviews DESC, id
+                ORDER BY
+                  CASE country_iso
+                    WHEN 'es' THEN 1
+                    WHEN 'pt' THEN 2
+                    WHEN 'fr' THEN 3
+                    WHEN 'it' THEN 4
+                    WHEN 'de' THEN 5
+                    WHEN 'at' THEN 6
+                    WHEN 'ch' THEN 7
+                    WHEN 'be' THEN 8
+                    WHEN 'nl' THEN 9
+                    WHEN 'lu' THEN 10
+                    WHEN 'gb' THEN 11
+                    WHEN 'ie' THEN 12
+                    WHEN 'dk' THEN 13
+                    WHEN 'no' THEN 14
+                    WHEN 'se' THEN 15
+                    WHEN 'fi' THEN 16
+                    WHEN 'is' THEN 17
+                    WHEN 'pl' THEN 18
+                    WHEN 'cz' THEN 19
+                    WHEN 'sk' THEN 20
+                    WHEN 'hu' THEN 21
+                    WHEN 'si' THEN 22
+                    WHEN 'hr' THEN 23
+                    WHEN 'gr' THEN 24
+                    WHEN 'ro' THEN 25
+                    WHEN 'bg' THEN 26
+                    ELSE 99
+                  END,
+                  CASE tipo
+                    WHEN 'camping' THEN 1
+                    WHEN 'area_ac' THEN 2
+                    ELSE 99
+                  END,
+                  COALESCE(total_reviews, 0) DESC,
+                  id
                 LIMIT 50;
             """)
 
@@ -192,9 +258,10 @@ class GoogleMapsSource(AbstractSource):
                     # Espera prudente entre búsquedas
                     await asyncio.sleep(self.rate_limit)
 
-                    # Búsqueda específica en Google Maps
-                    query = f"{orig_name}"
-                    search_url = f"https://www.google.com/maps/search/{query}/@{orig_lat},{orig_lon},15z?hl=es"
+                    # Limpiar prefijos de agregador para no buscar "Campspace in Lauperath"
+                    # (Google no conoce ese nombre — solo el nombre real del POI).
+                    search_query = _clean_search_name(orig_name)
+                    search_url = f"https://www.google.com/maps/search/{search_query}/@{orig_lat},{orig_lon},15z?hl=es"
                     
                     try:
                         await page.goto(search_url, timeout=20000, wait_until="domcontentloaded")
@@ -232,9 +299,20 @@ class GoogleMapsSource(AbstractSource):
                                 m_lon = float(coord_match.group(2))
                                 
                                 dist = haversine_distance(orig_lat, orig_lon, m_lat, m_lon)
-                                sim = name_similarity(orig_name, name_text)
-                                
-                                if dist <= self.dedup_radius_m and sim >= 0.75:
+                                # Comparar contra nombre original Y nombre limpio (sin prefijo agregador)
+                                sim_orig = name_similarity(orig_name, name_text)
+                                sim_clean = name_similarity(_clean_search_name(orig_name), name_text)
+                                sim = max(sim_orig, sim_clean)
+
+                                # Matching adaptativo: si está MUY cerca (<= 30m), casi seguro
+                                # es el mismo POI físico aunque el nombre difiera mucho. Esto
+                                # cubre el caso "Campspace in X" vs "Bauernhof Müller".
+                                accepted = (
+                                    (dist <= 30 and sim >= 0.30) or
+                                    (dist <= 100 and sim >= 0.50) or
+                                    (dist <= self.dedup_radius_m and sim >= 0.75)
+                                )
+                                if accepted:
                                     if sim > best_sim or (sim == best_sim and dist < best_dist):
                                         best_sim = sim
                                         best_dist = dist
@@ -264,13 +342,22 @@ class GoogleMapsSource(AbstractSource):
                             # Extraer nombre del h1
                             h1_el = await page.query_selector("h1")
                             h1_text = await h1_el.text_content() if h1_el else ""
-                            sim = name_similarity(orig_name, h1_text)
+                            # Comparar contra nombre original Y nombre limpio
+                            sim_orig = name_similarity(orig_name, h1_text)
+                            sim_clean = name_similarity(_clean_search_name(orig_name), h1_text)
+                            sim = max(sim_orig, sim_clean)
 
-                            if dist <= self.dedup_radius_m and sim >= 0.75:
+                            # Matching adaptativo (mismo criterio que en la rama de lista)
+                            accepted = (
+                                (dist <= 30 and sim >= 0.30) or
+                                (dist <= 100 and sim >= 0.50) or
+                                (dist <= self.dedup_radius_m and sim >= 0.75)
+                            )
+                            if accepted:
                                 target_matched = True
                                 logger.info(f"[google_maps] Coincidencia directa exitosa (dist: {dist:.1f}m, sim: {sim:.2f}).")
                             else:
-                                logger.warning(f"[google_maps] Descartado: Fuera de rango de reconciliación (dist: {dist:.1f}m, sim: {sim:.2f}).")
+                                logger.warning(f"[google_maps] Descartado: Fuera de rango (dist: {dist:.1f}m, sim: {sim:.2f}, h1='{h1_text[:60]}').")
 
                     if not target_matched:
                         stats["errores"] += 1

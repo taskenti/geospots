@@ -34,12 +34,27 @@ docker-compose --profile gmaps run --rm gmaps python scheduler.py --google_maps
 ```
 
 ### Pipeline
-1. **Selección de candidatos**: query SQL toma los 50 spots con más `total_reviews` que NO tienen `google_maps` en `fuentes[]`. Prioriza spots populares (más probable que existan en Google).
+1. **Selección priorizada de candidatos** (LIMIT 50/run):
+   - **Tipos**: solo `camping` y `area_ac` (los importantes en GeoSpots; resto pendiente)
+   - **País**: ES → PT → FR → IT → DE → AT → CH → BE → NL → LU → GB → IE → DK → NO → SE → FI → IS → PL → CZ → SK → HU → SI → HR → GR → RO → BG → resto
+   - **Popularidad**: dentro de cada bucket, primero los spots con más `total_reviews`
+   - **Excluye**: los que ya tienen `google_maps` en `fuentes[]` (no re-procesar)
+
+   Volumen de cola (mayo 2026): España 8.890 spots prioritarios (2.592 camping + 6.298 area_ac), Portugal 2.478, Francia 1.104, Italia 13.911, Alemania 27.359. Con LIMIT 50/run son ~178 runs solo para España.
 2. **Para cada spot**:
-   - Construye URL `https://www.google.com/maps/search/{nombre}/@{lat},{lon},15z?hl=es`
+   - **Limpieza de nombre**: quita prefijos heredados de agregadores ("Campspace in X", "WTMG in Y") y sufijos administrativos largos. Google no conoce esos nombres ficticios; sí conoce el nombre real del POI.
+   - Construye URL `https://www.google.com/maps/search/{nombre_limpio}/@{lat},{lon},15z?hl=es`
    - Inyecta cookie `SOCS` para evitar el banner de consentimiento de cookies
    - Espera al DOM y comprueba si hay lista de resultados múltiples o ficha directa
-   - **Reconciliación**: si hay múltiples resultados, encuentra el más cercano (`haversine_distance <= 150m`) con nombre similar (`SequenceMatcher >= 0.75`)
+   - **Reconciliación adaptativa**: comparar tanto el nombre original como el nombre limpio contra el resultado, y aceptar el match con esta tabla:
+
+     | Distancia | Threshold similarity |
+     |---|---|
+     | ≤ 30m | 0.30 |
+     | ≤ 100m | 0.50 |
+     | ≤ 150m | 0.75 |
+
+     Esto resuelve el caso típico: el spot está en el MISMO punto físico (dist=0m) pero Google muestra el nombre real ("Bauernhof Müller") en lugar del nombre del agregador ("Campspace in Lauperath"). Antes con threshold único 0.75 se descartaban estos matches válidos.
    - Click en el resultado correcto
    - Extrae: nombre, rating, num_reviews, web, teléfono
    - Click en pestaña "Opiniones" / "Reviews" / "Reseñas" (intenta los 3 idiomas)
