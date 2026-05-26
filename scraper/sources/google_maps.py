@@ -419,127 +419,180 @@ class GoogleMapsSource(AbstractSource):
                             phone_val = aria_label.replace("Teléfono:", "").strip()
 
                     # 4. Extraer opiniones (Reviews)
-                    # Google Maps no siempre tiene pestaña 'Opiniones'. Intentar hacer click en ella,
-                    # si no existe, intentar scroll del panel principal para cargar las reviews inline.
-                    reviews_tab = await page.query_selector('button[role="tab"]:has-text("Opiniones")')
-                    if not reviews_tab:
-                        reviews_tab = await page.query_selector('button[role="tab"]:has-text("Reviews")')
-                    if not reviews_tab:
-                        reviews_tab = await page.query_selector('button[role="tab"]:has-text("Reseñas")')
-
+                    # Strategy: 5 niveles de fallback para llegar al feed de reviews.
+                    # Loggeamos cada paso explícitamente para diagnosticar si rompe.
                     reviews_list = []
-                    if reviews_tab:
-                        await reviews_tab.click()
-                        await page.wait_for_timeout(2000)
+
+                    async def _open_reviews_tab():
+                        """Intenta abrir la pestaña/sección de reviews con múltiples estrategias."""
+                        # Estrategia 1: button[role=tab] con texto en 3 idiomas
+                        for txt in ("Opiniones", "Reseñas", "Reviews", "Avis", "Recensioni", "Bewertungen"):
+                            el = await page.query_selector(f'button[role="tab"]:has-text("{txt}")')
+                            if el:
+                                await el.click()
+                                logger.debug(f"[google_maps] tab opened via button[role=tab]:'{txt}'")
+                                return True
+                        # Estrategia 2: button con aria-label que contenga "review/opinion"
+                        for needle in ("opiniones", "opinión", "reseñas", "reseña", "reviews", "review", "avis"):
+                            el = await page.query_selector(f'button[aria-label*="{needle}" i]')
+                            if el:
+                                await el.click()
+                                logger.debug(f"[google_maps] tab opened via aria-label*='{needle}'")
+                                return True
+                        # Estrategia 3: link al conteo de reseñas (panel rating)
+                        for sel in (
+                            'span[aria-label*="reseña" i]',
+                            'span[aria-label*="opinión" i]',
+                            'span[aria-label*="review" i]',
+                            'button[jsaction*="reviewChart"]',
+                            'button[jsaction*="reviews"]',
+                        ):
+                            el = await page.query_selector(sel)
+                            if el:
+                                try:
+                                    await el.click()
+                                    logger.debug(f"[google_maps] tab opened via {sel}")
+                                    return True
+                                except Exception:
+                                    continue
+                        return False
+
+                    tab_opened = await _open_reviews_tab()
+                    if tab_opened:
+                        await page.wait_for_timeout(2500)
                     else:
-                        # Sin pestaña dedicada: intentar click en el enlace de conteo de reseñas
-                        # (div.fontBodyMedium que contiene el rating y enlace de reseñas)
-                        try:
-                            rating_link = await page.query_selector('.fontBodyMedium span[aria-label*="reseñas"], .fontBodyMedium a[aria-label*="reseñas"]')
-                            if rating_link:
-                                await rating_link.click()
-                                await page.wait_for_timeout(2000)
-                        except Exception:
-                            pass
+                        logger.warning(f"[google_maps] No se pudo abrir la pestaña de reviews para '{canonical_name}'")
 
-                    # Selector contenedor de reviews (feed o panel principal scrollable)
-                    feed_selector = 'div[role="feed"]'
-                    feed_el = await page.query_selector(feed_selector)
-
-                    if not feed_el:
-                        # Google Maps lodging layout: reviews están en el panel lateral scrollable
-                        # Intentar scroll del panel .m6QErb para forzar carga de reviews
-                        try:
-                            panel = await page.query_selector('div.m6QErb[tabindex="-1"]')
-                            if not panel:
-                                panel = await page.query_selector('div.m6QErb')
-                            if panel:
-                                for _ in range(5):
-                                    await page.evaluate("el => el.scrollBy(0, 800)", panel)
-                                    await page.wait_for_timeout(800)
-                                feed_el = await page.query_selector(feed_selector)
-                        except Exception:
-                            pass
+                    # Forzar scroll para cargar más reviews. Probar varios contenedores
+                    # scrollables (Google cambia entre layouts según el tipo de POI):
+                    feed_el = None
+                    for feed_sel in (
+                        'div[role="feed"]',
+                        'div[role="main"] div[tabindex="-1"]',
+                        'div.m6QErb[tabindex="-1"]',
+                        'div.m6QErb',
+                    ):
+                        feed_el = await page.query_selector(feed_sel)
+                        if feed_el:
+                            logger.debug(f"[google_maps] scroll container found: {feed_sel}")
+                            break
 
                     if feed_el:
-                        # Scroll progresivo para cargar más opiniones
                         logger.info(f"[google_maps] Cargando opiniones de '{canonical_name}'...")
                         try:
-                            for scroll_idx in range(4):
-                                await page.evaluate("el => el.scrollBy(0, 800)", feed_el)
-                                await page.wait_for_timeout(1200)
+                            for _ in range(6):
+                                await page.evaluate("el => el.scrollBy(0, 1200)", feed_el)
+                                await page.wait_for_timeout(900)
+                        except Exception as scroll_err:
+                            logger.debug(f"[google_maps] scroll err: {scroll_err}")
+
+                    # Parsear cards de review. data-review-id es atributo data-* estable.
+                    # Probar también jsaction*=review por si Google retira data-review-id.
+                    review_cards = await page.query_selector_all('div[data-review-id]')
+                    if not review_cards:
+                        review_cards = await page.query_selector_all('div[jsaction*="review"]')
+
+                    logger.info(f"[google_maps] {len(review_cards)} review cards encontradas en DOM (expected ~{reviews_count})")
+
+                    # Si esperábamos reviews pero 0 cards → guardar screenshot para diagnóstico
+                    if reviews_count > 0 and len(review_cards) == 0:
+                        try:
+                            import os as _os
+                            _os.makedirs("/app/logs/gmaps_debug", exist_ok=True)
+                            shot_path = f"/app/logs/gmaps_debug/no_reviews_{spot_id}.png"
+                            await page.screenshot(path=shot_path, full_page=True)
+                            logger.warning(f"[google_maps] DEBUG screenshot saved: {shot_path}")
                         except Exception:
                             pass
 
-                        # Parsear elementos de reviews en el DOM
-                        review_cards = await page.query_selector_all('div[data-review-id]')
-                        logger.info(f"[google_maps] Encontradas {len(review_cards)} opiniones visibles en el DOM.")
+                    for card in review_cards:
+                        try:
+                            # AUTOR: múltiples selectores fallback (los obfuscated cambian)
+                            author = "Usuario Google"
+                            for sel in ("div.d4r55", "button[jsaction*='reviewerLink'] div", "div[jsaction*='reviewerLink']"):
+                                ael = await card.query_selector(sel)
+                                if ael:
+                                    txt = (await ael.text_content() or "").strip()
+                                    if txt:
+                                        author = txt
+                                        break
 
-                        for card in review_cards:
-                            try:
-                                author_el = await card.query_selector("div.d4r55")
-                                author = await author_el.text_content() if author_el else "Usuario Google"
-
-                                # Obtener puntuación de estrellas
-                                stars_el = await card.query_selector("span.kvwXae")
-                                rating_stars = None
+                            # ESTRELLAS: aria-label tipo "5 estrellas" / "5 stars"
+                            rating_stars = None
+                            for sel in ("span.kvwXae", "span[role='img'][aria-label*='star']", "span[role='img'][aria-label*='estrell']", "span[role='img'][aria-label*='étoile']"):
+                                stars_el = await card.query_selector(sel)
                                 if stars_el:
-                                    stars_label = await stars_el.get_attribute("aria-label")
-                                    if stars_label:
-                                        # Extrae el dígito ej: "5 estrellas" -> 5
-                                        stars_match = re.search(r"\d", stars_label)
-                                        if stars_match:
-                                            rating_stars = float(stars_match.group(0))
+                                    stars_label = await stars_el.get_attribute("aria-label") or ""
+                                    stars_match = re.search(r"\d(?:[.,]\d)?", stars_label)
+                                    if stars_match:
+                                        try:
+                                            rating_stars = float(stars_match.group(0).replace(",", "."))
+                                            break
+                                        except ValueError:
+                                            continue
 
-                                # Obtener texto
-                                text_el = await card.query_selector("span.wiu59c")
-                                text_val = await text_el.text_content() if text_el else None
+                            # TEXTO: el contenido completo del review (puede tener "Más" / "More" botón)
+                            text_val = None
+                            for sel in ("span.wiu59c", "div.MyEned span", "span[jsaction*='reviewText']", "div[jsname]"):
+                                tel = await card.query_selector(sel)
+                                if tel:
+                                    txt = (await tel.text_content() or "").strip()
+                                    if txt and len(txt) > 5:
+                                        text_val = txt
+                                        break
 
-                                # ID opinión
-                                rev_id = await card.get_attribute("data-review-id")
-                                if not rev_id:
-                                    continue
+                            # ID opinión (estable, data-attr)
+                            rev_id = await card.get_attribute("data-review-id")
+                            if not rev_id:
+                                # Fallback: hash del autor+texto (poco fiable pero evita perderla)
+                                import hashlib as _hl
+                                rev_id = _hl.sha1(f"{author}|{(text_val or '')[:100]}".encode()).hexdigest()[:16]
 
-                                # Fecha aproximada a día de hoy
-                                date_el = await card.query_selector("span.rsqawe")
-                                date_str = await date_el.text_content() if date_el else ""
-                                
-                                # Mapear fecha relativa a DATE de manera defensiva.
-                                # Si el regex no encuentra cantidad, dejar fecha=None
-                                # en lugar de date.today() (que daría falsos "recientes").
-                                fecha_db = None
-                                date_str_low = date_str.lower()
-                                num_match = re.search(r"\d+", date_str_low)
-                                if num_match:
-                                    n = int(num_match.group(0))
-                                    if "día" in date_str_low or "dia" in date_str_low or "day" in date_str_low:
-                                        fecha_db = date.today() - timedelta(days=n)
-                                    elif "semana" in date_str_low or "week" in date_str_low:
-                                        fecha_db = date.today() - timedelta(days=n * 7)
-                                    elif "mes" in date_str_low or "month" in date_str_low:
-                                        fecha_db = date.today() - timedelta(days=n * 30)
-                                    elif "año" in date_str_low or "ano" in date_str_low or "year" in date_str_low:
-                                        fecha_db = date.today() - timedelta(days=n * 365)
+                            # FECHA relativa (texto tipo "hace 2 meses" / "2 months ago")
+                            date_str = ""
+                            for sel in ("span.rsqawe", "span.xRkPPb", "span[jsaction*='dateTooltip']"):
+                                date_el = await card.query_selector(sel)
+                                if date_el:
+                                    date_str = (await date_el.text_content() or "").strip()
+                                    if date_str:
+                                        break
 
-                                if text_val:
-                                    from enrichment.review_cleaner import detect_language
-                                    lang = detect_language(text_val)
-                                else:
-                                    lang = "en"
+                            # Mapear fecha relativa a DATE de manera defensiva.
+                            # Si el regex no encuentra cantidad, dejar fecha=None
+                            # en lugar de date.today() (que daría falsos "recientes").
+                            fecha_db = None
+                            date_str_low = date_str.lower()
+                            num_match = re.search(r"\d+", date_str_low)
+                            if num_match:
+                                n = int(num_match.group(0))
+                                if "día" in date_str_low or "dia" in date_str_low or "day" in date_str_low:
+                                    fecha_db = date.today() - timedelta(days=n)
+                                elif "semana" in date_str_low or "week" in date_str_low:
+                                    fecha_db = date.today() - timedelta(days=n * 7)
+                                elif "mes" in date_str_low or "month" in date_str_low:
+                                    fecha_db = date.today() - timedelta(days=n * 30)
+                                elif "año" in date_str_low or "ano" in date_str_low or "year" in date_str_low:
+                                    fecha_db = date.today() - timedelta(days=n * 365)
 
-                                reviews_list.append({
-                                    "spot_id": spot_id,
-                                    "source": "google_maps",
-                                    "source_review_id": f"gmaps_{rev_id}",
-                                    "texto": text_val,
-                                    "rating": rating_stars,
-                                    "autor": author.strip(),
-                                    "fecha": fecha_db,
-                                    "idioma": lang
-                                })
-                            except Exception as card_err:
-                                logger.debug(f"[google_maps] Error procesando tarjeta de opinión: {card_err}")
-                                continue
+                            if text_val:
+                                from enrichment.review_cleaner import detect_language
+                                lang = detect_language(text_val)
+                            else:
+                                lang = "en"
+
+                            reviews_list.append({
+                                "spot_id": spot_id,
+                                "source": "google_maps",
+                                "source_review_id": f"gmaps_{rev_id}",
+                                "texto": text_val,
+                                "rating": rating_stars,
+                                "autor": author.strip(),
+                                "fecha": fecha_db,
+                                "idioma": lang
+                            })
+                        except Exception as card_err:
+                            logger.debug(f"[google_maps] Error procesando tarjeta de opinión: {card_err}")
+                            continue
 
 
                     # 5. Persistir datos normalizados
