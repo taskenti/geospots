@@ -27,11 +27,65 @@ out center body qt;
 
 OSM_TIPO_MAP = {
     ("tourism", "caravan_site"): "area_ac",
-    ("amenity", "sanitary_dump_station"): "vaciado",
-    ("amenity", "water_point"): "otro",
+    # sanitary_dump_station y water_point son SERVICIOS, no spots de pernocta.
+    # Los clasificamos como area_ac (área de servicios) y además marcamos el flag
+    # de servicio correspondiente (vaciado_negras / agua_potable) en normalize().
+    # Antes caían como "otro" sin flag → vacíos de información útil.
+    ("amenity", "sanitary_dump_station"): "area_ac",
+    ("amenity", "water_point"): "area_ac",
     ("amenity", "parking"): "parking",
     ("leisure", "camping_site"): "camping",
 }
+
+# Mapeo de nombres comunes de país (lo que escriben los editores OSM en addr:country)
+# a ISO2 lowercase. addr:country es texto libre — puede venir como "France",
+# "FR", "FRA", "francia", etc. Si no mapea, dejar None y que PostGIS clasifique.
+OSM_COUNTRY_TO_ISO = {
+    "fr": "fr", "fra": "fr", "france": "fr",
+    "es": "es", "esp": "es", "spain": "es", "españa": "es", "espana": "es",
+    "de": "de", "deu": "de", "germany": "de", "deutschland": "de", "alemania": "de",
+    "it": "it", "ita": "it", "italy": "it", "italia": "it",
+    "pt": "pt", "prt": "pt", "portugal": "pt",
+    "nl": "nl", "nld": "nl", "netherlands": "nl", "holanda": "nl",
+    "be": "be", "bel": "be", "belgium": "be", "belgique": "be",
+    "ch": "ch", "che": "ch", "switzerland": "ch", "suisse": "ch", "schweiz": "ch",
+    "at": "at", "aut": "at", "austria": "at", "österreich": "at", "osterreich": "at",
+    "gb": "gb", "uk": "gb", "gbr": "gb", "united kingdom": "gb",
+    "ie": "ie", "irl": "ie", "ireland": "ie",
+    "dk": "dk", "dnk": "dk", "denmark": "dk", "danmark": "dk",
+    "no": "no", "nor": "no", "norway": "no", "norge": "no",
+    "se": "se", "swe": "se", "sweden": "se", "sverige": "se",
+    "fi": "fi", "fin": "fi", "finland": "fi", "suomi": "fi",
+    "pl": "pl", "pol": "pl", "poland": "pl", "polska": "pl",
+    "cz": "cz", "cze": "cz", "czechia": "cz",
+    "sk": "sk", "svk": "sk", "slovakia": "sk", "slovensko": "sk",
+    "hu": "hu", "hun": "hu", "hungary": "hu",
+    "si": "si", "svn": "si", "slovenia": "si", "slovenija": "si",
+    "hr": "hr", "hrv": "hr", "croatia": "hr", "hrvatska": "hr",
+    "gr": "gr", "grc": "gr", "greece": "gr",
+    "ro": "ro", "rou": "ro", "romania": "ro",
+    "bg": "bg", "bgr": "bg", "bulgaria": "bg",
+}
+
+
+def _parse_int_safe(v):
+    """OSM tags vienen como string. capacity='12 spaces' o '12+' deben dar 12."""
+    if v is None:
+        return None
+    import re
+    m = re.search(r"\d+", str(v))
+    return int(m.group()) if m else None
+
+
+def _parse_float_safe(v):
+    if v is None:
+        return None
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        import re
+        m = re.search(r"\d+(?:\.\d+)?", str(v).replace(",", "."))
+        return float(m.group()) if m else None
 
 
 @retry(
@@ -71,68 +125,155 @@ class OSMSource(AbstractSource):
             if "tags" not in raw:
                 return None
             tags = raw["tags"]
-            osm_id = int(raw["id"])
+            try:
+                osm_id = int(raw["id"])
+            except (TypeError, ValueError, KeyError):
+                return None
 
+            # Identifica qué clave principal aplicó (amenity/tourism/leisure) para
+            # poder marcar servicios cuando el spot ES el servicio en sí
             tipo = None
+            kind = None
             for (k, v), mapeo in OSM_TIPO_MAP.items():
                 if tags.get(k) == v:
                     tipo = mapeo
+                    kind = (k, v)
                     break
             if not tipo:
                 return None
 
-            nombre = tags.get("name:es") or tags.get("name") or f"OSM {tipo} {osm_id}"
-
+            # Coordenadas
             lat, lon = None, None
-            if raw["type"] == "node":
-                lat, lon = float(raw["lat"]), float(raw["lon"])
-            elif raw["type"] in ("way", "relation") and "center" in raw:
-                lat = float(raw["center"]["lat"])
-                lon = float(raw["center"]["lon"])
+            if raw.get("type") == "node":
+                lat, lon = _parse_float_safe(raw.get("lat")), _parse_float_safe(raw.get("lon"))
+            elif raw.get("type") in ("way", "relation") and "center" in raw:
+                lat = _parse_float_safe(raw["center"].get("lat"))
+                lon = _parse_float_safe(raw["center"].get("lon"))
             if lat is None or lon is None:
                 return None
 
-            fee = tags.get("fee")
+            # Nombre — priorizar el del usuario (es), después idiomas comunes EU, fallback genérico
+            nombre = (
+                tags.get("name:es") or tags.get("name")
+                or tags.get("name:en") or tags.get("name:fr")
+                or tags.get("name:de") or tags.get("name:it")
+                or f"OSM {tipo} {osm_id}"
+            )
+
+            # Fee/gratuito
+            fee = (tags.get("fee") or "").lower().strip()
             gratuito = None
-            if fee:
-                gratuito = True if fee.lower() == "no" else (False if fee.lower() == "yes" else None)
+            if fee == "no":
+                gratuito = True
+            elif fee == "yes":
+                gratuito = False
 
-            hauteur = tags.get("maxheight")
-            altura = None
-            if hauteur:
-                try:
-                    altura = float(hauteur.replace(",", "."))
-                except Exception:
-                    pass
+            # Servicios — lógica DOBLE:
+            # (a) Si el spot ES un water_point o dump_station, el flag correspondiente
+            #     es True por definición (es lo que el POI es)
+            # (b) Si no, leer del tag sub-correspondiente del caravan_site/camping
+            #     (drinking_water=yes, waste_disposal=yes, etc.)
+            is_water_point = kind == ("amenity", "water_point")
+            is_dump_station = kind == ("amenity", "sanitary_dump_station")
 
-            cap = tags.get("capacity")
-            plazas = int(cap) if cap and cap.isdigit() else None
+            agua_potable = None
+            if is_water_point:
+                agua_potable = True
+            elif tags.get("drinking_water") in ("yes", "1"):
+                agua_potable = True
+            elif tags.get("drinking_water") in ("no", "0"):
+                agua_potable = False
 
-            dog = tags.get("dog")
-            perros = True if dog and dog.lower() in ("yes", "leashed") else (
-                False if dog and dog.lower() == "no" else None)
+            # Vaciado de aguas negras (chemical toilet drain / sanitary dump)
+            vaciado_negras = None
+            if is_dump_station:
+                vaciado_negras = True
+            elif tags.get("sanitary_dump_station") in ("yes", "1"):
+                vaciado_negras = True
+            elif tags.get("toilets:disposal") in ("chemical_disposal", "yes"):
+                vaciado_negras = True
 
-            wifi_tag = tags.get("internet_access")
-            wifi = True if wifi_tag and wifi_tag.lower() in ("yes", "wlan") else (
-                False if wifi_tag and wifi_tag.lower() == "no" else None)
+            # Vaciado de aguas grises (waste_disposal / waste_water tag)
+            vaciado_grises = None
+            if is_dump_station:
+                # las dump stations típicas hacen ambos
+                vaciado_grises = True
+            elif tags.get("waste_disposal") in ("yes", "1"):
+                vaciado_grises = True
+            elif tags.get("waste_water") in ("yes", "1"):
+                vaciado_grises = True
+
+            # WC público
+            wc_publico = None
+            toilets = (tags.get("toilets") or "").lower()
+            if toilets in ("yes", "1"):
+                wc_publico = True
+            elif toilets in ("no", "0"):
+                wc_publico = False
+
+            # Ducha
+            ducha = None
+            shower = (tags.get("shower") or "").lower()
+            if shower in ("yes", "1", "hot"):
+                ducha = True
+            elif shower in ("no", "0"):
+                ducha = False
+
+            # Electricidad — varios tags posibles
+            electricidad = None
+            if tags.get("electricity") in ("yes", "1") or tags.get("power_supply") in ("yes", "1"):
+                electricidad = True
+            elif tags.get("electricity") in ("no", "0"):
+                electricidad = False
+
+            # WiFi
+            wifi = None
+            wifi_tag = (tags.get("internet_access") or "").lower()
+            if wifi_tag in ("yes", "wlan", "wifi"):
+                wifi = True
+            elif wifi_tag == "no":
+                wifi = False
+
+            # Perros
+            perros = None
+            dog = (tags.get("dog") or tags.get("dogs") or "").lower()
+            if dog in ("yes", "leashed", "1"):
+                perros = True
+            elif dog == "no":
+                perros = False
+
+            # Altura máxima vehículo
+            altura = _parse_float_safe(tags.get("maxheight"))
+
+            # Capacidad
+            plazas = _parse_int_safe(tags.get("capacity"))
+
+            # country_iso desde addr:country (texto libre - mapeo o None)
+            country_raw = (tags.get("addr:country") or "").lower().strip()
+            country_iso = OSM_COUNTRY_TO_ISO.get(country_raw)
 
             return {
                 "source_id": str(osm_id),
-                "nombre": nombre, "lat": lat, "lon": lon, "tipo": tipo,
+                "nombre": nombre,
+                "lat": lat, "lon": lon, "tipo": tipo,
                 "descripcion_en": tags.get("description"),
                 "temporada_apertura": tags.get("opening_hours"),
-                "gratuito": gratuito, "altura_max_m": altura,
+                "gratuito": gratuito,
+                "altura_max_m": altura,
                 "num_plazas": plazas,
                 "telefono": tags.get("contact:phone") or tags.get("phone"),
                 "email": tags.get("contact:email") or tags.get("email"),
                 "web": tags.get("contact:website") or tags.get("website"),
                 "region": tags.get("addr:city") or tags.get("addr:town"),
-                "country_iso": tags.get("addr:country", "").lower() or None,
-                "agua_potable": True if tags.get("drinking_water") == "yes" else None,
-                "vaciado_negras": True if tags.get("sanitary_dump_station") == "yes" else None,
-                "ducha": True if tags.get("shower") == "yes" else None,
-                "electricidad": True if tags.get("electricity") == "yes" else None,
-                "wifi": wifi, "perros": perros,
+                "country_iso": country_iso,
+                "agua_potable": agua_potable,
+                "vaciado_negras": vaciado_negras,
+                "vaciado_grises": vaciado_grises,
+                "wc_publico": wc_publico,
+                "ducha": ducha,
+                "electricidad": electricidad,
+                "wifi": wifi,
+                "perros": perros,
             }
         except Exception as e:
             logger.error(f"Error normalizando OSM {raw.get('id')}: {e}")
@@ -179,7 +320,10 @@ class OSMSource(AbstractSource):
         puntos = await self._generate_active_points(pool)
         logger.info(f"[osm] {len(puntos)} puntos GPS")
         seen_ids: set[str] = set()
-        sem = asyncio.Semaphore(max(1, config.max_workers // 2))
+        # Defensivo: config.max_workers puede ser None. Concurrencia baja para
+        # Overpass (es un servicio compartido y agresivamente protegido contra abuso)
+        mw = getattr(config, 'max_workers', None) or 3
+        sem = asyncio.Semaphore(max(1, mw // 2))
         circuit_breaker = 0
 
         headers = {
@@ -207,6 +351,8 @@ class OSMSource(AbstractSource):
                     for elem in data.get("elements", []):
                         norm = self.normalize(elem)
                         if not norm:
+                            continue
+                        if not self.coords_validas(norm.get("lat"), norm.get("lon")):
                             continue
                         sid = norm["source_id"]
                         if sid in seen_ids:
