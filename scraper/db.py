@@ -128,9 +128,24 @@ async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
 
 async def enriquecer_spot(conn: asyncpg.Connection, spot_id: int,
                            datos: dict, fuente: str) -> None:
-    """Añade fuente al spot existente y rellena campos NULL."""
+    """Añade fuente al spot existente y rellena campos NULL.
+
+    SKIP: campos que NO son columnas de `spots` pero pueden venir en el dict
+    normalizado (metadata para Phase 2 / source_records / debugging). Si un
+    scraper devuelve una key no listada aquí ni columna de spots, fallará
+    UPDATE con `column "X" does not exist`.
+
+    - lat/lon/nombre: ya se setean en crear_spot, no se actualizan después
+    - fuentes/source/source_id: gestionados aparte (array_append)
+    - _topic_id: legacy furgovw
+    - verificado: legacy
+    - page_url: metadata interna promobil para Phase 2 reviews
+    - host_name, space_id: metadata interna campspace para Phase 2
+    - details_fetched: flag campercontact/campendium/campspace Phase 2
+    """
     SKIP = {"lat", "lon", "nombre", "fuentes", "source", "source_id",
-            "_topic_id", "verificado"}
+            "_topic_id", "verificado", "page_url", "host_name", "space_id",
+            "details_fetched"}
     JSONB_FIELDS = {"fotos_urls", "conflictos"}
     sets = []
     vals = []
