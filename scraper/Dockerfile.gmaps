@@ -1,0 +1,23 @@
+# Dockerfile separado para el scraper de Google Maps (basado en Playwright).
+# Se usa una imagen oficial de Microsoft que ya trae Chromium + dependencias
+# nativas + python. Evita inflar el container scraper normal (~700MB extra).
+#
+# Build solo on-demand:
+#   docker-compose --profile gmaps build gmaps
+#
+# Ejecutar:
+#   docker-compose --profile gmaps run --rm gmaps python scheduler.py --google_maps
+
+FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+
+WORKDIR /app
+
+# Instalar deps Python (las mismas que el scraper normal, más playwright)
+COPY requirements.txt requirements-gmaps.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-gmaps.txt
+
+# El código se monta por volumen en docker-compose para iterar rápido
+# pero copiamos para que la imagen sea ejecutable standalone también
+COPY . .
+
+CMD ["python", "scheduler.py", "--google_maps"]

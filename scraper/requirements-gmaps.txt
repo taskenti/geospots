@@ -1,0 +1,3 @@
+# Solo el extra de Playwright. El base viene de requirements.txt.
+# Versión pinned a la del image base mcr.microsoft.com/playwright/python:v1.49.0
+playwright>=1.49.0,<1.50.0

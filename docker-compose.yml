@@ -77,6 +77,32 @@ services:
       - ./jobs:/app/jobs
     command: ["python", "-m", "enrichment.worker", "--batch-size", "1000"]
 
+  # Servicio separado para Google Maps scraping vía Playwright.
+  # Solo se arranca on-demand con --profile gmaps (no participa en `up -d`).
+  # La imagen pesa ~700MB extra (Chromium + deps) — por eso aislada del scraper normal.
+  gmaps:
+    build:
+      context: ./scraper
+      dockerfile: Dockerfile.gmaps
+    container_name: geospots-gmaps
+    profiles: ["gmaps"]
+    networks:
+      - geospots_net
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      MAX_WORKERS: 1
+      LOG_LEVEL: INFO
+    volumes:
+      - ./scraper:/app
+      - ./enrichment:/app/enrichment:ro
+
   api:
     build: ./api
     container_name: geospots-api

@@ -229,6 +229,7 @@ FUENTES EXTERNAS (20+ scrapers)
 | campy | GraphQL LocationsWithinRadius (90km/grid 1°) | ✅ Integrada | DACH + EU (microcamping) |
 | bobilguiden | Bulk JSON `/places/mobile` (1 request) | ✅ Integrada | NO/SE/FI/DK (~1936 spots) |
 | freecampsites | androidApp.php + wp-json comments | ✅ Integrada | US/CA/MX (~2248 spots, boondocking) |
+| google_maps | Playwright headless (DOM scraping) | 🧪 Experimental — servicio docker separado `gmaps` | Mundial (enriquecimiento on-demand) |
 
 ---
 

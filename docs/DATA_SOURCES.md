@@ -30,6 +30,7 @@
 | **campy** | `graphql-server-...run.app` | GraphQL (LocationsWithinRadius) | Radio 90km en grid 1° | Semanal | Activo | DACH + EU (microcamping) |
 | **bobilguiden** | `api.bobilguiden.no/places/mobile` | Bulk JSON único | Descarga global (no grid) | Semanal | Activo | NO/SE/FI/DK (~1936 spots, NO=95%) |
 | **freecampsites** | `freecampsites.net/.../androidApp.php` + wp-json comments | JSON-en-texto + WP JSON API | Grid 1° filtrado a NA | Mensual | Activo (API inestable) | US/CA/MX (~2248 spots) |
+| **google_maps** | `google.com/maps` (Playwright headless) | DOM scraping con Chromium | Enriquece spots existentes (LIMIT 50/run) | Manual on-demand | Experimental — servicio docker separado `gmaps` | Mundial (cualquier spot con buen rating en Google) |
 | **portugaleasycamp** | — | — | — | — | Stub vacío | Portugal |
 
 ---
