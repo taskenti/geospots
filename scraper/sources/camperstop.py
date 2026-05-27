@@ -105,6 +105,35 @@ class CamperstopSource(AbstractSource):
         if "free" in rate_str or "gratis" in rate_str or "0" in rate_str:
             gratuito = True
 
+        # Descripción sintética: la API no tiene un campo `description` único,
+        # pero sí ~10 campos `*Text` con notas operativas pequeñas. Los unimos
+        # con labels para producir una descripcion_en utilizable por el LLM.
+        TEXT_FIELDS = (
+            ("chargingText",       "Charging"),
+            ("chargingAvailableText", "Charging availability"),
+            ("chemicalText",       "Chemical toilet"),
+            ("chemicalAvailableText", "Chemical toilet availability"),
+            ("drainageText",       "Drainage"),
+            ("drainageAvailableText", "Drainage availability"),
+            ("powerText",          "Power"),
+            ("powerAvailableText", "Power availability"),
+            ("showerText",         "Shower"),
+            ("showerAvailableText", "Shower availability"),
+            ("toiletText",         "Toilet"),
+            ("toiletAvailableText", "Toilet availability"),
+            ("serviceWashingMachineText",      "Washing machine"),
+            ("serviceWashingMachineAvailableText", "Washing machine availability"),
+            ("closedText",         "Closed period"),
+        )
+        desc_parts: list[str] = []
+        for k, label in TEXT_FIELDS:
+            v = raw.get(k)
+            if isinstance(v, str):
+                v = v.strip()
+                if v:
+                    desc_parts.append(f"{label}: {v}")
+        descripcion_en = "; ".join(desc_parts) if desc_parts else None
+
         norm = {
             "source_id": str(raw.get("id")),
             "nombre": raw.get("name", "Camperstop").strip()[:200],
@@ -124,6 +153,7 @@ class CamperstopSource(AbstractSource):
             "web": web,
             "rating_promedio": rating_promedio,
             "num_reviews": num_reviews,
+            "descripcion_en": descripcion_en,
         }
         return merge_extra(norm, extract_camperstop(raw))
 

@@ -503,6 +503,9 @@ class CampspaceSource(AbstractSource):
                                                             })
                                                             if inserted:
                                                                 stats["reviews_nuevas"] += 1
+                                                        # Sync review_count tras procesar todas las reviews del spot
+                                                        from db import refresh_review_count
+                                                        await refresh_review_count(conn, self.name, spot_id)
 
                                                 # Contar enriquecimientos en detalle aparte para no
                                                 # mezclarlo con "actualizados" de Phase 1 (que mide

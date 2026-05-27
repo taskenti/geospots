@@ -340,12 +340,29 @@ class BobilguidenSource(AbstractSource):
         return stats
 
     async def download_reviews(self, pool, config) -> dict:
-        """Descarga reviews completas del endpoint de detalle por spot.
+        """Bobilguiden NO expone un endpoint público de detalle por spot.
 
-        El bulk /places/mobile solo incluye los últimos N comentarios (típicamente
-        3-5). Este método consulta /places/{id} para cada spot donde el conteo de
-        la DB es menor que review_count almacenado en source_records.
+        Hallazgos (verificados 2026-05-27):
+        - El bulk /places/mobile devuelve sólo los 1-2 comments más recientes por
+          place (16 comments en total para 1940 places, aunque 645 places tienen
+          numberOfRatings > 0).
+        - /places/{id} → HTTP 403 (cerrado)
+        - /places/{id}/comments → HTTP 404 (no existe)
+        - bobilguiden.no/api/* → redirige 301 (cliente web hace SSR)
+
+        Por tanto este método se mantiene para mantener simetría con el resto
+        de scrapers, pero advierte y devuelve stats en cero. Las pocas reviews
+        que tenemos llegan en el `run()` principal vía el bulk endpoint.
         """
+        logger.warning(
+            "[bobilguiden] download_reviews: no public detail endpoint available. "
+            "Only bulk /places/mobile returns 1-2 most-recent comments per place. "
+            "Reviews already captured in run(). Skipping."
+        )
+        return {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}
+
+    async def _download_reviews_deprecated(self, pool, config) -> dict:
+        """[Deprecated stub kept for reference — see download_reviews docstring]"""
         from db import upsert_review
 
         stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}

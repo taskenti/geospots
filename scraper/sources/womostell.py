@@ -394,12 +394,25 @@ class WomoStellplatzSource(AbstractSource):
                         logger.error(f"[womostell] Error saving review {raw.get('id')}: {e}")
                         stats["errores"] += 1
 
-                # Mark batch as fetched
+                # Mark batch as fetched + sync review_count desde reviews reales
+                from db import refresh_review_count
                 async with pool.acquire() as conn:
                     await conn.execute("""
                         UPDATE source_records
                         SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb
                         WHERE source = 'womostell' AND source_id = ANY($1::text[])
+                    """, place_ids)
+                    # Bulk recompute desde reviews: 1 query barata por batch (~50 ids)
+                    await conn.execute("""
+                        UPDATE source_records sr
+                        SET review_count = GREATEST(COALESCE(sr.review_count, 0), c.cnt::int)
+                        FROM (
+                            SELECT spot_id, COUNT(*) AS cnt
+                            FROM reviews WHERE source = 'womostell'
+                            GROUP BY spot_id
+                        ) c
+                        WHERE sr.source = 'womostell' AND sr.source_id = ANY($1::text[])
+                          AND sr.spot_id = c.spot_id
                     """, place_ids)
 
                 stats["reviews_nuevas"] += inserted

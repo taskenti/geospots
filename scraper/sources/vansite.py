@@ -211,12 +211,14 @@ async def fetch_and_save_reviews(client: httpx.AsyncClient, pool, spot_id: int, 
                 saved += int(bool(inserted))
 
             if saved > 0:
-                # Recalcular total_reviews del spot en la base de datos
+                # Recalcular total_reviews del spot + sync review_count en source_records
+                from db import refresh_review_count
                 await conn.execute("""
                     UPDATE spots SET total_reviews = (
                         SELECT COUNT(*) FROM reviews WHERE spot_id = $1
                     ) WHERE id = $1
                 """, spot_id)
+                await refresh_review_count(conn, "vansite", spot_id)
 
         return saved
     except Exception as e:

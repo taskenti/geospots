@@ -282,7 +282,7 @@ async def upsert_source_record(conn: asyncpg.Connection, spot_id: int,
         ON CONFLICT (source, source_id) DO UPDATE SET
             spot_id = $1,
             raw_data = $4::jsonb,
-            normalized_data = $5::jsonb,
+            normalized_data = COALESCE(source_records.normalized_data, '{}'::jsonb) || $5::jsonb,
             rating = $9,
             review_count = $10,
             checksum = $11,
@@ -309,6 +309,35 @@ def _checksum(data: dict) -> str:
 # ═══════════════════════════════════════════════════════════════
 # REVIEWS
 # ═══════════════════════════════════════════════════════════════
+
+async def refresh_review_count(conn: asyncpg.Connection, source: str, spot_id: int) -> int:
+    """Sincroniza source_records.review_count con el COUNT real en reviews.
+
+    Las fuentes con `num_reviews` en normalize() (park4night, campercontact, etc.)
+    obtienen review_count del API y representa "esperado total". Las fuentes que
+    no tienen ese campo (caramaps/womostell/vansite/campspace/wtmg/furgovw) tenían
+    review_count NULL — bug histórico: el job incremental "no pendientes" siempre
+    decía 0 y nunca se reintentaba.
+
+    Esta función usa GREATEST para nunca decrementar — si la API ya dio un
+    expected mayor, lo respetamos; si solo hay descargas reales, las usamos.
+
+    Llamar tras upsertar reviews de un spot en download_reviews / run-with-reviews.
+    """
+    cnt = await conn.fetchval(
+        "SELECT COUNT(*) FROM reviews WHERE source = $1 AND spot_id = $2",
+        source, spot_id,
+    )
+    await conn.execute(
+        """
+        UPDATE source_records
+        SET review_count = GREATEST(COALESCE(review_count, 0), $1::int)
+        WHERE source = $2 AND spot_id = $3
+        """,
+        cnt, source, spot_id,
+    )
+    return int(cnt or 0)
+
 
 async def upsert_review(conn: asyncpg.Connection, review: dict) -> None:
     status = await conn.execute("""

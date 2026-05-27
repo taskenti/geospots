@@ -421,6 +421,9 @@ class FurgovwSource(AbstractSource):
                     "autor": None,
                     "idioma": "es",
                 })
+                # Sync review_count tras cada insert (cada RSS msg es 1 review)
+                from db import refresh_review_count
+                await refresh_review_count(conn, "furgovw", spot_id)
         except Exception:
             pass
 

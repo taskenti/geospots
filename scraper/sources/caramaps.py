@@ -394,12 +394,14 @@ class CaramapsSource(AbstractSource):
                     page += 1
 
                 if not has_error:
+                    from db import refresh_review_count
                     async with pool.acquire() as conn:
                         await conn.execute("""
                             UPDATE source_records
                             SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb
                             WHERE source = 'caramaps' AND source_id = $1
                         """, sid)
+                        await refresh_review_count(conn, 'caramaps', spot_id)
                     stats["actualizados"] += 1
                 job_queue.task_done()
 

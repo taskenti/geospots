@@ -299,6 +299,10 @@ class WelcomeToMyGardenSource(AbstractSource):
                                         "idioma": desc_lang,
                                     })
                                     stats["reviews_nuevas"] += 1
+                                    # Sync review_count: wtmg crea 1 review (owner desc)
+                                    # por spot al scrapear; mantenemos contador alineado.
+                                    from db import refresh_review_count
+                                    await refresh_review_count(conn, self.name, spot_id)
 
                     except Exception as e:
                         logger.error(f"[WTMG] Error procesando jardín '{sid}': {e}")
