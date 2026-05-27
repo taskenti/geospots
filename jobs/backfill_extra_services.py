@@ -41,13 +41,15 @@ def _load_dotenv(path: str = ".env") -> None:
 
 def _dsn() -> str:
     _load_dotenv()
-    return (
-        f"postgresql://{os.environ.get('POSTGRES_USER', 'geospots')}:"
-        f"{os.environ.get('POSTGRES_PASSWORD', 'geospots')}@"
-        f"{os.environ.get('DB_HOST', 'localhost')}:"
-        f"{os.environ.get('DB_PORT', '25433')}/"
-        f"{os.environ.get('POSTGRES_DB', 'geospots')}"
-    )
+    # Docker compose exposes DB_USER / DB_PASSWORD / DB_HOST / DB_PORT.
+    # POSTGRES_* are the host-side defaults used in .env.example.
+    # DB_* take priority so the job works inside the container unchanged.
+    user     = os.environ.get("DB_USER")     or os.environ.get("POSTGRES_USER",     "geospots")
+    password = os.environ.get("DB_PASSWORD") or os.environ.get("POSTGRES_PASSWORD", "geospots")
+    host     = os.environ.get("DB_HOST",  "localhost")
+    port     = os.environ.get("DB_PORT",  "25433")
+    dbname   = os.environ.get("DB_NAME")     or os.environ.get("POSTGRES_DB",       "geospots")
+    return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
 
 # ───────────────────────────────────────────────────────────────────

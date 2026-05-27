@@ -561,23 +561,25 @@ def extract_camperstop(raw: dict) -> dict:
 
 
 def extract_womostell(raw: dict) -> dict:
-    """womostell: b_long_campers, b_reservation, city, price → v4c/servicios_extras.
+    """womostell: b_reservation, city, price → v4c/servicios_extras.
 
     normalize() ya captura: perros, wifi, electricidad, ducha, agua_potable,
-    vaciado_*, wc_publico, acceso_grandes, temporada_apertura, num_plazas.
+    vaciado_*, wc_publico, acceso_grandes (← b_long_campers = "lange Wohnmobile"),
+    temporada_apertura, num_plazas.
     Aquí añadimos los campos v4c que quedaron fuera.
+
+    NOTA: b_long_campers = "lange Wohnmobile erlaubt" = autocaravanas largas,
+    NO caravanas remolcadas. Ya va a acceso_grandes en normalize(); no lo
+    duplicamos en acepta_caravanas.
     """
     if not isinstance(raw, dict):
         return {}
     out: dict = {
-        # b_long_campers = "lange Wohnmobile erlaubt" → también acepta caravanas
-        # (normalize() lo pone en acceso_grandes; aquí lo duplicamos en acepta_caravanas)
-        "acepta_caravanas": _bool(raw.get("b_long_campers")),
         # b_reservation = se puede/debe reservar → online_booking
         # (normalize() lo guarda en reserva_req, campo distinto)
-        "online_booking":   _bool(raw.get("b_reservation")),
+        "online_booking": _bool(raw.get("b_reservation")),
         # city = municipio real (normalize() lo mete en `region` erróneamente)
-        "municipio":        _str_nonempty(raw.get("city")),
+        "municipio":      _str_nonempty(raw.get("city")),
     }
     extras: dict = {}
     price = raw.get("price")

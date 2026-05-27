@@ -519,13 +519,14 @@ def test_park4night_normalize_emits_v4c():
 
 def test_womostell_basic():
     raw = {
-        "b_long_campers": "1",
+        "b_long_campers": "1",   # lange Wohnmobile → acceso_grandes (handled in normalize)
         "b_reservation": "1",
         "city": "Freiburg",
         "price": "12.50",
     }
     out = extract_womostell(raw)
-    assert out["acepta_caravanas"] is True
+    # b_long_campers must NOT map to acepta_caravanas (it means long motorhomes, not trailers)
+    assert "acepta_caravanas" not in out
     assert out["online_booking"] is True
     assert out["municipio"] == "Freiburg"
     assert out["servicios_extras"]["pricing_breakdown"]["pernocta"] == 12.50
@@ -534,7 +535,8 @@ def test_womostell_basic():
 def test_womostell_free_no_pricing():
     raw = {"price": "0", "b_long_campers": "0", "city": ""}
     out = extract_womostell(raw)
-    assert out["acepta_caravanas"] is False
+    # b_long_campers not in extractor output
+    assert "acepta_caravanas" not in out
     # price == 0 should NOT produce a pricing_breakdown entry
     assert "servicios_extras" not in out or "pricing_breakdown" not in out.get("servicios_extras", {})
 
@@ -547,7 +549,7 @@ def test_womostell_no_price():
 
 
 def test_womostell_normalize_emits_v4c():
-    """WomoStellplatz normalize() deve emitir acepta_caravanas y municipio."""
+    """WomoStellplatz normalize() emite municipio y acceso_grandes desde b_long_campers."""
     from sources.womostell import WomoStellplatzSource
     raw = {
         "place_id": "9999",
@@ -561,7 +563,9 @@ def test_womostell_normalize_emits_v4c():
     }
     out = WomoStellplatzSource().normalize(raw)
     assert out is not None
-    assert out["acepta_caravanas"] is True
+    # b_long_campers → acceso_grandes (large motorhomes), NOT acepta_caravanas
+    assert out["acceso_grandes"] is True
+    assert "acepta_caravanas" not in out
     assert out["municipio"] == "München"
     assert out["servicios_extras"]["pricing_breakdown"]["pernocta"] == 8.0
 
