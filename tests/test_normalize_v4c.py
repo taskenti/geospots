@@ -21,6 +21,7 @@ if SCRAPER_DIR not in sys.path:
 from sources._normalize_helpers import (  # noqa: E402
     extract_agricamper,
     extract_alpacacamping,
+    extract_amigosac,
     extract_bobilguiden,
     extract_campercontact,
     extract_campercontact_detail,
@@ -1048,6 +1049,96 @@ def test_thedyrt_empty_attrs():
 def test_thedyrt_no_attrs_key():
     out = extract_thedyrt({})
     assert isinstance(out, dict)
+
+
+# ─── amigosac ─────────────────────────────────────────────────────────
+
+
+def test_amigosac_mirador_from_vista():
+    raw = {"descripcion": "<br>Sitio con magníficas vistas al mar.<br>"}
+    assert extract_amigosac(raw)["mirador"] is True
+
+
+def test_amigosac_negation_skips_keyword():
+    """'sin vista al mar' NO debe activar mirador."""
+    raw = {"descripcion": "Sin vista directa, pero tranquilo."}
+    out = extract_amigosac(raw)
+    assert "mirador" not in out
+
+
+def test_amigosac_juegos_ninos_specific_kw():
+    """'parque' solo no, requiere 'parque infantil'."""
+    raw1 = {"descripcion": "Parque nacional cercano"}
+    raw2 = {"descripcion": "Parque infantil para los peques"}
+    assert "juegos_ninos" not in extract_amigosac(raw1)
+    assert extract_amigosac(raw2)["juegos_ninos"] is True
+
+
+def test_amigosac_mtb_and_hiking():
+    raw = {"descripcion": "Zona ideal para senderismo y bicicleta de montaña."}
+    out = extract_amigosac(raw)
+    assert out["hiking_nearby"] is True
+    assert out["mtb_friendly"] is True
+
+
+def test_amigosac_seguridad_iluminacion():
+    raw = {"descripcion": "Aparcamiento con vigilancia y bien iluminado por la noche."}
+    out = extract_amigosac(raw)
+    assert out["seguridad"] is True
+    assert out["iluminacion"] is True
+
+
+def test_amigosac_winter_friendly():
+    raw1 = {"descripcion": "Abierto todo el año, también en invierno."}
+    raw2 = {"descripcion": "Solo verano"}
+    assert extract_amigosac(raw1)["winter_friendly"] is True
+    assert "winter_friendly" not in extract_amigosac(raw2)
+
+
+def test_amigosac_pricing_from_description():
+    """'7,49 euros' → pricing_breakdown.per_night = 7.49"""
+    raw = {"descripcion": "Parcela con servicios. 7,49 euros la noche."}
+    pb = extract_amigosac(raw)["servicios_extras"]["pricing_breakdown"]
+    assert pb["per_night"] == 7.49
+    assert pb["currency"] == "€"
+
+
+def test_amigosac_pricing_euro_symbol():
+    raw = {"descripcion": "Pack semanal: 15€."}
+    pb = extract_amigosac(raw)["servicios_extras"]["pricing_breakdown"]
+    assert pb["per_night"] == 15.0
+
+
+def test_amigosac_strips_html_before_match():
+    """Description con HTML — la stripeamos antes de buscar keywords."""
+    raw = {"descripcion": "<img src='x'/><br><b>Vista</b> al mar"}
+    assert extract_amigosac(raw)["mirador"] is True
+
+
+def test_amigosac_empty_desc():
+    assert extract_amigosac({}) == {}
+    assert extract_amigosac({"descripcion": ""}) == {}
+    assert extract_amigosac({"descripcion": "   "}) == {}
+
+
+def test_amigosac_normalize_emits_extras():
+    from sources.amigosac import AmigosACSource
+    raw = {
+        "amigos_id": "40.000000_-3.000000",
+        "nombre": "Area AC Test",
+        "lat": 40.0,
+        "lon": -3.0,
+        "descripcion": "Area con vistas panorámicas, senderismo cercano, vigilancia 24h y bien iluminada. 8 euros la noche.",
+        "style_url": "#icon-ci-1",
+    }
+    out = AmigosACSource().normalize(raw)
+    assert out is not None
+    assert out["tipo"] == "area_ac"
+    assert out["mirador"] is True
+    assert out["hiking_nearby"] is True
+    assert out["seguridad"] is True
+    assert out["iluminacion"] is True
+    assert out["servicios_extras"]["pricing_breakdown"]["per_night"] == 8.0
 
 
 # ─── alpacacamping ────────────────────────────────────────────────────

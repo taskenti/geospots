@@ -69,6 +69,7 @@ if _HELPERS_DIR not in _sys.path:
 from sources._normalize_helpers import (  # noqa: E402
     extract_agricamper,
     extract_alpacacamping,
+    extract_amigosac,
     extract_bobilguiden,
     extract_campercontact,
     extract_campercontact_detail,
@@ -116,6 +117,9 @@ EXTRACTORS = {
     "vansite":        extract_vansite,
     "roadsurfer":     extract_roadsurfer,
     "alpacacamping":  extract_alpacacamping,
+    "amigosac":       extract_amigosac,
+    # portugaleasycamp omitted: raw_data is just {"url": ...}; the scraper extracts
+    # all useful fields inline in run() and stores them only in normalized_data.
 }
 
 

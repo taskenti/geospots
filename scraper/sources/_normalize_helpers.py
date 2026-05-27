@@ -1085,6 +1085,80 @@ def extract_thedyrt(raw: dict) -> dict:
     return out
 
 
+def extract_amigosac(raw: dict) -> dict:
+    """amigosac: descripción HTML (ES/PT) + style_url. normalize() ya cubre vía
+    keywords los 9 booleans básicos (agua/electricidad/wifi/ducha/wc/negras/
+    grises/perros/gratuito) y tipo/advertencia desde STYLE_MAP.
+
+    Aquí añadimos sobre la descripción (HTML stripped):
+      v4c: mirador (vista/panorám/mirador), juegos_ninos (parque infantil/
+           juegos infantil), mtb_friendly (bicicleta/ciclism/btt),
+           hiking_nearby (senderism/trekking/ruta a pie),
+           seguridad (vigilancia/vigilad/cámaras/cctv),
+           iluminacion (iluminad/iluminación),
+           winter_friendly (invierno/todo el año/all-year).
+      extras: pricing_breakdown (regex "X euros" o "X€" → per_night EUR).
+    """
+    if not isinstance(raw, dict):
+        return {}
+    desc_raw = raw.get("descripcion") or ""
+    if not isinstance(desc_raw, str) or not desc_raw.strip():
+        return {}
+
+    import re as _re
+    desc = _re.sub(r"<[^>]+>", " ", desc_raw)
+    desc = desc.replace("\xa0", " ").lower()
+    desc = " ".join(desc.split())
+    if not desc:
+        return {}
+
+    NEGATIONS = ("no hay", "sin ", "no tiene", "no dispon", "no exist", "prohib")
+
+    def _kw_pos(*needles, window: int = 15) -> bool:
+        """True si encuentra needle SIN negación previa en ventana de chars."""
+        for kw in needles:
+            idx = desc.find(kw)
+            while idx != -1:
+                ctx = desc[max(0, idx - window):idx]
+                if not any(neg in ctx for neg in NEGATIONS):
+                    return True
+                idx = desc.find(kw, idx + 1)
+        return False
+
+    out: dict = {}
+    if _kw_pos("vista", "panorám", "mirador"):
+        out["mirador"] = True
+    if _kw_pos("parque infantil", "juegos infantil", "juegos para niños", "zona infantil"):
+        out["juegos_ninos"] = True
+    if _kw_pos("bicicleta", "ciclism", "mountain bike", "btt"):
+        out["mtb_friendly"] = True
+    if _kw_pos("senderis", "trekking", "ruta a pie", "caminata"):
+        out["hiking_nearby"] = True
+    if _kw_pos("vigilancia", "vigilad", "cámaras", "cctv"):
+        out["seguridad"] = True
+    if _kw_pos("iluminad", "iluminación"):
+        out["iluminacion"] = True
+    if _kw_pos("invierno", "todo el año", "all-year", "all year"):
+        out["winter_friendly"] = True
+
+    extras: dict = {}
+    price_match = _re.search(r"(\d+(?:[.,]\d{1,2})?)\s*(?:euros?|€)", desc)
+    if price_match:
+        try:
+            val = float(price_match.group(1).replace(",", "."))
+            if 0 < val < 1000:
+                extras["pricing_breakdown"] = {
+                    "per_night": round(val, 2),
+                    "currency": "€",
+                }
+        except ValueError:
+            pass
+
+    if extras:
+        out["servicios_extras"] = extras
+    return out
+
+
 def extract_alpacacamping(raw: dict) -> dict:
     """alpacacamping: amenities_infos.title (alemán) + property_address + atributos.
 

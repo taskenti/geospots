@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_amigosac, merge_extra
 
 KMZ_PATH_DEFAULT = "data/amigosac.kmz"
 
@@ -204,7 +205,7 @@ class AmigosACSource(AbstractSource):
         }
         if attrs["advertencia"]:
             res["advertencia"] = attrs["advertencia"]
-        return res
+        return merge_extra(res, extract_amigosac(raw))
 
     @staticmethod
     def parsear_kmz(kmz_path: str) -> list[dict]:

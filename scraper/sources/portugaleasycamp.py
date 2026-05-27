@@ -86,6 +86,16 @@ class PortugalEasyCampSource(AbstractSource):
 
                     sid = url.strip('/').split('/')[-1]
 
+                    # Precio del pack a euros si vino parseado del HTML
+                    precio_aprox = None
+                    precio_info = None
+                    if price:
+                        try:
+                            precio_aprox = float(price)
+                            precio_info = f"{precio_aprox:.2f} € (pack bienvenida)"
+                        except (ValueError, TypeError):
+                            pass
+
                     norm = {
                         "source_id": sid,
                         "nombre": f"EasyCamp - {name}",
@@ -93,10 +103,15 @@ class PortugalEasyCampSource(AbstractSource):
                         "lon": lon,
                         "tipo": "naturaleza", # Agroturismo / Finca
                         "gratuito": False, # Requiere comprar el pack
+                        "precio_aprox": precio_aprox,
+                        "precio_info": precio_info,
                         "country_iso": "pt",
                         "web": url,
                         "fotos_urls": fotos,
-                        "descripcion_es": desc
+                        "descripcion_es": desc,
+                        # PortugalEasyCamp son agroturismos con pernocta legal regulada;
+                        # marcamos online_booking=True (compra del pack en web)
+                        "online_booking": True,
                     }
                     
                     # 3. Guardado en BD (PostGIS)
