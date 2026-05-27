@@ -1,24 +1,43 @@
 # -*- coding: utf-8 -*-
 """StayFree — scraper de spots para autocaravanas.
 
-Estrategia (diagnosticada 2026-05-22):
-  - API publica: https://www.stayfree.app/api/spots
-    - NO requiere auth. Devuelve spots sin coordenadas.
-    - Bug zstd: El servidor (Cloudflare) responde con zstd si el Origin no es
-      same-origin. FIX: usar Origin=https://www.stayfree.app y sec-fetch-site=same-origin.
-    - maxResults=100 es el limite (503 con 200+). Paginacion por page=N (0-indexed).
+Estrategia (actualizada 2026-05-27):
 
-  - API privada: https://api.stayfree.app/v1/spots (con coordenadas)
-    - Requiere: Authorization: Bearer <JWT> + x-api-token: <app_token_estatico>
-    - El x-api-token es un token hardcodeado en el APK de la app nativa.
-    - El JWT del usuario (Supabase) NO funciona como x-api-token.
-    - Para obtener el x-api-token: capturar trafico MITM del emulador Android.
-    - Cuando STAYFREE_AUTHORIZATION y STAYFREE_API_TOKEN esten en .env,
-      el scraper usara la API privada automaticamente.
+API PÚBLICA (sin auth): https://www.stayfree.app/api/spots
+  - List sin coordenadas. Detail con description+photos pero `reviews: []` SIEMPRE vacío.
+  - Bug zstd: Cloudflare responde con zstd si Origin no es same-origin. FIX: usar
+    Origin=https://www.stayfree.app y sec-fetch-site=same-origin.
+  - maxResults=100 es el límite (503 con 200+). Paginación page=N (0-indexed).
 
-Estado actual: Solo API publica disponible. Los spots se descartan en normalize()
-por falta de coordenadas. El scraper escribe los source_records pero no inserta
-nuevos spots hasta tener el x-api-token de la app.
+API PRIVADA (con auth): https://api.stayfree.app/{v1,v2}/...
+  - Endpoints clave:
+      GET  /v2/spots?locationBoxData=...&currentZoom=N  → spots con coordenadas
+      GET  /v1/spots/{sid}                              → detail + reviews TEXTUALES
+      GET  /v1/users/me                                 → sanity-check del JWT
+      GET  /v1/config/onboarding                        → solo necesita x-api-token
+  - Requiere:
+      Authorization: Bearer <JWT>             (JWT Supabase del usuario, caduca ~1h)
+      x-api-token: <app_token_estatico>       (hardcoded en el APK)
+
+Cómo regenerar credenciales (proceso manual MITM, ~3 min):
+  1. Abre HTTP Toolkit y conecta el emulador/dispositivo Android con la app StayFree.
+  2. Haz cualquier acción en la app que pegue api.stayfree.app. Filtra por host.
+  3. x-api-token (estable entre sesiones — solo cambia si actualizan APK):
+       Cualquier GET autenticado lo lleva en el header. Copia ese valor.
+  4. JWT (Bearer): captura un GET autenticado a /v1/users/me o /v1/spots/{sid}.
+     Headers → Authorization. Copia "Bearer eyJ...".
+  5. .env:
+       STAYFREE_AUTHORIZATION=Bearer eyJ...
+       STAYFREE_API_TOKEN=e30d98f2-...
+  6. `docker-compose restart scraper` (no rebuild).
+
+Alternativa (automatización futura, no implementada): el flow Supabase OTP via
+xuyrcfpokotamytkdaza.supabase.co (project ref visible en captura MITM):
+  POST /auth/v1/otp   → envía email/sms con código
+  POST /auth/v1/verify → devuelve access_token (JWT)
+Requeriría capturar la `apikey` (Supabase anon key) del header de OPTIONS preflight
+y un email del usuario para recibir el código. Pendiente: implementar
+`refresh_stayfree_jwt(email, code)` como utilidad CLI.
 """
 
 import asyncio
@@ -30,8 +49,12 @@ from loguru import logger
 from sources.base import AbstractSource
 from sources._normalize_helpers import extract_stayfree, merge_extra
 
-BASE_URL    = "https://www.stayfree.app/api/spots"
-DETAIL_URL  = "https://www.stayfree.app/api/spots/{sid}"
+BASE_URL            = "https://www.stayfree.app/api/spots"
+PUBLIC_DETAIL_URL   = "https://www.stayfree.app/api/spots/{sid}"
+PRIVATE_DETAIL_URL  = "https://api.stayfree.app/v1/spots/{sid}"
+
+# Alias retro-compatible
+DETAIL_URL = PUBLIC_DETAIL_URL
 
 # Códigos HTTP que indican credenciales inválidas/expiradas
 AUTH_FAIL_CODES = (401, 403, 419)
@@ -593,14 +616,30 @@ class StayFreeSource(AbstractSource):
     async def download_reviews(self, pool, config) -> dict:
         from db import upsert_review
         import httpx
- 
+
         stats = {
             "nuevos": 0,
             "actualizados": 0,
             "reviews_nuevas": 0,
             "errores": 0
         }
- 
+
+        # HALLAZGO 2026-05-27 (smoke test): la API pública
+        # www.stayfree.app/api/spots/{sid} devuelve `reviews: []` SIEMPRE vacío,
+        # incluso si ratingCount > 0. Las reviews textuales completas SOLO están
+        # en la API privada api.stayfree.app/v1/spots/{sid} que requiere
+        # Authorization + x-api-token.
+        # Si no hay credenciales privadas válidas, saltamos con warning claro.
+        private_headers = _build_private_headers()
+        if not private_headers:
+            logger.warning(
+                f"[{self.name}] download_reviews: API privada no configurada. "
+                "Las reviews textuales SOLO están disponibles en api.stayfree.app/v1/* "
+                "(requiere STAYFREE_AUTHORIZATION + STAYFREE_API_TOKEN en .env). "
+                "Skipping para no consumir requests inútiles."
+            )
+            return stats
+
         logger.info(f"[{self.name}] Buscando spots pendientes de reviews...")
         async with pool.acquire() as conn:
             review_jobs = await conn.fetch("""
@@ -639,13 +678,22 @@ class StayFreeSource(AbstractSource):
                 
                 try:
                     await asyncio.sleep(self.rate_limit)
-                    resp = await client.get(DETAIL_URL.format(sid=sid))
+                    resp = await client.get(PRIVATE_DETAIL_URL.format(sid=sid))
                     if resp.status_code in (404, 410):
                         job_queue.task_done()
                         continue
-                    if resp.status_code == 503:
-                        await asyncio.sleep(10)
-                        resp = await client.get(DETAIL_URL.format(sid=sid))
+                    if resp.status_code in AUTH_FAIL_CODES:
+                        _log_token_expired(self.name, resp.status_code, f"detalle {sid}", resp.text)
+                        raise ValueError(f"TOKEN_EXPIRED in download_reviews: HTTP {resp.status_code}")
+
+                    retries = 3
+                    while resp.status_code in (429, 503) and retries > 0:
+                        sleep_time = 30 if resp.status_code == 429 else 10
+                        logger.warning(f"[{self.name}] HTTP {resp.status_code} para {sid}, esperando {sleep_time}s... (intentos restantes: {retries})")
+                        await asyncio.sleep(sleep_time)
+                        resp = await client.get(PRIVATE_DETAIL_URL.format(sid=sid))
+                        retries -= 1
+
                     resp.raise_for_status()
                     detail = resp.json()
  
@@ -710,6 +758,14 @@ class StayFreeSource(AbstractSource):
                                     json.dumps(merged[:15]),
                                     spot_id,
                                 )
+
+                            # Marcar como procesado para no volver a consultarlo
+                            await conn.execute("""
+                                UPDATE source_records
+                                SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb
+                                WHERE source = 'stayfree' AND spot_id = $1
+                            """, spot_id)
+
                     stats["actualizados"] += 1
                 except Exception as e:
                     logger.warning(f"[{self.name}] Error detalle {sid}: {e}")
@@ -718,8 +774,10 @@ class StayFreeSource(AbstractSource):
                     job_queue.task_done()
  
         # Iniciar trabajadores concurrentes compartiendo un único cliente httpx
+        # con headers PRIVADOS (Authorization + x-api-token) para acceder a
+        # /v1/spots/{sid} con reviews completos.
         num_workers = min(config.max_workers or 3, 5)
-        async with httpx.AsyncClient(headers=_build_headers(), follow_redirects=True, timeout=20) as client:
+        async with httpx.AsyncClient(headers=private_headers, follow_redirects=True, timeout=20) as client:
             workers = []
             for _ in range(num_workers):
                 workers.append(asyncio.create_task(fetch_detail_worker(client)))
