@@ -6,6 +6,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_nomady, merge_extra
 
 # Esta es la URL mágica que se descarga TODA la base de datos de Nomady de un tirón.
 BASE_URL = "https://api.nomady.camp/cabin/public-compressed-v2"
@@ -71,7 +72,7 @@ class NomadySource(AbstractSource):
         rating_promedio = raw.get("averageRating")
         num_reviews = raw.get("numberOfRatings")
 
-        return {
+        norm = {
             "source_id": str(raw.get("id")),
             "nombre": raw.get("title", "Nomady Camp").strip()[:200],
             "lat": lat,
@@ -90,6 +91,7 @@ class NomadySource(AbstractSource):
             "rating_promedio": float(rating_promedio) if rating_promedio is not None else None,
             "num_reviews": int(num_reviews) if num_reviews is not None else 0
         }
+        return merge_extra(norm, extract_nomady(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (

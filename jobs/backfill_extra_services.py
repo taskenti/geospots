@@ -77,6 +77,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_camperstop,
     extract_caramaps,
     extract_furgovw,
+    extract_nomady,
     extract_osm,
     extract_park4night,
     extract_promobil,
@@ -106,6 +107,7 @@ EXTRACTORS = {
     "furgovw":        extract_furgovw,
     "thedyrt":        extract_thedyrt,
     "wtmg":           extract_wtmg,
+    "nomady":         extract_nomady,
 }
 
 

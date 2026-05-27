@@ -29,6 +29,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_camperstop,
     extract_caramaps,
     extract_furgovw,
+    extract_nomady,
     extract_osm,
     extract_park4night,
     extract_promobil,
@@ -1043,6 +1044,183 @@ def test_thedyrt_empty_attrs():
 def test_thedyrt_no_attrs_key():
     out = extract_thedyrt({})
     assert isinstance(out, dict)
+
+
+# ─── nomady ───────────────────────────────────────────────────────────
+
+
+def test_nomady_basic_flags():
+    raw = {
+        "wifi": True,
+        "dogsAllowed": True,
+        "washingMachine": False,
+        "directBookings": True,
+    }
+    out = extract_nomady(raw)
+    assert out["wifi"] is True
+    assert out["perros"] is True
+    assert out["lavanderia"] is False
+    assert out["online_booking"] is True
+
+
+def test_nomady_activities_split():
+    """Algunas activities mapean a v4c, otras a servicios_extras.activities."""
+    raw = {
+        "activitiesBiking": True,
+        "activitiesHiking": True,
+        "activitiesFishing": False,
+        "activitiesClimbing": True,
+        "activitiesSwimming": True,
+        "activitiesSkiing": True,
+        "activitiesSUP": False,
+    }
+    out = extract_nomady(raw)
+    assert out["mtb_friendly"] is True
+    assert out["hiking_nearby"] is True
+    assert out["fishing"] is False
+    assert out["climbing"] is True
+    activities = out["servicios_extras"]["activities"]
+    assert "swimming" in activities
+    assert "skiing" in activities
+    assert "sup" not in activities
+
+
+def test_nomady_environment_labels():
+    raw = {
+        "surroundingsForest": True,
+        "surroundingsLake": True,
+        "surroundingsMeadow": False,
+        "surroundingsRoad": True,
+    }
+    labels = extract_nomady(raw)["servicios_extras"]["environment_labels"]
+    assert "forest" in labels
+    assert "lake" in labels
+    assert "near_road" in labels
+    assert "meadow" not in labels
+
+
+def test_nomady_food_nearby_and_restaurant_column():
+    raw = {
+        "foodRestaurant": True,
+        "foodCafe": True,
+        "foodBakery": False,
+        "foodFarmShop": True,
+    }
+    out = extract_nomady(raw)
+    assert out["restaurant"] is True
+    food = out["servicios_extras"]["food_nearby"]
+    assert set(food) == {"restaurant", "cafe", "farm_shop"}
+
+
+def test_nomady_pricing_breakdown():
+    raw = {
+        "priceAdult": 12.5,
+        "priceChild": 6.0,
+        "priceDog": 5,
+        "priceInfant": 0,  # 0 → excluido
+        "pricePower": 3.5,
+        "priceBaseUnit": "per_night",
+    }
+    pb = extract_nomady(raw)["servicios_extras"]["pricing_breakdown"]
+    assert pb["adult"] == 12.5
+    assert pb["child"] == 6.0
+    assert pb["dog"] == 5.0
+    assert pb["electricity"] == 3.5
+    assert pb["base_unit"] == "per_night"
+    assert "infant" not in pb
+
+
+def test_nomady_stay_limits():
+    raw = {"minNights": 2, "maxNights": 14}
+    se = extract_nomady(raw)["servicios_extras"]
+    assert se["min_nights"] == 2
+    assert se["max_nights"] == 14
+
+
+def test_nomady_municipio_and_winter():
+    raw = {"city": "Andermatt", "isWinterReady": True}
+    out = extract_nomady(raw)
+    assert out["municipio"] == "Andermatt"
+    assert out["winter_friendly"] is True
+
+
+def test_nomady_only_truthy_flags():
+    raw = {
+        "isVerified": True,
+        "popularityAward": False,
+        "isFamilyFriendly": True,
+        "dogsOnlyOnleash": True,
+    }
+    se = extract_nomady(raw)["servicios_extras"]
+    assert se["verified"] is True
+    assert "popularity_award" not in se  # solo si truthy
+    assert se["family_friendly"] is True
+    assert se["dogs_on_leash_only"] is True
+
+
+def test_nomady_flag_returns_none_when_absent():
+    """Si la clave no está, _flag debe devolver None y la columna se omite."""
+    out = extract_nomady({"city": "x"})
+    assert "wifi" not in out
+    assert "perros" not in out
+
+
+def test_nomady_empty_raw():
+    assert extract_nomady({}) == {}
+    assert extract_nomady(None) == {}
+
+
+def test_nomady_normalize_emits_v4c():
+    from sources.nomady import NomadySource
+    raw = {
+        "id": 7890,
+        "title": "Alphütte Engelberg",
+        "latitude": 46.82,
+        "longitude": 8.40,
+        "country": "ch",
+        "slug": "alphuette-engelberg",
+        "types": ["tent", "caravan"],
+        "drinkingWater": True,
+        "regularToilet": True,
+        "outdoorShower": True,
+        "power": True,
+        "wifi": False,
+        "dogsAllowed": True,
+        "isWinterReady": True,
+        "directBookings": True,
+        "city": "Engelberg",
+        "activitiesHiking": True,
+        "activitiesBiking": True,
+        "surroundingsForest": True,
+        "surroundingsLake": False,
+        "priceAdult": 18,
+        "priceDog": 5,
+        "minNights": 1,
+        "maxNights": 7,
+        "fireplace": True,
+        "isVerified": True,
+        "ground": "grass",
+        "imageUrls": ["a.jpg", "b.jpg"],
+    }
+    out = NomadySource().normalize(raw)
+    assert out is not None
+    # campos de normalize()
+    assert out["agua_potable"] is True
+    assert out["country_iso"] == "ch"
+    # de extractor
+    assert out["wifi"] is False
+    assert out["perros"] is True
+    assert out["municipio"] == "Engelberg"
+    assert out["winter_friendly"] is True
+    assert out["mtb_friendly"] is True
+    assert out["hiking_nearby"] is True
+    se = out["servicios_extras"]
+    assert "forest" in se["environment_labels"]
+    assert se["pricing_breakdown"]["adult"] == 18.0
+    assert se["min_nights"] == 1 and se["max_nights"] == 7
+    assert se["campfire"] is True
+    assert se["verified"] is True
+    assert se["ground"] == "grass"
 
 
 # ─── wtmg ─────────────────────────────────────────────────────────────

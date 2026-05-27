@@ -1085,6 +1085,156 @@ def extract_thedyrt(raw: dict) -> dict:
     return out
 
 
+def extract_nomady(raw: dict) -> dict:
+    """nomady: API rica DACH/CH. Muchas facilities/activities/pricing.
+
+    normalize() ya extrae: agua_potable (drinkingWater), wc_publico (regular/outdoor
+    Toilet), ducha (regular/outdoorShower), electricidad (power), vaciado_negras/grises
+    (black/greyWater), country_iso, rating, fotos, web, num_reviews, tipo.
+
+    Aquí añadimos columnas v4c y servicios_extras rico:
+      - wifi, perros, lavanderia, restaurant, mtb_friendly, hiking_nearby, fishing,
+        climbing, winter_friendly, online_booking
+      - municipio (city)
+      - servicios_extras: environment_labels, food_nearby, activities, pricing_breakdown,
+        min_nights, max_nights, cell_service, campfire, heating, kitchen, verified,
+        family_friendly, dogs_on_leash_only, picnic_table, trash_disposal, shelter, ground.
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    def _flag(*keys) -> bool | None:
+        """True si CUALQUIERA es truthy; False si TODOS están presentes y falsy;
+        None si NINGUNO está presente."""
+        seen = False
+        for k in keys:
+            if k in raw:
+                seen = True
+                if raw[k]:
+                    return True
+        return False if seen else None
+
+    out: dict = {
+        "wifi":            _flag("wifi"),
+        "perros":          _flag("dogsAllowed"),
+        "lavanderia":      _flag("washingMachine"),
+        "restaurant":      _flag("foodRestaurant"),
+        "mtb_friendly":    _flag("activitiesBiking"),
+        "hiking_nearby":   _flag("activitiesHiking"),
+        "fishing":         _flag("activitiesFishing"),
+        "climbing":        _flag("activitiesClimbing"),
+        "winter_friendly": _flag("isWinterReady"),
+        "online_booking":  _flag("directBookings"),
+    }
+
+    city = _str_nonempty(raw.get("city"))
+    if city:
+        out["municipio"] = city[:100]
+
+    extras: dict = {}
+
+    # Entorno físico
+    env_map = (
+        ("surroundingsFarm",   "farm"),
+        ("surroundingsForest", "forest"),
+        ("surroundingsLake",   "lake"),
+        ("surroundingsMeadow", "meadow"),
+        ("surroundingsRiver",  "river"),
+        ("surroundingsRoad",   "near_road"),
+    )
+    env_labels = [label for k, label in env_map if raw.get(k)]
+    if env_labels:
+        extras["environment_labels"] = env_labels
+
+    # Actividades adicionales no mapeadas a v4c
+    act_map = (
+        ("activitiesSwimming", "swimming"),
+        ("activitiesSkiing",   "skiing"),
+        ("activitiesSledding", "sledding"),
+        ("activitiesSUP",      "sup"),
+        ("activitiesHockey",   "hockey"),
+    )
+    activities = [label for k, label in act_map if raw.get(k)]
+    if activities:
+        extras["activities"] = activities
+
+    # Comida cercana (cafe/bakery/farm shop/alp + restaurant ya en columna)
+    food_map = (
+        ("foodBakery",     "bakery"),
+        ("foodCafe",       "cafe"),
+        ("foodFarmShop",   "farm_shop"),
+        ("foodRestaurant", "restaurant"),
+        ("foodAlp",        "alp"),
+    )
+    food = [label for k, label in food_map if raw.get(k)]
+    if food:
+        extras["food_nearby"] = food
+
+    # Pricing detallado
+    pricing: dict = {}
+    price_map = (
+        ("priceAdult",    "adult"),
+        ("priceChild",    "child"),
+        ("priceTeen",     "teen"),
+        ("priceInfant",   "infant"),
+        ("priceDog",      "dog"),
+        ("pricePower",    "electricity"),
+        ("priceFireWood", "firewood"),
+    )
+    for k, label in price_map:
+        v = raw.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            pricing[label] = round(float(v), 2)
+    base = _str_nonempty(raw.get("priceBaseUnit"))
+    if base:
+        pricing["base_unit"] = base[:30]
+    if pricing:
+        extras["pricing_breakdown"] = pricing
+
+    # Estancia
+    min_n = raw.get("minNights")
+    if isinstance(min_n, (int, float)) and not isinstance(min_n, bool) and min_n > 0:
+        extras["min_nights"] = int(min_n)
+    max_n = raw.get("maxNights")
+    if isinstance(max_n, (int, float)) and not isinstance(max_n, bool) and max_n > 0:
+        extras["max_nights"] = int(max_n)
+
+    # Booleans → servicios_extras
+    bool_extras = (
+        ("mobileReception", "cell_service"),
+        ("fireplace",       "campfire"),
+        ("heating",         "heating"),
+        ("kitchen",         "kitchen"),
+        ("picknickTable",   "picnic_table"),
+        ("trash",           "trash_disposal"),
+        ("shelter",         "shelter"),
+    )
+    for k_raw, k_out in bool_extras:
+        v = raw.get(k_raw)
+        if isinstance(v, bool):
+            extras[k_out] = v
+
+    # Solo si True
+    if raw.get("isVerified"):
+        extras["verified"] = True
+    if raw.get("popularityAward"):
+        extras["popularity_award"] = True
+    if raw.get("isFamilyFriendly"):
+        extras["family_friendly"] = True
+    if raw.get("dogsOnlyOnleash"):
+        extras["dogs_on_leash_only"] = True
+
+    # Tipo de suelo
+    ground = _str_nonempty(raw.get("ground"))
+    if ground:
+        extras["ground"] = ground[:30]
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return {k: v for k, v in out.items() if v is not None}
+
+
 def _fs_val(field: Any) -> Any:
     """Desenvuelve un valor de Firestore (`{stringValue: "x"}` → `"x"`, etc.)."""
     if not isinstance(field, dict):
