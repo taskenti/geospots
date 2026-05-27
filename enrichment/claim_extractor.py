@@ -113,7 +113,7 @@ def _parse_json_response(text: str) -> list[dict]:
     return claims
 
 
-async def extract_claims_gemini(text: str, model: str = "gemini-2.0-flash") -> list[dict]:
+async def extract_claims_gemini(text: str, model: str = "gemini-2.5-flash-lite") -> list[dict]:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return []

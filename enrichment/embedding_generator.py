@@ -13,7 +13,7 @@ from loguru import logger
 
 EMBEDDING_MODEL = "text-embedding-004"
 GOOGLE_EMBEDDING_MODEL = "models/text-embedding-004"
-INTENT_MODEL = "gemini-2.0-flash"
+INTENT_MODEL = "gemini-2.5-flash-lite"
 EMBEDDING_DIMS = 768
 
 
