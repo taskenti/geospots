@@ -35,59 +35,105 @@ class FreeCampsitesSource(AbstractSource):
         "referer": "https://freecampsites.net/"
     }
 
-    async def generate_active_grid(self, pool, step=1.0, buffer=4):
-        """Genera celdas filtradas por los límites de Norteamérica para optimizar el scraper."""
+    @staticmethod
+    def _likely_has_land(lat: float, lon: float) -> bool:
+        """Heurística rápida: descarta celdas claramente en océano abierto.
+
+        No es un polígono preciso — solo elimina las zonas donde freecampsites.net
+        no tiene spots y el servidor acaba haciendo timeout (75s/celda desperdiciados).
+        """
+        # Océano Pacífico al oeste de la costa estadounidense/canadiense
+        if lon < -127 and lat < 54:
+            return False
+        # Pacífico al oeste de Alaska (Bering Sea / Aleutian deep ocean)
+        if lon < -160 and lat < 62:
+            return False
+        # Atlántico profundo al este de Norteamérica
+        if lon > -58 and lat < 62:
+            return False
+        # Caribe / Golfo de México profundo al sur de EEUU
+        if lat < 24.5 and lon > -87:
+            return False
+        # Ártico sin acceso (norte de Alaska/Canadá)
+        if lat > 71:
+            return False
+        return True
+
+    async def generate_active_grid(self, pool, step=1.0, buffer=1):
+        """Genera celdas filtradas por tierra de Norteamérica.
+
+        buffer=1 (no 4): evita extenderse 4° hacia el océano más allá de los spots
+        conocidos — el API hace timeout en coords oceánicas (75s/celda perdidos).
+        """
         cells = await super().generate_active_grid(pool, step=step, buffer=buffer)
-        
-        # Filtrar a celdas que caen dentro de Norteamérica:
-        # latitud entre 24.0 y 72.0, longitud entre -170.0 y -50.0
+
         na_cells = []
         for c in cells:
             tl_lat, tl_lon, br_lat, br_lon = c
             lat = (tl_lat + br_lat) / 2.0
             lon = (tl_lon + br_lon) / 2.0
-            if 24.0 <= lat <= 72.0 and -170.0 <= lon <= -50.0:
+            if (24.0 <= lat <= 72.0 and -170.0 <= lon <= -50.0
+                    and self._likely_has_land(lat, lon)):
                 na_cells.append(c)
-                
-        logger.info(f"[freecampsites] Filtro de bounds aplicado (Norteamérica): de {len(cells)} celdas iniciales a {len(na_cells)} celdas filtradas.")
+
+        logger.info(
+            f"[freecampsites] Grid NA+tierra: {len(na_cells)} celdas "
+            f"(de {len(cells)} totales tras buffer={buffer})"
+        )
         return na_cells
 
     async def fetch_cell(self, client, tl_lat, tl_lon, br_lat, br_lon) -> list[dict]:
         """Query freecampsites mobile endpoint using the cell center coordinates with retry on 429/errors."""
         lat = round((tl_lat + br_lat) / 2.0, 5)
         lon = round((tl_lon + br_lon) / 2.0, 5)
-        
-        url = f"https://freecampsites.net/wp-content/themes/freecampsites/androidApp.php?location=({lat},{lon})&coordinates=({lat},{lon})&advancedSearch={{}}"
-        
-        retries = 3
+
+        url = (
+            f"https://freecampsites.net/wp-content/themes/freecampsites/androidApp.php"
+            f"?location=({lat},{lon})&coordinates=({lat},{lon})&advancedSearch={{}}"
+        )
+
+        # 2 reintentos (no 3): timeout 8s por intento → máximo ~28s/celda vs ~75s antes.
+        # El servidor hace timeout en coords oceánicas — no tiene sentido reintentar más.
+        retries = 2
         backoff = 5.0
         for attempt in range(retries):
             try:
-                r = await client.get(url, headers=self.HEADERS, timeout=20)
+                r = await client.get(url, headers=self.HEADERS, timeout=8)
                 if r.status_code == 429:
                     wait_time = backoff * (2 ** attempt)
-                    logger.warning(f"[freecampsites] HTTP 429 (Rate Limit) at ({lat}, {lon}). Retrying in {wait_time}s... (attempt {attempt+1}/{retries})")
+                    logger.warning(
+                        f"[freecampsites] 429 at ({lat},{lon}). "
+                        f"Retrying in {wait_time}s... ({attempt+1}/{retries})"
+                    )
                     await asyncio.sleep(wait_time)
                     continue
-                    
+
                 if r.status_code != 200:
-                    logger.warning(f"[freecampsites] HTTP error {r.status_code} at ({lat}, {lon})")
+                    logger.warning(f"[freecampsites] HTTP {r.status_code} at ({lat},{lon})")
                     return []
-                    
+
                 # Extract JSON payload from text response
                 match = re.search(r'\{.*\}', r.text, re.DOTALL)
                 if not match:
                     return []
-                    
+
                 data = json.loads(match.group(0))
                 return data.get("resultList", [])
+
             except Exception as e:
+                exc_type = type(e).__name__
                 if attempt < retries - 1:
                     wait_time = backoff * (2 ** attempt)
-                    logger.warning(f"[freecampsites] Error querying ({lat}, {lon}): {e}. Retrying in {wait_time}s...")
+                    logger.warning(
+                        f"[freecampsites] {exc_type} at ({lat},{lon}): {e or '(no msg)'}. "
+                        f"Retrying in {wait_time}s..."
+                    )
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.warning(f"[freecampsites] Error querying ({lat}, {lon}) after {retries} attempts: {e}")
+                    logger.warning(
+                        f"[freecampsites] {exc_type} at ({lat},{lon}) after {retries} attempts: "
+                        f"{e or '(no msg)'}"
+                    )
                     return []
         return []
 
