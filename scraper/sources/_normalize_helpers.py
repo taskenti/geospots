@@ -1085,6 +1085,71 @@ def extract_thedyrt(raw: dict) -> dict:
     return out
 
 
+def _fs_val(field: Any) -> Any:
+    """Desenvuelve un valor de Firestore (`{stringValue: "x"}` → `"x"`, etc.)."""
+    if not isinstance(field, dict):
+        return None
+    if "stringValue" in field:
+        return field["stringValue"]
+    if "booleanValue" in field:
+        return bool(field["booleanValue"])
+    if "doubleValue" in field:
+        try:
+            return float(field["doubleValue"])
+        except (TypeError, ValueError):
+            return None
+    if "integerValue" in field:
+        try:
+            return int(field["integerValue"])
+        except (TypeError, ValueError):
+            return None
+    if "mapValue" in field:
+        inner = (field.get("mapValue") or {}).get("fields") or {}
+        return {k: _fs_val(v) for k, v in inner.items()}
+    if "arrayValue" in field:
+        values = (field.get("arrayValue") or {}).get("values") or []
+        return [_fs_val(v) for v in values]
+    if "nullValue" in field:
+        return None
+    return None
+
+
+def extract_wtmg(raw: dict) -> dict:
+    """wtmg (WelcomeToMyGarden): facilities.bonfire/tent no capturados en normalize().
+
+    raw es la respuesta Firestore: `{document: {name, fields: {...}}}`. normalize() ya
+    extrae agua_potable (drinkableWater), wc_publico (toilet), electricidad (electricity),
+    ducha (shower), num_plazas (capacity), perros y acceso_grandes (inferidos del
+    description), fotos, descripcion_<lang>.
+
+    Aquí añadimos:
+      - servicios_extras.campfire (facilities.bonfire) — hoguera permitida
+      - servicios_extras.tent_allowed (facilities.tent) — caben tiendas
+    """
+    if not isinstance(raw, dict):
+        return {}
+    doc = raw.get("document") or {}
+    fields = doc.get("fields") if isinstance(doc, dict) else None
+    if not isinstance(fields, dict):
+        return {}
+
+    facs = _fs_val(fields.get("facilities")) or {}
+    if not isinstance(facs, dict):
+        return {}
+
+    extras: dict = {}
+    bonfire = facs.get("bonfire")
+    if isinstance(bonfire, bool):
+        extras["campfire"] = bonfire
+    tent = facs.get("tent")
+    if isinstance(tent, bool):
+        extras["tent_allowed"] = tent
+
+    if extras:
+        return {"servicios_extras": extras}
+    return {}
+
+
 def merge_extra(norm: dict, extra: dict) -> dict:
     """Mergea el output de un extractor sobre el dict de normalize().
 

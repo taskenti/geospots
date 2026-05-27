@@ -84,6 +84,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_stayfree,
     extract_thedyrt,
     extract_womostell,
+    extract_wtmg,
 )
 
 
@@ -104,6 +105,7 @@ EXTRACTORS = {
     "osm":            extract_osm,
     "furgovw":        extract_furgovw,
     "thedyrt":        extract_thedyrt,
+    "wtmg":           extract_wtmg,
 }
 
 

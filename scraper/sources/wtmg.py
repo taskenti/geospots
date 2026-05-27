@@ -6,6 +6,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_wtmg, merge_extra
 
 PROJECT_ID = "wtmg-production"
 API_KEY = "AIzaSyDO-2F-GFTblgS6o1bbhhRledAJSoAfwzw"
@@ -191,7 +192,7 @@ class WelcomeToMyGardenSource(AbstractSource):
             "num_plazas": num_plazas,
         }
         res.update(desc_fields)
-        return res
+        return merge_extra(res, extract_wtmg(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (

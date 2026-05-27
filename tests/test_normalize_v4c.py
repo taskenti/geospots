@@ -36,6 +36,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_stayfree,
     extract_thedyrt,
     extract_womostell,
+    extract_wtmg,
     merge_extra,
 )
 
@@ -1042,6 +1043,104 @@ def test_thedyrt_empty_attrs():
 def test_thedyrt_no_attrs_key():
     out = extract_thedyrt({})
     assert isinstance(out, dict)
+
+
+# ─── wtmg ─────────────────────────────────────────────────────────────
+
+
+def _wtmg_raw(facilities: dict) -> dict:
+    """Helper: envuelve un dict de facilities en el formato Firestore."""
+    def wrap_bool(v):
+        return {"booleanValue": v}
+    def wrap_int(v):
+        return {"integerValue": str(v)}
+    fac_fields = {}
+    for k, v in facilities.items():
+        if isinstance(v, bool):
+            fac_fields[k] = wrap_bool(v)
+        elif isinstance(v, int):
+            fac_fields[k] = wrap_int(v)
+    return {
+        "document": {
+            "name": "projects/wtmg-production/databases/(default)/documents/campsites/abc123",
+            "fields": {
+                "facilities": {"mapValue": {"fields": fac_fields}},
+            },
+        }
+    }
+
+
+def test_wtmg_campfire_from_bonfire_true():
+    raw = _wtmg_raw({"bonfire": True, "tent": False})
+    out = extract_wtmg(raw)
+    assert out["servicios_extras"]["campfire"] is True
+    assert out["servicios_extras"]["tent_allowed"] is False
+
+
+def test_wtmg_campfire_from_bonfire_false():
+    raw = _wtmg_raw({"bonfire": False})
+    out = extract_wtmg(raw)
+    assert out["servicios_extras"]["campfire"] is False
+
+
+def test_wtmg_tent_allowed():
+    raw = _wtmg_raw({"tent": True})
+    out = extract_wtmg(raw)
+    assert out["servicios_extras"]["tent_allowed"] is True
+
+
+def test_wtmg_no_relevant_facilities():
+    """Si facilities sólo trae cosas ya cubiertas por normalize(), extra={}."""
+    raw = _wtmg_raw({"toilet": True, "shower": False, "capacity": 2})
+    out = extract_wtmg(raw)
+    assert out == {}
+
+
+def test_wtmg_empty_raw():
+    assert extract_wtmg({}) == {}
+    assert extract_wtmg({"document": {}}) == {}
+    assert extract_wtmg({"document": {"fields": {}}}) == {}
+
+
+def test_wtmg_malformed_facilities():
+    """facilities sin mapValue → no peta, devuelve {}."""
+    raw = {"document": {"fields": {"facilities": {"stringValue": "broken"}}}}
+    assert extract_wtmg(raw) == {}
+
+
+def test_wtmg_normalize_emits_v4c():
+    from sources.wtmg import WelcomeToMyGardenSource
+    raw = {
+        "document": {
+            "name": "projects/wtmg-production/databases/(default)/documents/campsites/abc",
+            "fields": {
+                "location": {"mapValue": {"fields": {
+                    "latitude": {"doubleValue": 50.1},
+                    "longitude": {"doubleValue": 4.2},
+                }}},
+                "listed": {"booleanValue": True},
+                "facilities": {"mapValue": {"fields": {
+                    "drinkableWater": {"booleanValue": True},
+                    "toilet": {"booleanValue": True},
+                    "shower": {"booleanValue": False},
+                    "electricity": {"booleanValue": True},
+                    "bonfire": {"booleanValue": True},
+                    "tent": {"booleanValue": True},
+                    "capacity": {"integerValue": "3"},
+                }}},
+                "description": {"stringValue": "A quiet garden with welcoming hosts."},
+            },
+        }
+    }
+    out = WelcomeToMyGardenSource().normalize(raw)
+    assert out is not None
+    assert out["agua_potable"] is True
+    assert out["wc_publico"] is True
+    assert out["electricidad"] is True
+    assert out["num_plazas"] == 3
+    se = out["servicios_extras"]
+    assert se["campfire"] is True
+    assert se["tent_allowed"] is True
 
 
 def test_thedyrt_normalize_emits_v4c():
