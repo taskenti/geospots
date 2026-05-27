@@ -1,0 +1,58 @@
+SPOT 77247: 'Agriturismo Colle Villano'  [IT]
+reviews total=60 seleccionadas=47
+prompt chars=17321  tokens~4330
+
+
+== deepseek/deepseek-v4-flash ==================================================
+latency=10.2s  in=8280  out=1428  cost=$0.00140
+
+CLAIMS (21):
+   1. [quietness                     ]  val=0.9                   conf=0.9  rev_idx=None
+      excerpt: 'Wir haben wunderbar ruhig geschlafen'
+   2. [beauty                        ]  val=0.9                   conf=0.9  rev_idx=None
+      excerpt: 'die Weinreben rundherum sind traumhaft schön'
+   3. [cleanliness                   ]  val=0.8                   conf=0.7  rev_idx=None
+      excerpt: 'Der Stellpatz ist sehr ordentlich'
+   4. [large_vehicle                 ]  val=0.8                   conf=0.7  rev_idx=None
+      excerpt: 'Consigliato per camper di tutte le dimensioni'
+   5. [road_quality                  ]  val=0.8                   conf=0.7  rev_idx=None
+      excerpt: 'Easy to enter and leave at your leisure'
+   6. [crowd_level                   ]  val=0.3                   conf=0.7  rev_idx=None
+      excerpt: 'area tranquilla con acqua e corrente elettrica, 4 posti'
+   7. [wind_exposure                 ]  val=0.3                   conf=0.6  rev_idx=None
+      excerpt: 'Stellplatz unter einem Olivenhain'
+   8. [cell_coverage                 ]  val=0.7                   conf=0.6  rev_idx=None
+      excerpt: 'La seule langue parlée était l’italien personne ne parlait anglais'
+   9. [sea_view                      ]  val=False                 conf=0.9  rev_idx=None
+      excerpt: 'rural setting with an adjoining farmhouse'
+  10. [mountain_view                 ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'leuke wandeling met de honden naar een hoger gelegen, gerenoveerde, burcht'
+  11. [lake_nearby                   ]  val=False                 conf=0.9  rev_idx=None
+      excerpt: 'countryside, mountain'
+  12. [shade_morning                 ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'naast het terras onder de grote boom voor schaduw'
+  13. [shade_afternoon               ]  val=False                 conf=0.6  rev_idx=None
+      excerpt: 'just lacking shade'
+  14. [overnight_safe                ]  val=True                  conf=0.9  rev_idx=None
+      excerpt: 'voelde me veilig op hun erf'
+  15. [wild_camping_legal            ]  val=True                  conf=0.9  rev_idx=None
+      excerpt: 'Free: Yes'
+  16. [dog_friendly                  ]  val=True                  conf=0.9  rev_idx=None
+      excerpt: 'Dogs allowed: Yes'
+  17. [family_friendly               ]  val=True                  conf=0.7  rev_idx=None
+      excerpt: 'In compagnia di alcuni amici,abbiamo decisori di sostare una notte'
+  18. [water_working                 ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Drinking water: Yes'
+  19. [electricity_working           ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Electricity: Yes'
+  20. [dump_station_working          ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Grey water dump: Yes'
+  21. [noise_source                  ]  val=road                  conf=0.6  rev_idx=None
+      excerpt: 'Ruhig und nah an der Autobahn gelegen'
+
+SUMMARY (English):
+  Agriturismo Colle Villano is a free gravel rest area on a family-run wine farm in the Friuli countryside, near the Slovenian border. It offers free electricity and water, a grey water dump, and WiFi (reportedly requires wine purchase). The farm has a bar and restaurant (open Friday to Sunday evenings) and sells excellent DOC/DOCG wines at fair prices. The setting is quiet and scenic among vineyards, with some shade under a large tree in the morning but limited afternoon shade. Access is easy for large vehicles, and dogs are welcome. A few reviews note that the toilet is locked at night and that Italian language skills help. One negative review mentions a rude welcome and expensive restaurant, but the overwhelming consensus is very positive. Best for couples, wine lovers, and those seeking a peaceful stop with local food and wine.
+
+TAGS:     ['free', 'wine farm', 'quiet', 'scenic', 'electricity', 'water', 'dog-friendly', 'agritourism']
+BEST_FOR: ['couples', 'wine lovers', 'peaceful stop', 'overlanding']
+BEST_SEASON: spring-autumn

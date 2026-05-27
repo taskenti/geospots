@@ -259,7 +259,7 @@ class CamperstopSource(AbstractSource):
                         async with pool.acquire() as conn:
                             for item in ratings:
                                 r_id = item.get("id")
-                                r_text = item.get("description", "").strip()
+                                r_text = (item.get("description") or "").strip()
                                 r_rating = item.get("rating")
                                 r_author = item.get("userName")
                                 r_created = item.get("created")
@@ -320,7 +320,7 @@ class CamperstopSource(AbstractSource):
                 job_queue.task_done()
 
         async with httpx.AsyncClient(headers=HEADERS) as client:
-            workers = [asyncio.create_task(worker(client)) for _ in range(3)]
+            workers = [asyncio.create_task(worker(client)) for _ in range(1)]
             await asyncio.gather(*workers)
 
         return stats

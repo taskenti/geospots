@@ -7,10 +7,12 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from enrichment.spot_packager import (
+    compute_richness,
     estimate_tokens,
     has_rich_description,
     select_reviews_for_prompt,
     should_enrich,
+    summary_instruction_for,
     temporal_weight,
 )
 from enrichment.prompts import build_spot_user_prompt
@@ -232,7 +234,8 @@ def test_build_prompt_no_reviews_only_descriptions():
         "descripcion_es": "Aparcamiento con vistas.",
     }
     prompt = build_spot_user_prompt(spot, [])
-    assert "ninguna disponible" in prompt
+    # v4: prompt headers are now in English
+    assert "none available" in prompt
     assert "[ES] Aparcamiento" in prompt
 
 
@@ -248,4 +251,98 @@ def test_build_prompt_handles_missing_fields():
     }
     prompt = build_spot_user_prompt(spot, [])
     assert "SPOT id=1" in prompt
-    assert "otro" in prompt  # tipo default
+    # v4: tipo default fallback is now "other" (English) when None
+    assert "other" in prompt
+
+
+# ─── compute_richness (v4d) ──────────────────────────────────────────
+
+
+def test_richness_minimal_spot():
+    """Spot vacío: minimal."""
+    spot = {"fuentes": []}
+    score, level = compute_richness(spot, [])
+    assert score == 0.0
+    assert level == "minimal"
+
+
+def test_richness_simple_spot():
+    """3 reviews + 2 servicios + 1 fuente: simple."""
+    spot = {
+        "fuentes": ["park4night"],
+        "agua_potable": True,
+        "gratuito": True,
+    }
+    reviews = [{"id": i} for i in range(3)]
+    score, level = compute_richness(spot, reviews)
+    assert level == "simple"
+    assert 0.10 <= score < 0.30
+
+
+def test_richness_rich_camping():
+    """Camping: 20 reviews + 14 servicios + 2 descripciones + 2 fuentes → rich."""
+    spot = {
+        "fuentes": ["campercontact", "park4night"],
+        "gratuito": False, "precio_aprox": 25.0, "precio_info": "min 20 max 30",
+        "agua_potable": True, "electricidad": True,
+        "vaciado_grises": True, "vaciado_negras": True,
+        "ducha": True, "wifi": True, "wc_publico": True,
+        "perros": True, "iluminacion": True, "seguridad": True,
+        "num_plazas": 40, "altura_max_m": 3.0,
+        "descripcion_en": "Camping with full services",
+        "descripcion_de": "Campingplatz mit allen Diensten",
+    }
+    reviews = [{"id": i} for i in range(20)]
+    score, level = compute_richness(spot, reviews)
+    assert level in ("rich", "very_rich")
+    assert score >= 0.70
+
+
+def test_richness_very_rich_camping():
+    """Camping enorme: 30 reviews + 18 servicios + 4 idiomas + 3 fuentes."""
+    spot = {
+        "fuentes": ["campercontact", "park4night", "caramaps"],
+        "gratuito": False, "precio_aprox": 25.0, "precio_info": "X",
+        "agua_potable": True, "vaciado_grises": True, "vaciado_negras": True,
+        "electricidad": True, "ducha": True, "wifi": True, "wc_publico": True,
+        "perros": True, "iluminacion": True, "seguridad": True,
+        "reserva_req": True, "num_plazas": 40, "altura_max_m": 3.0,
+        "temporada_apertura": "all year", "acceso_grandes": True,
+        "web": "https://x.com", "telefono": "+34123",
+        "descripcion_en": "x", "descripcion_de": "x",
+        "descripcion_fr": "x", "descripcion_it": "x",
+    }
+    reviews = [{"id": i} for i in range(30)]
+    score, level = compute_richness(spot, reviews)
+    assert level == "very_rich"
+    assert score >= 0.85
+
+
+def test_summary_instruction_lengths_match_level():
+    """Las instrucciones deben mencionar longitudes coherentes con el level."""
+    inst_min = summary_instruction_for("minimal")
+    inst_simple = summary_instruction_for("simple")
+    inst_rich = summary_instruction_for("rich")
+    inst_vr = summary_instruction_for("very_rich")
+
+    assert "1-2" in inst_min
+    assert "2-3" in inst_simple
+    assert "5-7" in inst_rich
+    assert "6-8" in inst_vr
+    # las largas deben tener anti-marketing reminder
+    assert "marketing" in inst_rich.lower() or "factual" in inst_rich.lower()
+
+
+def test_build_prompt_includes_summary_instruction():
+    """v4d: el prompt debe incluir SUMMARY_INSTRUCTION."""
+    spot = {
+        "id": 1, "canonical_name": "Test", "tipo": "camping",
+        "country_iso": "ES", "lat": 40.0, "lon": -3.0, "fuentes": ["park4night"],
+        "agua_potable": True, "electricidad": True,
+    }
+    reviews = [{"id": i, "texto": f"review {i} text long enough", "fecha": _days_ago(30),
+                "rating": 4, "source": "p4n"} for i in range(5)]
+    selected = select_reviews_for_prompt(reviews)
+    prompt = build_spot_user_prompt(spot, selected)
+    assert "SUMMARY_RICHNESS:" in prompt
+    assert "SUMMARY_INSTRUCTION:" in prompt

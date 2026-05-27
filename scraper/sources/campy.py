@@ -6,6 +6,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_campy, merge_extra
 
 def clean_surrogates(text: str) -> str:
     if not text:
@@ -257,4 +258,4 @@ class CampySource(AbstractSource):
             "perros": perros,
         }
         res.update(desc_fields)
-        return res
+        return merge_extra(res, extract_campy(raw))

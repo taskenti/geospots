@@ -113,8 +113,7 @@ async def main(spot_id: int, only_model: str | None = None) -> int:
                         for e in parsed.errors:
                             print(f"  WARN: {e}")
 
-                    print(f"\nSUMMARY_ES:\n  {parsed.summary_es or '(vacio)'}")
-                    print(f"\nSUMMARY_EN:\n  {parsed.summary_en or '(vacio)'}")
+                    print(f"\nSUMMARY (English):\n  {parsed.summary or '(empty)'}")
                     print(f"\nTAGS:     {parsed.tags}")
                     print(f"BEST_FOR: {parsed.best_for}")
                     if parsed.best_season:

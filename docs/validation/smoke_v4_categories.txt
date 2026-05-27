@@ -1,0 +1,197 @@
+SMOKE v4 — DeepSeek, 4 categorías
+
+================================================================================
+
+################################################################################
+# SPOT 139647 — IT parking — caso multi-idioma con prohibición parcial
+################################################################################
+
+name: 'Parcheggio Vicino Supermercato Coop'  [IT]  type=area_ac
+reviews: total=60 selected_after_dedup=57
+prompt chars=13470  tokens~3367
+
+SERVICES (raw): gratuito=True, agua_potable=False, electricidad=False, vaciado_grises=False, vaciado_negras=False, ducha=False, wifi=False, wc_publico=False
+
+--- response (latency=7.5s, in=6673, out=1058, cost=$0.00123) ---
+
+CLAIMS (15):
+  - from services: 3
+  - from reviews:  12
+  - from descriptions/other: 0
+
+   1. [quietness                   ]  val=0.85                conf=0.9  rid=2971362
+       excerpt: 'Ottimo parcheggio per passare una notte tranquilla e silenziosa.'
+   2. [safety                      ]  val=0.8                 conf=0.8  rid=2971369
+       excerpt: 'Wir haben uns immer sehr sicher gefühlt.'
+   3. [beauty                      ]  val=0.7                 conf=0.7  rid=2971362
+       excerpt: 'Centro storico di Orbetello raggiungibile a piedi con una passeggiata di 20 minuti oppure in bicicle'
+   4. [cleanliness                 ]  val=0.8                 conf=0.7  rid=2971385
+       excerpt: 'Parcheggio silenzioso, spazioso e vicino alla coop (dove ci sono i bagni).'
+   5. [large_vehicle               ]  val=0.7                 conf=0.8  rid=429421
+       excerpt: 'Gute Einfahrt auch mit großen Wohnmobilen'
+   6. [crowd_level                 ]  val=0.3                 conf=0.8  rid=2971374
+       excerpt: "C'erano solo altri 2 vecchi camper"
+   7. [mosquitoes                  ]  val=0.6                 conf=0.7  rid=2971388
+       excerpt: 'The only drawback is that there were a lot of mosquitos.'
+   8. [cell_coverage               ]  val=0.2                 conf=0.7  rid=2971405
+       excerpt: '5/4g quasi assente'
+   9. [overnight_safe              ]  val=True                conf=0.9  rid=2971374
+       excerpt: 'Ci siamo stati un giorno e una notte in tranquillità.'
+  10. [wild_camping_legal          ]  val=False               conf=0.7  rid=2971415
+       excerpt: 'From one side forbidden motorhomes sign'
+  11. [dog_friendly                ]  val=True                conf=0.7  rid=429419
+       excerpt: 'Wege für Hundespaziergang vorhanden.'
+  12. [water_working               ]  val=False               conf=0.9  (services/desc)
+       excerpt: 'Drinking water: No'
+  13. [electricity_working         ]  val=False               conf=0.9  (services/desc)
+       excerpt: 'Electricity: No'
+  14. [dump_station_working        ]  val=False               conf=0.9  (services/desc)
+       excerpt: 'Grey water dump: No'
+  15. [parking_capacity            ]  val=small               conf=0.8  rid=2971374
+       excerpt: 'parcheggio gratuito per una decina di camper'
+
+SUMMARY (English):
+  Free parking area behind Coop supermarket, suitable for a quiet overnight stay. No services (no water, electricity, or dump). Large vehicles can access easily. Some reviews mention mosquitoes and poor cell coverage. A 'forbidden motorhomes' sign exists on one side, but the area is commonly used by campers. Nearby cycle path to Orbetello.
+
+TAGS:     ['free', 'supermarket', 'quiet', 'no services', 'cycle path', 'mosquitoes', 'limited cell coverage']
+BEST_FOR: ['couples', 'cyclists', 'overlanding']
+BEST_SEASON: spring-autumn
+AVOID_SEASON: summer
+
+################################################################################
+# SPOT 111566 — ES camping — todos los servicios + sin reviews multi-lang
+################################################################################
+
+name: 'Camping La Vall'  [ES]  type=camping
+reviews: total=3 selected_after_dedup=3
+prompt chars=1493  tokens~373
+
+SERVICES (raw): gratuito=False, agua_potable=True, electricidad=True, vaciado_grises=True, vaciado_negras=True, ducha=True, wifi=True, wc_publico=True
+
+--- response (latency=4.6s, in=2907, out=516, cost=$0.00055) ---
+
+CLAIMS (7):
+  - from services: 3
+  - from reviews:  4
+  - from descriptions/other: 0
+
+   1. [cleanliness                 ]  val=0.9                 conf=0.8  rid=1445942
+       excerpt: 'super clean sanitary facilities with the most wonderful showers so far!'
+   2. [water_working               ]  val=True                conf=0.85  (services/desc)
+       excerpt: 'Drinking water: Yes'
+   3. [electricity_working         ]  val=True                conf=0.85  (services/desc)
+       excerpt: 'Electricity: Yes'
+   4. [dump_station_working        ]  val=True                conf=0.85  (services/desc)
+       excerpt: 'Grey water dump: Yes, Black water dump: Yes'
+   5. [road_quality                ]  val=0.3                 conf=0.7  rid=1445941
+       excerpt: 'By following the car navigation and not the signs in the city we followed a narrow dirt road for mil'
+   6. [large_vehicle               ]  val=0.5                 conf=0.6  rid=1445941
+       excerpt: 'narrow dirt road'
+   7. [family_friendly             ]  val=False               conf=0.6  rid=1445940
+       excerpt: "not ideal if you're just passing through"
+
+SUMMARY (English):
+  Camping La Vall is a well-maintained campsite in the forest with excellent sanitary facilities and friendly staff. However, access via narrow dirt roads can be challenging, and it is expensive (€49.50 for two with electricity) with some facilities closed. It caters more to regular guests than transient campers.
+
+TAGS:     ['forest', 'expensive', 'clean', 'friendly', 'narrow access', 'all-year']
+BEST_FOR: ['regular guests', 'nature lovers']
+
+################################################################################
+# SPOT 61376 — SE area_ac — agua sí, electricidad no
+################################################################################
+
+name: 'Bölesjön Norra'  [SE]  type=area_ac
+reviews: total=28 selected_after_dedup=28
+prompt chars=6687  tokens~1671
+
+SERVICES (raw): gratuito=True, agua_potable=True, electricidad=False, vaciado_grises=False, vaciado_negras=True, ducha=False, wifi=False, wc_publico=True
+
+--- response (latency=5.4s, in=4512, out=638, cost=$0.00048) ---
+
+CLAIMS (9):
+  - from services: 2
+  - from reviews:  6
+  - from descriptions/other: 1
+
+   1. [water_working               ]  val=True                conf=0.85  (services/desc)
+       excerpt: 'Drinking water: Yes'
+   2. [dump_station_working        ]  val=True                conf=0.85  (services/desc)
+       excerpt: 'Black water dump: Yes'
+   3. [road_noise                  ]  val=0.6                 conf=0.8  rid=4014334
+       excerpt: "Unfortunately it's next to busy road, be prepared for some noise."
+   4. [noise_source                ]  val=road                conf=0.8  rid=4014334
+       excerpt: 'next to busy road'
+   5. [cleanliness                 ]  val=0.7                 conf=0.7  rid=4014337
+       excerpt: "ça pue la pisse absolument partout sur l'aire de stationnement. c'est crade."
+   6. [quietness                   ]  val=0.4                 conf=0.7  rid=4014339
+       excerpt: 'Beaucoup trop bruyant pour une nuitée'
+   7. [large_vehicle               ]  val=0.5                 conf=0.6  rid=4014350
+       excerpt: 'el acceso al agua con el vehículo es complicado'
+   8. [lake_nearby                 ]  val=True                conf=0.8  rid=4014336
+       excerpt: 'Beautiful view of the lake aswell.'
+   9. [parking_capacity            ]  val=small               conf=0.6  (services/desc)
+       excerpt: 'Pitches: ~10'
+
+SUMMARY (English):
+  Bölesjön Norra is a free rest area along the E4 highway in Sweden, offering drinking water (requires a hose adapter) and black water dump. It is convenient for a stop but can be noisy due to road traffic, and cleanliness varies. The area has a lake view and picnic tables.
+
+TAGS:     ['free', 'rest area', 'highway', 'lake view', 'water', 'black water dump', 'noisy']
+BEST_FOR: ['overlanding', 'quick stop']
+BEST_SEASON: summer
+
+################################################################################
+# SPOT 564419 — DE wild/naturaleza — sin servicios, alquiler privado
+################################################################################
+
+name: 'Wiese am alten Hirtenteich - our little paradise🤗'  [DE]  type=naturaleza
+reviews: total=25 selected_after_dedup=25
+prompt chars=10038  tokens~2509
+
+SERVICES (raw): gratuito=False, agua_potable=False, electricidad=False, vaciado_grises=False, vaciado_negras=False, ducha=False, wifi=False, wc_publico=False
+
+--- response (latency=6.7s, in=5426, out=921, cost=$0.00068) ---
+
+CLAIMS (14):
+  - from services: 3
+  - from reviews:  9
+  - from descriptions/other: 2
+
+   1. [quietness                   ]  val=0.9                 conf=0.9  rid=54653
+       excerpt: 'schön ruhig gelegen sehr gut geschlafen'
+   2. [beauty                      ]  val=0.9                 conf=0.9  rid=54652
+       excerpt: 'Ein ganz wunderbares Fleckchen Erde'
+   3. [cleanliness                 ]  val=0.9                 conf=0.8  rid=54658
+       excerpt: 'schön gestalteter Platz'
+   4. [safety                      ]  val=0.9                 conf=0.8  rid=54653
+       excerpt: 'sehr gut geschlafen'
+   5. [crowd_level                 ]  val=0.1                 conf=0.8  rid=54657
+       excerpt: 'zwei ganz gemütliche und ruhige Tage'
+   6. [large_vehicle               ]  val=0.8                 conf=0.7  (services/desc)
+       excerpt: 'Large vehicle access: Yes'
+   7. [cell_coverage               ]  val=0.9                 conf=0.8  rid=54685
+       excerpt: 'dank des guten LTE-Netzes uneingeschränkt unserer Arbeit nachgehen'
+   8. [dog_friendly                ]  val=True                conf=0.8  rid=54657
+       excerpt: 'Ich hatte mit meinen drei Hunden zwei ganz gemütliche und ruhige Tage'
+   9. [family_friendly             ]  val=True                conf=0.8  rid=54658
+       excerpt: 'Der Spielplatz nebenan war die perfekte Beschäftigung für die Kinder'
+  10. [overnight_safe              ]  val=True                conf=0.9  rid=54653
+       excerpt: 'sehr gut geschlafen'
+  11. [water_working               ]  val=False               conf=0.9  (services/desc)
+       excerpt: 'Drinking water: No'
+  12. [electricity_working         ]  val=False               conf=0.9  (services/desc)
+       excerpt: 'Electricity: No'
+  13. [dump_station_working        ]  val=False               conf=0.9  (services/desc)
+       excerpt: 'Grey water dump: No'
+  14. [parking_capacity            ]  val=small               conf=0.8  (services/desc)
+       excerpt: 'Die drei Stellplätze'
+
+SUMMARY (English):
+  A small, quiet, and beautifully maintained private pitch on a family property in a tiny village near Delitzsch. Hosts are exceptionally welcoming and helpful; the spot is ideal for cycling tours to nearby lakes and nature reserves. No services (water, electricity, dump) but excellent LTE coverage and a playground nearby for children. Dogs welcome.
+
+TAGS:     ['private pitch', 'quiet', 'nature', 'cycling', 'dog-friendly', 'family-friendly', 'good cell coverage', 'no services']
+BEST_FOR: ['couples', 'families', 'cyclists', 'remote-work']
+BEST_SEASON: spring-autumn
+
+================================================================================
+TOTAL COST (4 spots): $0.00294
+PROJECTED 80K spots: $58.85

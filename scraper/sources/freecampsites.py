@@ -202,82 +202,131 @@ class FreeCampsitesSource(AbstractSource):
     async def download_reviews(self, pool, config) -> dict:
         """Download reviews using the public WordPress JSON API comments endpoint."""
         inicio = datetime.now(timezone.utc)
-        stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}
+        stats = {
+            "nuevos": 0,
+            "actualizados": 0,
+            "reviews_nuevas": 0,
+            "errores": 0
+        }
         
-        # Query target spots belonging to freecampsites
+        logger.info(f"[{self.name}] Buscando spots con reviews pendientes...")
         async with pool.acquire() as conn:
-            spots = await conn.fetch("""
-                SELECT spot_id, source_id FROM source_records 
-                WHERE source = 'freecampsites'
+            review_jobs = await conn.fetch("""
+                SELECT 
+                    sr.spot_id, 
+                    sr.source_id, 
+                    sr.review_count,
+                    COALESCE(r.cnt, 0) AS db_review_count
+                FROM source_records sr
+                LEFT JOIN (
+                    SELECT spot_id, COUNT(*) AS cnt
+                    FROM reviews
+                    WHERE source = 'freecampsites'
+                    GROUP BY spot_id
+                ) r ON sr.spot_id = r.spot_id
+                WHERE sr.source = 'freecampsites'
+                  AND sr.review_count > 0
+                  AND (
+                        (sr.normalized_data->>'reviews_fetched') IS NULL
+                     OR COALESCE(r.cnt, 0) < sr.review_count
+                  )
+                ORDER BY sr.review_count DESC;
             """)
             
-        if not spots:
-            logger.info("[freecampsites] No spots found in DB to retrieve reviews for.")
+        if not review_jobs:
+            logger.info(f"[{self.name}] No hay spots con reviews pendientes.")
             return stats
             
-        logger.info(f"[freecampsites] Fetching reviews for {len(spots)} spots...")
+        logger.info(f"[{self.name}] {len(review_jobs)} spots con reviews pendientes.")
         
+        job_queue = asyncio.Queue()
+        for r in review_jobs:
+            await job_queue.put(dict(r))
+            
         headers = {
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
-        
         from db import upsert_review
         
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20) as client:
-            for idx, spot in enumerate(spots):
-                spot_id = spot["spot_id"]
-                source_id = spot["source_id"]
+        async def worker(client):
+            while not job_queue.empty():
+                try:
+                    job = job_queue.get_nowait()
+                except (asyncio.QueueEmpty, asyncio.CancelledError):
+                    break
+                    
+                spot_id = job["spot_id"]
+                source_id = job["source_id"]
                 
                 url = f"https://freecampsites.net/wp-json/wp/v2/comments?post={source_id}&per_page=100"
                 
                 try:
-                    await asyncio.sleep(0.5)  # respectful delay
+                    await asyncio.sleep(1.0)  # respectful delay
                     r = await client.get(url, timeout=15)
-                    if r.status_code != 200:
-                        continue
-                        
-                    comments = r.json()
-                    if not comments:
-                        continue
-                        
-                    async with pool.acquire() as conn:
-                        async with conn.transaction():
-                            for comment in comments:
-                                raw_text = comment.get("content", {}).get("rendered", "")
-                                clean_text = self.clean_html(raw_text)
-                                if not clean_text:
-                                    continue
-                                    
-                                date_str = comment.get("date", "")
-                                fecha = None
-                                if date_str:
-                                    try:
-                                        fecha = datetime.fromisoformat(date_str).date()
-                                    except Exception:
-                                        pass
+                    if r.status_code == 200:
+                        comments = r.json()
+                        saved = 0
+                        if comments and isinstance(comments, list):
+                            async with pool.acquire() as conn:
+                                async with conn.transaction():
+                                    for comment in comments:
+                                        raw_text = comment.get("content", {}).get("rendered", "")
+                                        clean_text = self.clean_html(raw_text)
+                                        if not clean_text:
+                                            continue
+                                            
+                                        date_str = comment.get("date", "")
+                                        fecha = None
+                                        if date_str:
+                                            try:
+                                                fecha = datetime.fromisoformat(date_str).date()
+                                            except Exception:
+                                                pass
+                                                
+                                        review_dict = {
+                                            "spot_id": spot_id,
+                                            "source": self.name,
+                                            "source_review_id": str(comment["id"]),
+                                            "texto": clean_text,
+                                            "texto_original": clean_text,
+                                            "rating": None,
+                                            "autor": comment.get("author_name", "Anonymous"),
+                                            "fecha": fecha,
+                                            "idioma": "en"
+                                        }
                                         
-                                review_dict = {
-                                    "spot_id": spot_id,
-                                    "source": self.name,
-                                    "source_review_id": str(comment["id"]),
-                                    "texto": clean_text,
-                                    "texto_original": clean_text,
-                                    "rating": None,
-                                    "autor": comment.get("author_name", "Anonymous"),
-                                    "fecha": fecha,
-                                    "idioma": "en"
-                                }
-                                
-                                inserted = await upsert_review(conn, review_dict)
-                                if inserted:
-                                    stats["reviews_nuevas"] += 1
+                                        inserted = await upsert_review(conn, review_dict)
+                                        if inserted:
+                                            saved += 1
+                                            
+                                    if saved > 0:
+                                        await conn.execute("""
+                                            UPDATE spots SET total_reviews = (
+                                                SELECT COUNT(*) FROM reviews WHERE spot_id = $1
+                                            ) WHERE id = $1
+                                        """, spot_id)
+                                        
+                        stats["reviews_nuevas"] += saved
+                        
+                    # Always mark as fetched even if 404 or empty (so we don't query it again immediately)
+                    async with pool.acquire() as conn:
+                        await conn.execute("""
+                            UPDATE source_records
+                            SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb
+                            WHERE source = 'freecampsites' AND source_id = $1
+                        """, source_id)
+                    stats["actualizados"] += 1
+                    
                 except Exception as e:
                     logger.warning(f"[freecampsites] Error fetching reviews for spot {spot_id} (ID: {source_id}): {e}")
                     stats["errores"] += 1
                     
-                if (idx + 1) % 50 == 0:
-                    logger.info(f"[freecampsites] Ingestion: {idx+1}/{len(spots)} spots processed | new_reviews={stats['reviews_nuevas']}")
-                    
+                job_queue.task_done()
+                
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20) as client:
+            workers = [asyncio.create_task(worker(client)) for _ in range(2)]
+            await asyncio.gather(*workers)
+            
         dur = (datetime.now(timezone.utc) - inicio).total_seconds()
         logger.info(f"[freecampsites] Reviews ingestion completed in {dur:.0f}s: {stats}")
         return stats

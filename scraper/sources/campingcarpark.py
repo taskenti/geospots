@@ -15,6 +15,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_campingcarpark, merge_extra
 
 
 GATEWAY_BASE = "https://gateway.feature.campingcarpark.com"
@@ -150,7 +151,7 @@ class CampingCarParkSource(AbstractSource):
             except (ValueError, TypeError):
                 pass
 
-        return {
+        norm = {
             "source_id": source_id,
             "nombre": nombre[:200],
             "lat": lat,
@@ -177,6 +178,7 @@ class CampingCarParkSource(AbstractSource):
             "rating_promedio": rating,
             "num_reviews": num_reviews,
         }
+        return merge_extra(norm, extract_campingcarpark(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (

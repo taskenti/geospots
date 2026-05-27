@@ -113,11 +113,10 @@ def _build_parsed(review_ids: list[int]) -> ValidatedEnrichment:
             ValidatedClaim(signal="water_working", value=True, confidence=0.9,
                            review_id=review_ids[0], excerpt="agua disponible", raw={}),
         ],
-        summary_es="Aire gratuito frente al mar con vistas. Algo de ruido de autopista.",
-        summary_en="Free aire facing the sea. Some highway noise.",
-        tags=["mar", "gratuito", "tranquilo"],
-        best_for=["parejas"],
-        best_season="primavera-otoño",
+        summary="Free aire facing the sea with views. Some highway noise.",
+        tags=["sea", "free", "quiet"],
+        best_for=["couples"],
+        best_season="spring-autumn",
         avoid_season=None,
         errors=[],
     )
@@ -200,11 +199,12 @@ async def test_ingest_materializes_v2_columns(conn, fixture_spot):
         fixture_spot["spot_id"],
     )
     assert row is not None
-    assert row["summary_es"].startswith("Aire gratuito")
+    # v4: summary_es deprecado (NULL), summary_en lleva el texto inglés único.
+    assert row["summary_es"] is None
     assert row["summary_en"].startswith("Free aire")
-    assert "mar" in row["tags"]
-    assert "parejas" in row["best_for"]
-    assert row["best_season"] == "primavera-otoño"
+    assert "sea" in row["tags"]
+    assert "couples" in row["best_for"]
+    assert row["best_season"] == "spring-autumn"
     assert row["avoid_season"] is None
     assert row["noise_sources"] == ["highway"]
     assert row["parking_capacity"] == "medium"
@@ -270,7 +270,7 @@ async def test_ingest_rolls_back_on_error(conn, fixture_spot):
                            review_id=fixture_spot["review_ids"][0],
                            excerpt="ok", raw={}),
         ],
-        summary_es="ok", summary_en="ok", tags=[], best_for=[],
+        summary="ok", tags=[], best_for=[],
         best_season=None, avoid_season=None, errors=[],
     )
     # Forzamos error: spot_id que no existe → recompute_spot_state insertará la fila igualmente
@@ -287,8 +287,7 @@ async def test_ingest_handles_empty_claims(conn, fixture_spot):
     """Un enrichment sin claims pero con summary debe completar correctamente."""
     parsed = ValidatedEnrichment(
         claims=[],
-        summary_es="Sin claims, solo summary.",
-        summary_en="Just summary.",
+        summary="Just summary, no claims.",
         tags=["test"],
         best_for=[],
         best_season=None,
@@ -301,10 +300,12 @@ async def test_ingest_handles_empty_claims(conn, fixture_spot):
     )
     assert stats.claims_inserted == 0
     row = await conn.fetchrow(
-        "SELECT summary_es, tags, enrichment_version FROM spot_semantic_state WHERE spot_id = $1",
+        "SELECT summary_es, summary_en, tags, enrichment_version FROM spot_semantic_state WHERE spot_id = $1",
         fixture_spot["spot_id"],
     )
-    assert row["summary_es"] == "Sin claims, solo summary."
+    # v4: summary_es queda NULL, summary_en lleva el contenido inglés.
+    assert row["summary_es"] is None
+    assert row["summary_en"] == "Just summary, no claims."
     assert "test" in row["tags"]
 
 
@@ -319,11 +320,10 @@ async def test_parse_then_ingest_realistic_response(conn, fixture_spot):
             {"signal": "sea_view", "value": True, "confidence": 0.95,
              "review_id": "description", "excerpt": "face à la mer"},
         ],
-        "summary_es": "Spot tranquilo con vistas.",
-        "summary_en": "Quiet spot with views.",
-        "tags": ["tranquilo", "mar"],
-        "best_for": ["parejas"],
-        "best_season": "verano",
+        "summary": "Quiet spot with sea views.",
+        "tags": ["quiet", "sea"],
+        "best_for": ["couples"],
+        "best_season": "summer",
         "avoid_season": None,
     })
     parsed = parse_enrichment_response(response_text)

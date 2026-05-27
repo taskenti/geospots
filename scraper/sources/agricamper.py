@@ -6,6 +6,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_agricamper, merge_extra
 
 class AgricamperSource(AbstractSource):
     name = "agricamper"
@@ -148,7 +149,7 @@ class AgricamperSource(AbstractSource):
             "descripcion_de": descripcion_de,
             "descripcion_nl": descripcion_nl,
         }
-        return norm
+        return merge_extra(norm, extract_agricamper(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (

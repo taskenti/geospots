@@ -1,0 +1,342 @@
+
+================================================================================
+FUENTE: park4night
+================================================================================
+  spot_id=104830 | 'Ouradous' [None] tipo=area_ac
+  total_reviews=17
+
+  RAW DATA: 73 keys totales, 48 con valor no-vacío
+
+  Campos con datos en raw (top 30):
+    animaux                        = 1
+    code                           = EP
+    code_postal                    = 81530
+    contact_visible                = 1
+    date_creation                  = 2025-07-08 12:44:55
+    date_fermeture                 = all_year
+    description_de                 = Bei Magalie und Mika gibt es am Ende der asphaltierten Straße, mitten in der Nat
+    description_en                 = At Magalie and Mika's, a few pitches in the heart of nature at the end of the pa
+    description_fr                 = Chez Magalie et mika, quelques emplacements en pleine nature au bout du chemin g
+    distance                       = 14.459
+    douche                         = 1
+    eau_noire                      = 1
+    eau_usee                       = 1
+    electricite                    = 1
+    hauteur_limite                 = 0.00
+    id                             = 606865
+    latitude                       = 43.796500
+    laverie                        = 1
+    longitude                      = 2.581831
+    mail                           = poncemickael@live.fr
+    moto                           = 1
+    nb_commentaires                = 4
+    nb_photos                      = 5
+    nb_places                      = 3
+    nb_visites                     = 1
+    note_moyenne                   = 5.00
+    pays                           = France
+    pays_iso                       = fr
+    peche                          = 1
+    photos                         = [{"id": "1888219", "numero": "1", "link_large": "https://cdn3.park4night.com/lie
+    ... (18 más)
+
+  SPOT RECONCILIADO: 18/21 campos con valor
+    acceso_grandes            = True   ← en prompt
+    agua_potable              = True   ← en prompt
+    ducha                     = True   ← en prompt
+    electricidad              = True   ← en prompt
+    email                     = poncemickael@live.fr   ✗ NO en prompt
+    gratuito                  = False   ← en prompt
+    iluminacion               = False   ✗ NO en prompt
+    num_plazas                = 5   ← en prompt
+    perros                    = True   ✗ NO en prompt
+    precio_aprox              = 15.0   ← en prompt
+    precio_info               = min: 15 / max: 25   ← en prompt
+    seguridad                 = False   ✗ NO en prompt
+    telefono                  = +33616927568   ✗ NO en prompt
+    vaciado_grises            = True   ← en prompt
+    vaciado_negras            = True   ← en prompt
+    wc_publico                = True   ← en prompt
+    web                       = https://www.campercontact.com/france/occitania/saint-salvi-de-carcaves/162202/ouradous   ✗ NO en prompt
+    wifi                      = False   ← en prompt
+
+  📊 GAP:
+     - 48 campos no-vacíos en raw
+     - 18 llegan a spots (de 21 columnas posibles)
+     - 12 llegan al prompt v4 SERVICES block
+     - posible pérdida raw→spot: 30 campos
+
+================================================================================
+FUENTE: campercontact
+================================================================================
+  spot_id=111084 | 'Tornby Strand Camping - Hirtshals' [dk] tipo=camping
+  total_reviews=96
+
+  RAW DATA: 15 keys totales, 15 con valor no-vacío
+
+  Campos con datos en raw (top 30):
+    filters                        = {"prices": [{"price": 26.14, "dateTo": "1970-03-31", "dateFrom": "1970-01-02", "
+    id                             = poi-20278
+    location                       = {"lat": 57.55529, "lon": 9.93287}
+    permalink                      = /denemarken/-/hirtshals/48625/tornby-strand-camperpitch-hirtshals
+    poiV2                          = {"id": "0806f04d-c44e-4cf6-9480-a43ab36ca560", "name": "Tornby Strand Camperpitc
+    price                          = 37.5
+    priceBreakdown                 = {"fee": 2.5, "totalPrice": 35, "pricePerNight": 35}
+    priceRange                     = {"max": 35, "min": 25}
+    sitecode                       = 48625
+    subscriptionLevel              = 20
+    subtitle                       = Hirtshals, Denemarken
+    thumbnail                      = https://images.campercontact.com/media/photos/location/0806f04d-c44e-4cf6-9480-a
+    title                          = Tornby Strand Camperpitch- Hirtshals 
+    translatedPermalinks           = [{"locale": "nl", "permalink": "/denemarken/-/hirtshals/48625/tornby-strand-camp
+    type                           = poi
+
+  SPOT RECONCILIADO: 20/21 campos con valor
+    acceso_grandes            = True   ← en prompt
+    agua_potable              = True   ← en prompt
+    ducha                     = True   ← en prompt
+    electricidad              = True   ← en prompt
+    email                     = mail@tornbystrandcamping.dk   ✗ NO en prompt
+    gratuito                  = False   ← en prompt
+    iluminacion               = True   ✗ NO en prompt
+    num_plazas                = 40   ← en prompt
+    perros                    = True   ✗ NO en prompt
+    precio_aprox              = 31.5   ← en prompt
+    precio_info               = min: 25 / max: 35   ← en prompt
+    reserva_req               = True   ✗ NO en prompt
+    seguridad                 = True   ✗ NO en prompt
+    telefono                  = +4598977877   ✗ NO en prompt
+    temporada_apertura        = Todo el año   ← en prompt
+    vaciado_grises            = True   ← en prompt
+    vaciado_negras            = True   ← en prompt
+    wc_publico                = True   ← en prompt
+    web                       = https://tornbystrandcamping.dk/   ✗ NO en prompt
+    wifi                      = True   ← en prompt
+
+  📊 GAP:
+     - 15 campos no-vacíos en raw
+     - 20 llegan a spots (de 21 columnas posibles)
+     - 13 llegan al prompt v4 SERVICES block
+     - posible pérdida raw→spot: -5 campos
+
+================================================================================
+FUENTE: campingcarpark
+================================================================================
+  spot_id=254855 | 'Aire Camping-Car-Park Vannes' [fr] tipo=area_ac
+  total_reviews=7
+
+  RAW DATA: 69 keys totales, 55 con valor no-vacío
+
+  Campos con datos en raw (top 30):
+    _links                         = {"self": {"href": "/shop-api/locations/1"}}
+    address                        = 188 Avenue Maréchal Juin
+    adjacentLocations              = {"0": 381, "2": 277, "3": 279, "4": 351, "5": 738, "6": 281, "7": 599, "8": 1216
+    amperage                       = 6
+    authorizedVehicles             = {"tents": false, "campers": true, "caravans": false, "notAutonomousVans": false}
+    availableAdjacentLocations     = [{"id": 381, "publicName": "Grand-Champ, Golfe du Morbihan", "distanceKms": 15},
+    availablePitchesNumber         = 3
+    averageRating                  = 4.1
+    benefits                       = Au cœur de la presqu'île de Conleau
+A 200 m de la plage
+Bus en direction de Va
+    city                           = Vannes
+    cityWebsite                    = https://www.golfedumorbihan.bzh/fiche/bassin-de-conleau/
+    country                        = France
+    countryCode                    = FR
+    countryName                    = France
+    currentPrice                   = {"endsAt": "2026-12-31", "taxRate": 10.0, "beginsAt": "2026-01-01", "touristTax"
+    customersProfile               = ["ccowner", "truck", "van"]
+    department                     = Morbihan
+    description                    = Au cœur du Golfe du Morbihan, l'aire de Vannes est idéalement située entre la vi
+    destinationTypes               = ["sea", "heritage"]
+    electricalOutletCount          = 32
+    events                         = Tous les 2 ans, la Semaine du Golfe réunit de nombreux bateaux et spectacles dan
+    geographicalMapURL             = https://static-recette.campingcarpark.com/media/cache/vich_thumbnail/geographica
+    id                             = 1
+    images                         = [{"priority": 0, "mobileUrl": "https://gateway.feature.campingcarpark.com/media/
+    internalRulesURL               = {"en_GB": "https://octopusstaging.cellar-c2.services.clever-cloud.com/int-rules/
+    isBookable                     = True
+    isTravelerRegistrationRequired = True
+    labels                         = {"allLabels": [{"code": "label_villes_et_pays_dart_et_dhistoire", "link": null, 
+    latitude                       = 47.63309
+    linkUrl                        = /fr_FR/camping-car/bretagne/56-morbihan/vannes-conleau?areaType=aire-etape-campi
+    ... (25 más)
+
+  SPOT RECONCILIADO: 19/21 campos con valor
+    acceso_grandes            = True   ← en prompt
+    agua_potable              = True   ← en prompt
+    altura_max_m              = 2.0   ← en prompt
+    ducha                     = False   ← en prompt
+    electricidad              = True   ← en prompt
+    gratuito                  = False   ← en prompt
+    iluminacion               = True   ✗ NO en prompt
+    num_plazas                = 33   ← en prompt
+    perros                    = True   ✗ NO en prompt
+    precio_aprox              = 13.399999618530273   ← en prompt
+    precio_info               = min: 10 / max: 15   ← en prompt
+    reserva_req               = False   ✗ NO en prompt
+    seguridad                 = False   ✗ NO en prompt
+    temporada_apertura        = Todo el año   ← en prompt
+    vaciado_grises            = True   ← en prompt
+    vaciado_negras            = True   ← en prompt
+    wc_publico                = True   ← en prompt
+    web                       = https://www.caramaps.com/spot/aa00557d-772b-4f99-947d-876d14bfeb03   ✗ NO en prompt
+    wifi                      = False   ← en prompt
+
+  📊 GAP:
+     - 55 campos no-vacíos en raw
+     - 19 llegan a spots (de 21 columnas posibles)
+     - 14 llegan al prompt v4 SERVICES block
+     - posible pérdida raw→spot: 36 campos
+
+================================================================================
+FUENTE: agricamper
+================================================================================
+  spot_id=77247 | 'Agriturismo Colle Villano' [it] tipo=area_ac
+  total_reviews=16
+
+  RAW DATA: 43 keys totales, 36 con valor no-vacío
+
+  Campos con datos en raw (top 30):
+    accepte_appel                  = 1
+    accepte_caravanes              = 1
+    accepte_gros_camping_car       = 1
+    accepte_handicap               = 1
+    accueillant_code               = 7073
+    accueillant_id                 = 149
+    adresse_code_postal            = 33040
+    adresse_latitude               = 46.148404
+    adresse_longitude              = 13.349734
+    adresse_province               = Udine (UD)
+    adresse_rue                    = Via Antonutti, 38
+    adresse_ville                  = Faedis
+    fiche_label                    = [2, 3, 6]
+    fiche_label_label              = ["DOC - Controlled Designation of Origin", "DOCG - Controlled and guaranteed des
+    fiche_langue_parlee            = [2, 1]
+    fiche_langue_parlee_label      = ["English", "Italian"]
+    fiche_photo                    = {"main_photo": {"miniature": "https://agricamper.s3.eu-west-3.amazonaws.com/149/
+    fiche_position                 = [1, 2]
+    fiche_position_label           = ["Countryside", "Mountain"]
+    fiche_produit                  = [10]
+    fiche_produit_label            = ["Wine and spirits"]
+    fiche_service                  = [3, 16, 7, 10, 20, 1, 13, 4, 8, 11]
+    fiche_service_label            = ["Direct sale", "Dogs accepted (kept on a leash)", "Electrical connection", "Ill
+    fiche_traduction               = {"de_DE": {"aire": "Hof.", "produits": "Typische friaulische Weine. Restaurant m
+    fiche_typologie                = [2, 5]
+    fiche_typologie_label          = ["Agritourism", "Cellar"]
+    horaire_arrivee_id             = 3
+    horaire_arrivee_label          = 19:00
+    id                             = 10067
+    nom                            = Bertossi
+    ... (6 más)
+
+  SPOT RECONCILIADO: 18/21 campos con valor
+    acceso_grandes            = True   ← en prompt
+    agua_potable              = True   ← en prompt
+    ducha                     = False   ← en prompt
+    electricidad              = True   ← en prompt
+    email                     = info@collevillano.it   ✗ NO en prompt
+    gratuito                  = True   ← en prompt
+    iluminacion               = False   ✗ NO en prompt
+    num_plazas                = 10   ← en prompt
+    perros                    = True   ✗ NO en prompt
+    precio_aprox              = 0.0   ← en prompt
+    precio_info               = min: 0 / max: 0   ← en prompt
+    seguridad                 = False   ✗ NO en prompt
+    telefono                  = +390432728890   ✗ NO en prompt
+    vaciado_grises            = True   ← en prompt
+    vaciado_negras            = False   ← en prompt
+    wc_publico                = False   ← en prompt
+    web                       = https://www.campercontact.com/italy/friuli-venezia-giulia/faedis-fojda/100297/agriturismo-colle-villano   ✗ NO en prompt
+    wifi                      = True   ← en prompt
+
+  📊 GAP:
+     - 36 campos no-vacíos en raw
+     - 18 llegan a spots (de 21 columnas posibles)
+     - 12 llegan al prompt v4 SERVICES block
+     - posible pérdida raw→spot: 18 campos
+
+================================================================================
+FUENTE: caramaps
+================================================================================
+  spot_id=68211 | 'Parking Rock of Cashel' [ie] tipo=area_ac
+  total_reviews=58
+
+  RAW DATA: 17 keys totales, 12 con valor no-vacío
+
+  Campos con datos en raw (top 30):
+    address                        = {"lat": 52.520357538108, "lng": -7.8887367993818, "country": "Irlande", "zipCode
+    attributes                     = [{"detail": null, "isFree": false, "attribute": {"code": "", "uuid": "6e60c3da-5
+    campingInformation             = {"notation": null}
+    contactInformation             = {"email": ""}
+    id                             = 118166
+    main                           = True
+    name                           = Parking Lot for Rock of Cashel
+    openingDates                   = [{"end": "2025-12-31T00:00:00+01:00", "start": "2025-01-01T00:00:00+01:00"}]
+    parkingType                    = {"id": 65, "code": "toll_parking", "uuid": "762594c0-458c-4009-b773-5476bda402bb
+    pointOfInterest                = {"id": 57662, "uuid": "80ca3645-09bb-4e8b-8e76-8fb9ac71fa0d", "isPro": false, "p
+    type                           = {"code": "parking", "uuid": "0f1596c3-bf8a-4508-b443-bae33d8a748a", "value": "Ap
+    uuid                           = 18e92cad-0e17-4184-8340-b33822c87bdf
+
+  SPOT RECONCILIADO: 13/21 campos con valor
+    agua_potable              = False   ← en prompt
+    ducha                     = False   ← en prompt
+    electricidad              = False   ← en prompt
+    gratuito                  = False   ← en prompt
+    iluminacion               = False   ✗ NO en prompt
+    num_plazas                = 4   ← en prompt
+    perros                    = True   ✗ NO en prompt
+    precio_info               = min: 1 / max: 10   ← en prompt
+    seguridad                 = False   ✗ NO en prompt
+    vaciado_grises            = False   ← en prompt
+    vaciado_negras            = False   ← en prompt
+    wc_publico                = True   ← en prompt
+    wifi                      = False   ← en prompt
+
+  📊 GAP:
+     - 12 campos no-vacíos en raw
+     - 13 llegan a spots (de 21 columnas posibles)
+     - 10 llegan al prompt v4 SERVICES block
+     - posible pérdida raw→spot: -1 campos
+
+================================================================================
+FUENTE: campy
+================================================================================
+  spot_id=349383 | 'Aire de services Paimpont' [None] tipo=area_ac
+  total_reviews=0
+
+  RAW DATA: 19 keys totales, 10 con valor no-vacío
+
+  Campos con datos en raw (top 30):
+    address                        = 1 Rue de l'Enchanteur Merlin, 35380 Paimpont, France
+    campsite_campy_rating          = 0.8
+    city                           = Paimpont
+    description                    = Large field, surrounded by the greenery. Located in a beautiful village and quie
+    facilities                     = []
+    latitude                       = 48.023333818462994
+    longitude                      = -2.1707004291876175
+    title                          = Paimpont
+    type                           = van
+    uid                            = 1567505820008FR
+
+  SPOT RECONCILIADO: 14/21 campos con valor
+    acceso_grandes            = True   ← en prompt
+    agua_potable              = True   ← en prompt
+    ducha                     = False   ← en prompt
+    electricidad              = False   ← en prompt
+    gratuito                  = False   ← en prompt
+    num_plazas                = 10   ← en prompt
+    perros                    = True   ✗ NO en prompt
+    precio_aprox              = 6.0   ← en prompt
+    precio_info               = 6.00 EUR   ← en prompt
+    telefono                  = 299078118   ✗ NO en prompt
+    vaciado_grises            = True   ← en prompt
+    vaciado_negras            = True   ← en prompt
+    web                       = https://www.caramaps.com/spot/c16c463b-2918-442c-8642-131648f7c42a   ✗ NO en prompt
+    wifi                      = False   ← en prompt
+
+  📊 GAP:
+     - 10 campos no-vacíos en raw
+     - 14 llegan a spots (de 21 columnas posibles)
+     - 11 llegan al prompt v4 SERVICES block
+     - posible pérdida raw→spot: -4 campos

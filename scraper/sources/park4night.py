@@ -9,6 +9,7 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_park4night, merge_extra
 
 P4N_BASE = "https://guest.park4night.com/services/V4.1"
 P4N_LUGARES = f"{P4N_BASE}/lieuxGetFilter.php"
@@ -158,7 +159,7 @@ class Park4NightSource(AbstractSource):
                 for f in (raw.get("photos") or []) if isinstance(f, dict) and f.get("link_large")
             ]
 
-            return {
+            norm = {
                 "source_id": str(p4n_id),
                 "nombre": nombre,
                 "lat": lat,
@@ -192,6 +193,7 @@ class Park4NightSource(AbstractSource):
                 "acceso_grandes": _b(raw, "camping_car"),
                 "fotos_urls": fotos,
             }
+            return merge_extra(norm, extract_park4night(raw))
         except Exception as e:
             logger.error(f"Error normalizando P4N id={raw.get('id')}: {e}")
             return None

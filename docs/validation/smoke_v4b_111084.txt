@@ -1,0 +1,46 @@
+SPOT 111084: 'Tornby Strand Camping - Hirtshals'  [DK]
+reviews total=60 seleccionadas=50
+prompt chars=14069  tokens~3517
+
+
+== deepseek/deepseek-v4-flash ==================================================
+latency=7.5s  in=7070  out=1034  cost=$0.00128
+
+CLAIMS (15):
+   1. [quietness                     ]  val=0.8                   conf=0.8  rev_idx=None
+      excerpt: 'Sehr toller und ruhiger Platz.'
+   2. [cleanliness                   ]  val=0.9                   conf=0.9  rev_idx=None
+      excerpt: 'saubere neue Toiletten und Duschen vorhanden'
+   3. [large_vehicle                 ]  val=0.9                   conf=0.8  rev_idx=None
+      excerpt: 'Große Stellplätze'
+   4. [water_working                 ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Drinking water: Yes'
+   5. [electricity_working           ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Electricity: Yes'
+   6. [dump_station_working          ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Grey water dump: Yes'
+   7. [dog_friendly                  ]  val=True                  conf=0.85  rev_idx=None
+      excerpt: 'Dogs allowed: Yes'
+   8. [family_friendly               ]  val=True                  conf=0.8  rev_idx=None
+      excerpt: 'playground for childrens, dog forest, swimming pool'
+   9. [beauty                        ]  val=0.8                   conf=0.7  rev_idx=None
+      excerpt: 'Sehr schön und ruhig gelegener Platz'
+  10. [safety                        ]  val=0.9                   conf=0.7  rev_idx=None
+      excerpt: 'Las noches, oscuras y silenciosas. Paz y tranquilidad.'
+  11. [parking_capacity              ]  val=large                 conf=0.8  rev_idx=None
+      excerpt: 'Großer Campingplatz'
+  12. [sea_view                      ]  val=False                 conf=0.7  rev_idx=None
+      excerpt: "Der Name 'Strand' kann allerdings verwirren, ist noch ein guter KM weg"
+  13. [lake_nearby                   ]  val=False                 conf=0.6  rev_idx=None
+      excerpt: 'Zu Fuß zum Strand dauert es ca. 15-20 Minuten'
+  14. [crowd_level                   ]  val=0.3                   conf=0.7  rev_idx=None
+      excerpt: 'Anfang September waren wir gefühlt fast alleine'
+  15. [overnight_safe                ]  val=True                  conf=0.8  rev_idx=None
+      excerpt: 'Quiet at night.'
+
+SUMMARY (English):
+  Tornby Strand Camping is a large, well-maintained campsite near Hirtshals ferry port, ideal for transit to/from Norway. It offers spacious pitches, modern and clean sanitary facilities, and full camper services (water, electricity, dump station). The site is family- and dog-friendly with playgrounds, a pool, and a dog forest. The beach is about 1-1.5 km away. Some reviews note that the indoor pool costs extra and Wi-Fi can be poor. Prices are considered high for the area, especially in peak season.
+
+TAGS:     ['ferry stop', 'family-friendly', 'dog-friendly', 'clean sanitary', 'large pitches', 'spacious', 'quiet', 'beach nearby']
+BEST_FOR: ['families', 'couples', 'transit travelers', 'dog owners']
+BEST_SEASON: summer

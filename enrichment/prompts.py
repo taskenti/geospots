@@ -1,197 +1,276 @@
 """LLM prompt templates for Phase 3.
 
 v1 (review-level, regex-first fallback) → kept for backwards compatibility.
-v2 (spot-level, Gemini-first via Batch API + context caching) → active path.
+v2/v3 (spot-level, Spanish narrative) → superseded.
+v4 (spot-level, English narrative, excerpts in original language) → active.
 """
 
 from __future__ import annotations
 
 # ═══════════════════════════════════════════════════════════════
-# v2: Spot-level prompts (1 LLM call por spot, Batch API)
+# v4: Spot-level prompts (English narrative, original-language excerpts)
 # ═══════════════════════════════════════════════════════════════
 
-ENRICHMENT_VERSION = 3  # v3: añade bloque SERVICIOS + reglas tricky + calibración confidence + idioma forzado.
+ENRICHMENT_VERSION = 4  # v4: English narrative; excerpts in original language; ignore-boilerplate rule; soft season rule.
 
-# Catálogo completo (sin descripciones largas — el LLM ya conoce el dominio).
-# Mantener sincronizado con db/schema.sql signal_types y enrichment/signal_registry.py.
+# Signal catalog — concise; the LLM already knows the domain.
+# Keep in sync with db/schema.sql signal_types and enrichment/signal_registry.py.
 SIGNAL_CATALOG_V2 = """\
 NUMERIC (0.0-1.0):
-  quietness          tranquilidad (0=ruidoso, 1=silencio total)
-  noise              ruido general
-  road_noise         ruido de carretera
-  party_noise        ruido de gente/fiesta
-  train_noise        ruido de tren
-  safety             seguridad percibida
-  police_risk        riesgo de policia/multa
-  theft_risk         riesgo de robos
-  beauty             belleza del entorno
-  cleanliness        limpieza
-  large_vehicle      apto >7m (0=imposible, 1=perfecto)
-  road_quality       calidad del acceso (0=intransitable, 1=asfalto)
-  crowd_level        masificacion
-  wind_exposure      exposicion al viento
-  stealth            discrecion para pernocta
-  cell_coverage      cobertura movil
-  mosquitoes         mosquitos (estacional)
+  quietness            quietness (0=loud, 1=total silence)
+  noise                general noise level
+  road_noise           road traffic noise
+  party_noise          partying/crowd noise
+  train_noise          train noise
+  safety               perceived safety
+  police_risk          risk of police intervention/fines (0=none, 1=high)
+  theft_risk           theft risk (0=none, 1=high)
+  beauty               surrounding beauty
+  cleanliness          cleanliness
+  large_vehicle        suitability for >7m vehicles (0=impossible, 1=perfect)
+  road_quality         access quality (0=impassable, 1=tarmac)
+  crowd_level          crowding (0=empty, 1=packed)
+  wind_exposure        wind exposure
+  stealth              discretion for overnight (0=very visible, 1=invisible)
+  cell_coverage        mobile phone coverage
+  mosquitoes           mosquito presence (seasonal)
 
 BOOLEAN:
-  sea_view             vistas al mar
-  mountain_view        vistas a montaña
-  lake_nearby          lago/rio cercano
-  shade_morning        sombra por la mañana
-  shade_afternoon      sombra por la tarde
-  overnight_safe       pernocta posible sin problemas
-  wild_camping_legal   acampada libre legal
-  dog_friendly         apto perros
-  family_friendly      apto familias
-  accessible_pmr       accesible movilidad reducida
-  water_working        agua operativa AHORA
-  electricity_working  electricidad operativa AHORA
-  dump_station_working vaciado aguas operativo AHORA
+  sea_view             sea view
+  mountain_view        mountain view
+  lake_nearby          lake/river nearby
+  shade_morning        morning shade
+  shade_afternoon      afternoon shade
+  overnight_safe       overnight stay possible without issues
+  wild_camping_legal   wild camping legal/authorised
+  dog_friendly         dog-friendly
+  family_friendly      family-friendly
+  accessible_pmr       accessible (reduced mobility)
+  water_working        water service operational NOW
+  electricity_working  electricity operational NOW
+  dump_station_working dump station operational NOW
 
-TEXT (categóricos):
-  noise_source         fuente de ruido. Valores: highway|road|train|airport|sea|wind|party|industry|crowd|other
-  parking_capacity     capacidad. Valores: small|medium|large
+TEXT (categorical):
+  noise_source         noise source. Values: highway|road|train|airport|sea|wind|party|industry|crowd|other
+  parking_capacity     capacity. Values: small|medium|large
 """
 
 SYSTEM_PROMPT_V2 = f"""\
-Eres un analista experto en spots para autocaravanas y furgonetas camper.
-Recibes el contexto de UN spot (datos + servicios estructurados + descripciones
-+ reviews ordenadas por relevancia temporal, mas recientes primero) y devuelves
-un JSON estructurado con afirmaciones explicitas, resumen narrativo y tags.
+You are an expert analyst of motorhome/campervan spots in Europe.
+You receive the context of ONE spot (metadata + structured services + descriptions
++ reviews ordered by temporal relevance, most recent first) and return a JSON
+object with atomic claims, a narrative summary, and tags.
 
-═══ REGLAS DE EXTRACCION ═══
+═══ EXTRACTION RULES ═══
 
-1. NO inventes. Solo afirma lo que el texto soporta literal o por implicacion clara.
-2. Cada claim cita review_id de origen, o "description" si viene de descripciones,
-   o "services" si viene del bloque SERVICIOS estructurado.
-3. Da mas peso a reviews recientes. Si reviews antiguas y recientes contradicen,
-   prioriza recientes y mencionalo en summary.
-4. Negacion, sarcasmo e ironia importan: "no muy tranquilo" != "tranquilo".
-5. Scores numericos en 0.0-1.0; booleanos solo con evidencia clara.
-6. Si una señal no tiene soporte, NO la incluyas (no metas null).
-7. NO REPITAS: MAXIMO 1 claim por signal_type. Si varias reviews dicen lo mismo,
-   emite UN solo claim con el review_id mas representativo (el mas reciente o
-   explicito) y refleja el consenso en el value.
-   EXCEPCION: noise_source admite varios claims (un valor distinto por claim).
-8. Idiomas en reviews: es/en/fr/de/it/nl/pt. Entiende todos.
+1. DO NOT invent. Only assert what the text literally supports or clearly implies.
+2. Every claim cites review_id, or "description" if from spot descriptions,
+   or "services" if from the structured SERVICES block.
+3. Weight recent reviews more. If old and recent reviews contradict,
+   prefer recent and mention the change in the summary.
+4. Negation, sarcasm and irony matter: "not very quiet" != "quiet".
+5. Numeric scores in 0.0-1.0; booleans only with clear evidence.
+6. If a signal has no support, OMIT it (do not emit null).
+7. NO REPETITION: MAX 1 claim per signal_type. If multiple reviews say the same,
+   emit ONE claim citing the most representative review_id (most recent or most
+   explicit) and reflect the consensus in the value.
+   EXCEPTION: noise_source allows multiple claims (one per distinct value).
+8. Reviews come in multiple languages (es/en/fr/de/it/nl/pt). Understand them all.
 
-═══ REGLAS PARA SEÑALES ESPECIFICAS (las que más fallan) ═══
+═══ EXCERPT LANGUAGE — CRITICAL ═══
 
-9. wild_camping_legal:
-   - True SOLO si TEXTO menciona explicitamente legalidad ("autorizado",
-     "permitido", "area habilitada", "señalizado para autocaravanas",
-     "P + caravana", "wohnmobil erlaubt", "stationnement autorisé").
-   - "Gratis" o "gratuito" NO implica legal.
-   - Cartel o mencion de prohibicion = False, AUNQUE sea parcial
-     ("prohibido motorhomes en un lado", "no overnight signs").
-   - Si no hay evidencia clara en ninguna direccion, OMITE el claim.
+9. Excerpts MUST stay in the ORIGINAL language of the review. NEVER translate.
+   - If a review is in Italian, the excerpt is in Italian.
+   - If a review is in German, the excerpt is in German.
+   - This preserves auditability and cultural nuance (stellplatz, sosta,
+     pernocta, vaciar grises, área AC...).
+   - Only `summary`, `tags`, `best_for`, `best_season`, `avoid_season` are
+     translated to English. Excerpts NEVER.
 
-10. large_vehicle:
-    - Restricciones de longitud/altura BAJAN el score, no lo suben.
-    - "max 7m", "non oltre 7m", "no superior a X", "altura limitada",
-      "barriers", "low clearance" → score 0.2-0.4.
-    - Solo > 0.7 si reviews mencionan explicitamente acceso de
-      camiones, autocaravanas grandes (>7m), 5th wheels, integrales largos.
-    - Si SERVICIOS da altura_max_m: usa ese dato como anclaje
-      (>3.0m = bueno; 2.0-2.5m = muy restrictivo).
+═══ IGNORE BOILERPLATE ═══
 
-11. water_working / electricity_working / dump_station_working (CRITICO):
-    - SIEMPRE emite estos claims si el bloque SERVICIOS tiene dato (Si/No),
-      independientemente de si hay reviews que lo confirmen. Son hechos duros
-      reconciliados de las fuentes. NO los omitas porque "sean obvios".
-    - Patron por defecto (sin contradiccion en reviews):
-        SERVICIOS "Agua: Si"  → water_working=true,  conf 0.85, review_id="services"
-        SERVICIOS "Agua: No"  → water_working=false, conf 0.9,  review_id="services"
-        SERVICIOS "Electricidad: Si" → electricity_working=true, conf 0.85, review_id="services"
-        SERVICIOS "Vaciado grises: Si" o "Vaciado negras: Si" → dump_station_working=true, conf 0.85, review_id="services"
-    - Si review reciente CONTRADICE SERVICIOS, la review gana:
-        SERVICIOS "Agua: Si" + review "el grifo no funciona" → false, conf 0.8, review_id=N
-    - Si SERVICIOS no menciona el servicio Y ninguna review lo menciona → OMITE.
-    - En campings/areas AC con muchos servicios, los 3 claims working DEBEN
-      aparecer (uno por cada servicio listado en SERVICIOS).
+10. Reviews often contain closing politeness ("kommen gerne wieder",
+    "merci la commune", "vielen Dank", "saludos", "we'll be back",
+    "Sehr empfehlenswert"), personal signatures with names, and gratitude
+    to owners/municipalities. IGNORE those fragments — they carry no signal.
 
-12. police_risk / theft_risk:
-    - UNA sola review reciente con evidencia clara basta. No exijas consenso.
-    - "La policia nos movio", "ronda policial", "nos despertaron a las 3am",
-      "nos robaron las bicis", "rompieron ventana" → claim con conf 0.7-0.8.
-    - police_risk y theft_risk son escalas 0=sin riesgo, 1=alto riesgo.
+    EXCEPTION: if a review is mostly politeness BUT mentions ONE factual
+    detail in passing ("they stole our bikes", "police at 3am", "broken
+    shower"), that detail STILL COUNTS as evidence. Weak-but-rare signals
+    matter — emit them with appropriate confidence.
 
-13. Idiomas en outputs:
-    - summary_es DEBE estar en español. summary_en DEBE estar en inglés.
-    - Independientemente del idioma de las reviews originales. TRADUCE si hace falta.
-    - tags y best_for en español, minusculas.
-    - best_season / avoid_season en español: "primavera", "verano", "invierno",
-      "otoño", o rango breve "junio-agosto", "abril-octubre". null si no claro.
+═══ TRICKY SIGNALS — SPECIFIC RULES ═══
 
-═══ CALIBRACION DE CONFIDENCE ═══
+11. wild_camping_legal:
+    - True ONLY if TEXT explicitly mentions legality ("authorized",
+      "permitted", "designated area", "P + caravan sign",
+      "wohnmobil erlaubt", "stationnement autorisé", "sosta autorizzata").
+    - "Free" / "gratis" / "gratuito" does NOT imply legal.
+    - Prohibition sign or mention = False, EVEN if partial
+      ("forbidden motorhomes sign on one side", "no overnight signs").
+    - If no clear evidence either way, OMIT the claim.
 
-  0.9-1.0: afirmacion literal en 2+ reviews recientes coincidentes, o dato duro
-           de SERVICIOS confirmado por review reciente.
-  0.7-0.8: afirmacion literal en 1 review reciente, o dato de SERVICIOS solo.
-  0.5-0.6: inferencia razonable a partir de contexto.
-  <0.5  : OMITIR el claim (no aporta valor con esa incertidumbre).
+12. large_vehicle:
+    - Length/height restrictions LOWER the score, not raise it.
+    - "max 7m", "non oltre 7m", "no superior a X", "height limited",
+      "low barriers", "low clearance" → score 0.2-0.4.
+    - Only > 0.7 if reviews explicitly mention access of trucks, large
+      motorhomes (>7m), 5th wheels, long integral campers.
+    - If SERVICES provides altura_max_m: use it as anchor
+      (>3.0m = good; 2.0-2.5m = very restrictive).
 
-═══ SEÑALES PERMITIDAS ═══
+13. water_working / electricity_working / dump_station_working (CRITICAL):
+    - ALWAYS emit these claims if the SERVICES block has a value (Yes/No),
+      regardless of whether reviews confirm. These are hard reconciled facts
+      from the sources. DO NOT skip them because "obvious".
+    - Default pattern (no contradiction in reviews):
+        SERVICES "Drinking water: Yes"  → water_working=true,  conf 0.85, review_id="services"
+        SERVICES "Drinking water: No"   → water_working=false, conf 0.9,  review_id="services"
+        SERVICES "Electricity: Yes"     → electricity_working=true, conf 0.85, review_id="services"
+        SERVICES "Grey water dump: Yes" or "Black water dump: Yes" → dump_station_working=true, conf 0.85, review_id="services"
+    - If a recent review CONTRADICTS SERVICES, the review wins:
+        SERVICES "Water: Yes" + review "the tap is broken" → false, conf 0.8, review_id=N
+    - If SERVICES doesn't mention the service AND no review mentions it → OMIT.
+    - At campings/aires with many services, all 3 working claims MUST appear
+      (one per service listed in SERVICES).
+
+14. police_risk / theft_risk:
+    - ONE recent review with clear evidence is enough. Don't require consensus.
+    - "Police moved us", "police patrol", "woken at 3am", "bikes stolen",
+      "window smashed" → claim with conf 0.7-0.8.
+    - Scales: 0=no risk, 1=high risk.
+
+15. dog_friendly / family_friendly from SERVICES (v4b):
+    - If SERVICES "Dogs allowed: Yes" → emit dog_friendly=true, conf 0.85,
+      review_id="services". If "Dogs allowed: No" → dog_friendly=false, conf 0.9.
+    - Reviews mentioning kids playing happily → family_friendly=true.
+    - These are hard facts when source declares them; don't re-infer.
+
+16. SERVICES extras (lighting, security, booking, contact) (v4b):
+    - "Night lighting: Yes" → if reviews don't contradict, mildly improves
+      safety perception (consider it as context when scoring safety).
+    - "On-site security: Yes" → context for safety, NOT an automatic safety=1.
+    - "Booking required: Yes" → useful for summary, no claim emitted directly.
+    - Web/Phone/Email → DO NOT emit claims. Use them only in the summary if
+      relevant ("contact via web for booking") or skip entirely. Never put
+      contact info in tags or best_for.
+
+17. PROHIBITIONS / RISKS (v4c — CRITICAL):
+    - If SERVICES contains "PROHIBITIONS: ..." → these are HARD restrictions
+      from the source (e.g., "no fires", "vehicleMore9m", "no dogs",
+      "no late noise"). Reflect them:
+        * "vehicleMore9m" or similar → large_vehicle <= 0.4
+        * "dog" or "no dogs" in prohibitions → dog_friendly=false, conf 0.9
+        * presence of any prohibition mentioning "stay/overnight/camping
+          restrictions" → wild_camping_legal=false (override "free" hint)
+    - If SERVICES contains "RISKS: ..." → mention in summary if relevant.
+      Examples: "flood risk", "exposed to wind" → context for wind_exposure,
+      potentially safety.
+
+18. SERVICES extras v4c (pool, laundry, gas refill, activities, products):
+    - "Pool: Yes" → may inform family_friendly or just stay in summary.
+    - "Laundry/Gas refill/Restaurant: Yes" → mention in summary if relevant.
+      Do NOT emit dedicated claims (no signal_type for these — they go in
+      summary and tags).
+    - "Nearby activities: MTB, Hiking, Fishing..." → use in best_for
+      (cyclists, hikers, anglers).
+    - "Languages spoken: en, it, ..." → useful for summary
+      ("multilingual hosts").
+    - "Products for sale: Wine, Cheese..." → mention in summary
+      (agroturismo selling local products).
+    - "Quality labels: DOC, DOCG..." → mention in summary if relevant
+      ("DOC-certified winery"). Add to tags if iconic.
+    - "Typology: agritourism, cellar" / "Setting: countryside, mountain" →
+      context for tags and best_for.
+    - "Descriptions: sanitary/surroundings/events/special_info" → use for
+      summary content when richness allows (rich/very_rich spots).
+
+═══ CONFIDENCE CALIBRATION ═══
+
+  0.9-1.0: literal assertion in 2+ recent coherent reviews, or hard SERVICES
+           datum confirmed by a recent review.
+  0.7-0.8: literal assertion in 1 recent review, or SERVICES datum alone.
+  0.5-0.6: reasonable inference from context.
+  <0.5  : OMIT the claim (not worth the uncertainty).
+
+═══ ALLOWED SIGNALS ═══
 {SIGNAL_CATALOG_V2}
 
-═══ RESUMEN Y TAGS ═══
+═══ SUMMARY AND TAGS (English) ═══
 
-- summary_es / summary_en: 2-3 frases. Factual y EQUILIBRADO. NO marketing.
-  Menciona aspectos negativos relevantes (ruido, robos, restricciones, mosquitos)
-  si las reviews los citan. Menciona cambios temporales si los hay.
-- tags: 3-8 palabras clave en minusculas español, sin duplicados semanticos
-  (no pongas "gratis" Y "gratuito"; elige uno).
-- best_for: 1-4 perfiles en español (parejas, familias, overlanding, perros,
-  fotografia, surferos, ciclistas, trabajo-remoto...).
-- best_season / avoid_season: solo si las reviews lo soportan.
+- summary: IN ENGLISH. Factual and BALANCED. NO marketing tone.
+  LENGTH: follow the SUMMARY_INSTRUCTION at the end of the user prompt
+  (adapts to spot richness: simple spots get 2-3 sentences, rich spots get
+  5-8 sentences with multiple aspects).
+  Mention relevant negatives (noise, theft, restrictions, mosquitoes) if reviews
+  cite them. Mention temporal changes if any. You MAY include local terms in
+  context (e.g., "free 'área AC' near Coop", "quiet 'stellplatz' by the lake").
+  IMPORTANT: longer summaries must NOT mean more marketing or filler. Each
+  additional sentence must carry NEW factual information. If you can't find
+  more facts to report, keep it short.
+- tags: 3-8 keywords in lowercase ENGLISH, no semantic duplicates
+  (avoid "free" AND "gratis"; pick one).
+- best_for: 1-4 profiles in ENGLISH (couples, families, overlanding, dogs,
+  photography, surfers, cyclists, remote-work...).
+- best_season / avoid_season: only emit if you're confident the reviews support
+  it. ENGLISH ("spring", "summer", "autumn", "winter", or "june-august").
+  If in doubt, OMIT (null).
 
-═══ EJEMPLO DE INTERPRETACION TRICKY ═══
+═══ TRICKY INTERPRETATION EXAMPLE ═══
 
-Si reviews dicen:
+If reviews say:
   [review_id=42] "Parking gratuito junto al super, max 7m. Cartel de prohibido
-  motorhomes en la entrada principal pero la gente aparca por detras sin problema."
+   motorhomes en la entrada principal pero la gente aparca por detras."
   [review_id=43] "Nos despertaron policia a las 4am pidiendo que nos moviesemos."
+  [review_id=44] "Lieben Dank Christa! Wir kommen gerne wieder. Übrigens, das
+   Wasser am Hahn funktionierte nicht."
 
-Claims correctos:
-  - large_vehicle=0.3 (restriccion 7m), review_id=42, conf=0.8
-  - wild_camping_legal=false (cartel de prohibicion), review_id=42, conf=0.7
-  - police_risk=0.7 (intervencion reciente), review_id=43, conf=0.8
-  - gratuito... no es un signal_type valido — esto va en summary y tags.
+Correct claims:
+  - large_vehicle=0.3 (7m restriction), review_id=42, conf=0.8,
+    excerpt="max 7m"  (excerpt in Spanish — original language)
+  - wild_camping_legal=false (prohibition sign), review_id=42, conf=0.7,
+    excerpt="Cartel de prohibido motorhomes"
+  - police_risk=0.7 (recent intervention), review_id=43, conf=0.8,
+    excerpt="Nos despertaron policia a las 4am"
+  - water_working=false (broken tap from review 44, overrides SERVICES if Yes),
+    review_id=44, conf=0.8, excerpt="das Wasser am Hahn funktionierte nicht"
+    Note: review 44 is mostly politeness BUT the working detail counts.
 
-═══ FORMATO DE SALIDA (JSON estricto, sin markdown, sin comentarios) ═══
+═══ OUTPUT FORMAT (strict JSON, no markdown, no comments) ═══
 
 {{
   "claims": [
     {{"signal": "<id>", "value": <num|bool|text>, "confidence": <0-1>,
-      "review_id": <int|"description"|"services">, "excerpt": "<fragmento <=120 chars>"}}
+      "review_id": <int|"description"|"services">,
+      "excerpt": "<fragment in ORIGINAL language, <=120 chars>"}}
   ],
-  "summary_es": "<string>",
-  "summary_en": "<string>",
-  "tags": ["<tag>", ...],
-  "best_for": ["<perfil>", ...],
-  "best_season": "<string|null>",
-  "avoid_season": "<string|null>"
+  "summary": "<English string, 2-3 sentences>",
+  "tags": ["<english-tag>", ...],
+  "best_for": ["<english-profile>", ...],
+  "best_season": "<english string|null>",
+  "avoid_season": "<english string|null>"
 }}
 
-Si no hay informacion suficiente para nada: {{"claims":[],"summary_es":null,"summary_en":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
+If nothing extractable: {{"claims":[],"summary":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
 """
 
 
-def _fmt_bool_es(b) -> str:
+def _fmt_bool_en(b) -> str:
     if b is True:
-        return "Sí"
+        return "Yes"
     if b is False:
         return "No"
     return "?"
 
 
 def _build_servicios_block(spot: dict) -> list[str]:
-    """Construye el bloque SERVICIOS con los datos estructurados de las fuentes.
+    """Build the SERVICES block with structured facts from the sources.
 
-    Devuelve [] si no hay ningún dato — el LLM entiende que no hay info.
+    Returns [] if no service data — the LLM understands no info available.
+    v4: labels in English to match summary/tags language.
+    v4b: added perros, iluminacion, seguridad, reserva_req, web, telefono, email.
     """
-    # Recoger todos los campos relevantes (pueden ser None)
+    # Pull all service fields (may be None)
     gratuito       = spot.get("gratuito")
     precio_aprox   = spot.get("precio_aprox")
     precio_info    = (spot.get("precio_info") or "").strip()
@@ -206,81 +285,231 @@ def _build_servicios_block(spot: dict) -> list[str]:
     num_plazas     = spot.get("num_plazas")
     altura_max     = spot.get("altura_max_m")
     temporada      = (spot.get("temporada_apertura") or "").strip()
+    # v4b: extra fields already in spots, previously not passed to prompt
+    perros         = spot.get("perros")
+    iluminacion    = spot.get("iluminacion")
+    seguridad      = spot.get("seguridad")
+    reserva_req    = spot.get("reserva_req")
+    web            = (spot.get("web") or "").strip()
+    telefono       = (spot.get("telefono") or "").strip()
+    email          = (spot.get("email") or "").strip()
 
-    # Si TODO es None/vacío, no emitimos el bloque
-    todos_los_valores = [
+    # v4c extra fields — include them in the "is everything empty?" check
+    extra_keys = (
+        "piscina", "lavanderia", "gas_recharge", "restaurant", "juegos_ninos",
+        "mirador", "zona_protegida", "online_booking", "winter_friendly", "apto_motos",
+        "mtb_friendly", "surf_friendly", "fishing", "climbing", "hiking_nearby",
+        "amperaje", "n_enchufes", "max_noches",
+        "idiomas_hablados", "productos_venta", "servicios_extras",
+    )
+    all_values = [
         gratuito, precio_aprox, precio_info, agua, grises, negras,
         electricidad, ducha, wifi, wc, acceso_grandes, num_plazas,
         altura_max, temporada,
-    ]
-    if all(v is None or v == "" for v in todos_los_valores):
+        perros, iluminacion, seguridad, reserva_req,
+        web, telefono, email,
+    ] + [spot.get(k) for k in extra_keys]
+    # JSONB {} counts as empty
+    if all(
+        v is None or v == "" or v == {} or v == []
+        for v in all_values
+    ):
         return []
 
-    out: list[str] = ["SERVICIOS (datos estructurados de fuentes — hechos, no inferir):"]
+    out: list[str] = ["SERVICES (structured facts from sources — do not re-infer):"]
 
-    # Línea 1: precio
-    precio_partes = []
+    # Row 1: price
+    price_parts = []
     if gratuito is True:
-        precio_partes.append("Gratuito: Sí")
+        price_parts.append("Free: Yes")
     elif gratuito is False:
-        precio_partes.append("Gratuito: No")
+        price_parts.append("Free: No")
     if precio_aprox is not None:
-        precio_partes.append(f"Precio aprox: ~{precio_aprox:.0f}€")
+        price_parts.append(f"Approx price: ~{precio_aprox:.0f}€")
     if precio_info:
-        precio_partes.append(f"Info precio: {precio_info[:100]}")
-    if precio_partes:
-        out.append("  " + " | ".join(precio_partes))
+        price_parts.append(f"Price info: {precio_info[:100]}")
+    if price_parts:
+        out.append("  " + " | ".join(price_parts))
 
-    # Línea 2: aguas
-    agua_partes = []
+    # Row 2: water
+    water_parts = []
     if agua is not None:
-        agua_partes.append(f"Agua potable: {_fmt_bool_es(agua)}")
+        water_parts.append(f"Drinking water: {_fmt_bool_en(agua)}")
     if grises is not None:
-        agua_partes.append(f"Vaciado grises: {_fmt_bool_es(grises)}")
+        water_parts.append(f"Grey water dump: {_fmt_bool_en(grises)}")
     if negras is not None:
-        agua_partes.append(f"Vaciado negras: {_fmt_bool_es(negras)}")
-    if agua_partes:
-        out.append("  " + " | ".join(agua_partes))
+        water_parts.append(f"Black water dump: {_fmt_bool_en(negras)}")
+    if water_parts:
+        out.append("  " + " | ".join(water_parts))
 
-    # Línea 3: comodidades
-    com_partes = []
+    # Row 3: amenities
+    amen_parts = []
     if electricidad is not None:
-        com_partes.append(f"Electricidad: {_fmt_bool_es(electricidad)}")
+        amen_parts.append(f"Electricity: {_fmt_bool_en(electricidad)}")
     if ducha is not None:
-        com_partes.append(f"Ducha: {_fmt_bool_es(ducha)}")
+        amen_parts.append(f"Shower: {_fmt_bool_en(ducha)}")
     if wc is not None:
-        com_partes.append(f"WC público: {_fmt_bool_es(wc)}")
+        amen_parts.append(f"Public WC: {_fmt_bool_en(wc)}")
     if wifi is not None:
-        com_partes.append(f"Wifi: {_fmt_bool_es(wifi)}")
-    if com_partes:
-        out.append("  " + " | ".join(com_partes))
+        amen_parts.append(f"Wifi: {_fmt_bool_en(wifi)}")
+    if amen_parts:
+        out.append("  " + " | ".join(amen_parts))
 
-    # Línea 4: capacidad / acceso
-    cap_partes = []
+    # Row 4: site / access / capacity
+    site_parts = []
+    if perros is not None:
+        site_parts.append(f"Dogs allowed: {_fmt_bool_en(perros)}")
+    if iluminacion is not None:
+        site_parts.append(f"Night lighting: {_fmt_bool_en(iluminacion)}")
+    if seguridad is not None:
+        site_parts.append(f"On-site security: {_fmt_bool_en(seguridad)}")
+    if reserva_req is not None:
+        site_parts.append(f"Booking required: {_fmt_bool_en(reserva_req)}")
+    if site_parts:
+        out.append("  " + " | ".join(site_parts))
+
+    # Row 5: capacity / vehicle access
+    cap_parts = []
     if num_plazas is not None:
-        cap_partes.append(f"Plazas: ~{num_plazas}")
+        cap_parts.append(f"Pitches: ~{num_plazas}")
     if altura_max is not None:
-        cap_partes.append(f"Altura máx: {altura_max:.1f}m")
+        cap_parts.append(f"Max height: {altura_max:.1f}m")
     if acceso_grandes is not None:
-        cap_partes.append(f"Acceso vehículos grandes: {_fmt_bool_es(acceso_grandes)}")
-    if cap_partes:
-        out.append("  " + " | ".join(cap_partes))
+        cap_parts.append(f"Large vehicle access: {_fmt_bool_en(acceso_grandes)}")
+    if cap_parts:
+        out.append("  " + " | ".join(cap_parts))
 
-    # Línea 5: temporada
+    # Row 6: season
     if temporada:
-        out.append(f"  Apertura: {temporada[:100]}")
+        out.append(f"  Opening season: {temporada[:100]}")
 
-    out.append("")  # línea en blanco al final
+    # v4c — Row 7: amenities (only show booleans that are True or False)
+    amen2_parts = []
+    for label, val in (
+        ("Pool",          spot.get("piscina")),
+        ("Laundry",       spot.get("lavanderia")),
+        ("Gas refill",    spot.get("gas_recharge")),
+        ("Restaurant",    spot.get("restaurant")),
+        ("Playground",    spot.get("juegos_ninos")),
+        ("Viewpoint",     spot.get("mirador")),
+        ("Protected area", spot.get("zona_protegida")),
+        ("Winter-friendly", spot.get("winter_friendly")),
+        ("Motorbikes OK", spot.get("apto_motos")),
+    ):
+        if val is not None:
+            amen2_parts.append(f"{label}: {_fmt_bool_en(val)}")
+    if amen2_parts:
+        out.append("  " + " | ".join(amen2_parts))
+
+    # v4c — Row 8: activities nearby (only True ones — concise)
+    act_parts = []
+    for label, val in (
+        ("MTB", spot.get("mtb_friendly")),
+        ("Surf/windsurf", spot.get("surf_friendly")),
+        ("Fishing", spot.get("fishing")),
+        ("Climbing", spot.get("climbing")),
+        ("Hiking", spot.get("hiking_nearby")),
+    ):
+        if val is True:
+            act_parts.append(label)
+    if act_parts:
+        out.append(f"  Nearby activities: {', '.join(act_parts)}")
+
+    # v4c — Row 9: electrical capacity (only if meaningful)
+    elec_parts = []
+    if spot.get("amperaje"):
+        elec_parts.append(f"Amperage: {spot['amperaje']}A")
+    if spot.get("n_enchufes"):
+        elec_parts.append(f"Outlets: {spot['n_enchufes']}")
+    if spot.get("max_noches"):
+        elec_parts.append(f"Max nights: {spot['max_noches']}")
+    if spot.get("online_booking") is not None:
+        elec_parts.append(f"Online booking: {_fmt_bool_en(spot['online_booking'])}")
+    if elec_parts:
+        out.append("  " + " | ".join(elec_parts))
+
+    # v4c — Row 10: languages spoken on site / products for sale (agroturismos)
+    if spot.get("idiomas_hablados"):
+        langs = spot["idiomas_hablados"]
+        if isinstance(langs, list) and langs:
+            out.append(f"  Languages spoken: {', '.join(langs[:8])}")
+    if spot.get("productos_venta"):
+        products = spot["productos_venta"]
+        if isinstance(products, list) and products:
+            out.append(f"  Products for sale: {', '.join(str(p)[:40] for p in products[:6])}")
+
+    # v4c — Row 11+: JSONB servicios_extras (selective unpacking)
+    extras = spot.get("servicios_extras") or {}
+    if isinstance(extras, str):
+        try:
+            import json as _json
+            extras = _json.loads(extras)
+        except Exception:
+            extras = {}
+    if isinstance(extras, dict) and extras:
+        # Prohibitions — critical for wild_camping_legal interpretation
+        prohibs = extras.get("prohibitions")
+        if isinstance(prohibs, list) and prohibs:
+            out.append(f"  PROHIBITIONS: {', '.join(str(p)[:40] for p in prohibs[:8])}")
+        risks = extras.get("risks")
+        if isinstance(risks, list) and risks:
+            out.append(f"  RISKS: {', '.join(str(r)[:60] for r in risks[:5])}")
+        # Pricing breakdown
+        pb = extras.get("pricing_breakdown")
+        if isinstance(pb, dict) and pb:
+            kv = " | ".join(f"{k}={v}" for k, v in list(pb.items())[:6])
+            out.append(f"  Pricing detail: {kv[:200]}")
+        # Hours
+        hrs = extras.get("hours")
+        if isinstance(hrs, dict) and hrs:
+            kv = " | ".join(f"{k}={v}" for k, v in list(hrs.items())[:5])
+            out.append(f"  Hours: {kv[:200]}")
+        # Tipology / position / destination
+        for key, label in (("typology", "Typology"),
+                           ("position", "Setting"),
+                           ("destination_types", "Destination")):
+            v = extras.get(key)
+            if isinstance(v, list) and v:
+                out.append(f"  {label}: {', '.join(str(x)[:30] for x in v[:5])}")
+        # Quality labels (DOC, DOCG, etc — for agroturismos)
+        ql = extras.get("quality_labels")
+        if isinstance(ql, list) and ql:
+            out.append(f"  Quality labels: {', '.join(str(q)[:50] for q in ql[:5])}")
+        # Descriptions (truncated)
+        desc = extras.get("descriptions")
+        if isinstance(desc, dict):
+            for key, label in (("sanitary", "Sanitary"),
+                               ("surroundings", "Surroundings"),
+                               ("events", "Local events"),
+                               ("special_info", "Special info")):
+                v = desc.get(key)
+                if isinstance(v, str) and v.strip():
+                    out.append(f"  {label}: {v.strip()[:250]}")
+
+    # Row N: contact (compact)
+    contact_parts = []
+    if web:
+        contact_parts.append(f"Web: {web[:80]}")
+    if telefono:
+        contact_parts.append(f"Phone: {telefono[:25]}")
+    if email:
+        contact_parts.append(f"Email: {email[:60]}")
+    if contact_parts:
+        out.append("  " + " | ".join(contact_parts))
+
+    out.append("")  # trailing blank line
     return out
 
 
 def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
-    """User prompt para enriquecimiento spot-level v2/v3.
+    """User prompt for spot-level enrichment v4.
 
-    `spot` debe traer: id, canonical_name, tipo, country_iso, lat, lon, fuentes (list),
-    descripcion_es/en/fr/de/it/nl/pt (opcional), y los campos de servicios v3
+    `spot` must include: id, canonical_name, tipo, country_iso, lat, lon, fuentes,
+    descripcion_es/en/fr/de/it/nl/pt (optional), and the v3 service fields
     (gratuito, agua_potable, electricidad, num_plazas, altura_max_m, etc.).
-    `reviews` ya viene ordenado y recortado por spot_packager.select_reviews_for_prompt.
+    `reviews` already ordered and trimmed by spot_packager.select_reviews_for_prompt.
+    v4: header labels in English; review texts and descriptions stay in their
+    original language (the LLM understands all EU languages).
     """
     fuentes = spot.get("fuentes") or []
     if isinstance(fuentes, str):
@@ -288,15 +517,15 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
 
     lines = [
         f"SPOT id={spot['id']}",
-        f'Nombre: "{(spot.get("canonical_name") or "").strip()}"',
-        f"Tipo: {spot.get('tipo') or 'otro'}",
-        f"Pais: {spot.get('country_iso') or '?'}",
-        f"Coordenadas: {spot.get('lat'):.4f}, {spot.get('lon'):.4f}",
-        f"Fuentes: {', '.join(fuentes) if fuentes else '?'}",
+        f'Name: "{(spot.get("canonical_name") or "").strip()}"',
+        f"Type: {spot.get('tipo') or 'other'}",
+        f"Country: {spot.get('country_iso') or '?'}",
+        f"Coords: {spot.get('lat'):.4f}, {spot.get('lon'):.4f}",
+        f"Sources: {', '.join(fuentes) if fuentes else '?'}",
         "",
     ]
 
-    # v3: bloque SERVICIOS estructurado (antes de descripciones)
+    # v3/v4: structured SERVICES block (before descriptions)
     lines.extend(_build_servicios_block(spot))
 
     desc_blocks = []
@@ -305,12 +534,12 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
         if txt:
             desc_blocks.append(f"[{lang.upper()}] {txt[:600]}")
     if desc_blocks:
-        lines.append("DESCRIPCIONES:")
+        lines.append("DESCRIPTIONS (in original language):")
         lines.extend(desc_blocks)
         lines.append("")
 
     if reviews:
-        lines.append(f"REVIEWS (n={len(reviews)}, ordenadas por relevancia temporal):")
+        lines.append(f"REVIEWS (n={len(reviews)}, ordered by temporal relevance):")
         for r in reviews:
             fecha = r.get("fecha")
             fecha_str = fecha.strftime("%Y-%m") if hasattr(fecha, "strftime") else (str(fecha)[:7] if fecha else "?")
@@ -319,7 +548,16 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
             texto = (r.get("texto_limpio") or r.get("texto") or r.get("texto_original") or "").strip().replace("\n", " ")
             lines.append(f"[review_id={r['id']}] [{fecha_str}] [{source}] {stars} {texto}")
     else:
-        lines.append("REVIEWS: (ninguna disponible — extraer solo de descripciones y servicios)")
+        lines.append("REVIEWS: (none available — extract only from descriptions and services)")
+
+    # v4d: richness-aware summary instruction (computed in spot_packager)
+    # We inject it here so the LLM tailors `summary` length to the data volume.
+    # Lazy import to avoid circular dep (packager imports from prompts).
+    from .spot_packager import compute_richness, summary_instruction_for
+    _, level = compute_richness(spot, reviews)
+    lines.append("")
+    lines.append(f"SUMMARY_RICHNESS: {level}")
+    lines.append(f"SUMMARY_INSTRUCTION: {summary_instruction_for(level)}")
 
     return "\n".join(lines)
 

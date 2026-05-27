@@ -1,0 +1,66 @@
+SMOKE v4d — richness-aware summary
+================================================================================
+
+
+################################################################################
+# SPOT 111566 — ES camping — esperado SIMPLE (3 reviews + todos servicios)
+################################################################################
+
+COMPUTED richness: score=0.575 level=rich
+reviews total=3 selected=3
+n_services_filled=17/21
+prompt chars=1916
+
+--- response (latency=5.7s, in=3339, out=653, cost=$0.00049) ---
+claims emitted: 8
+tags: ['forest', 'expensive', 'clean', 'large', 'all-year', 'pool', 'dog-friendly']
+best_for: ['families', 'couples', 'long-stay']
+best_season: None
+avoid_season: None
+
+SUMMARY (7 sentences, 685 chars):
+  Camping La Vall is a large, well-equipped campsite in a forest setting near Taradell, Catalonia. It offers full services including drinking water, electricity, grey/black water dump, showers, public WC, wifi, and a pool (though pool availability may be seasonal). Access can be tricky: following car navigation may lead to a narrow dirt road; it's better to follow local signs. The site is clean with excellent sanitary facilities, but it is expensive (€49.50 for two people with camper and electricity) and seems geared toward regular guests rather than overnight stops. The atmosphere is quiet and well-maintained, but some facilities may be closed on certain days. Dogs are allowed.
+
+  expected range for 'rich': 5-7 sentences → actual=7 [OK]
+
+################################################################################
+# SPOT 61376 — SE area_ac — esperado MEDIUM (28 reviews + servicios mixtos)
+################################################################################
+
+COMPUTED richness: score=0.927 level=very_rich
+reviews total=28 selected=28
+n_services_filled=13/21
+prompt chars=7155
+
+--- response (latency=7.6s, in=4942, out=949, cost=$0.00069) ---
+claims emitted: 13
+tags: ['free', 'rest area', 'highway', 'water', 'toilet dump', 'picnic tables', 'lake view', 'dog-friendly']
+best_for: ['transit', 'short stop', 'families', 'dogs']
+best_season: summer
+avoid_season: winter
+
+SUMMARY (8 sentences, 775 chars):
+  Bölesjön Norra is a free rest area along the E4 highway in Sweden, offering basic services for motorhomes. It provides drinking water (with a push-button tap, may need a hose adapter), black water dump, clean toilets, and picnic tables with shade. There is no grey water dump or electricity. The spot is near a lake with a forest and a children's playground, making it suitable for a short stop or overnight. However, it is located next to a busy road, so noise can be significant, especially at night. Some reviews mention the water tap being difficult to access for large vehicles and that the water may be warm in summer. In winter, the fresh water is turned off. Overall, it is best for a quick service stop or a one-night transit stay, but not for a quiet extended stay.
+
+  expected range for 'very_rich': 6-8 sentences → actual=8 [OK]
+
+################################################################################
+# SPOT 111084 — DK Tornby — esperado RICH/VERY_RICH (60 reviews + 16 servicios)
+################################################################################
+
+COMPUTED richness: score=0.975 level=very_rich
+reviews total=60 selected=50
+n_services_filled=20/21
+prompt chars=14473
+
+--- response (latency=7.9s, in=7252, out=1065, cost=$0.00094) ---
+claims emitted: 14
+tags: ['ferry stopover', 'family-friendly', 'dog-friendly', 'large pitches', 'clean facilities', 'beach nearby', 'quiet', 'high season pricey']
+best_for: ['families', 'dog owners', 'ferry travelers', 'couples']
+best_season: may-september
+avoid_season: None
+
+SUMMARY (9 sentences, 868 chars):
+  Tornby Strand Camping is a large, well-maintained campsite near Hirtshals, ideal as a stopover before/after the ferry to Norway. It offers spacious pitches (approx. 90 m²), modern and spotless sanitary facilities, and full camper services including water, electricity, grey/black water dump, and a small shop with gas bottle exchange. On-site amenities include a playground, mini golf, indoor/outdoor pools (indoor pool costs extra), a dog forest, and a communal kitchen. The beach is about 1-1.5 km away (20 min walk), and the ferry terminal is a 10-15 minute drive. The atmosphere is quiet and peaceful, especially in low season, though prices are considered high (€45-66/night in high season). Some reviews note that the indoor pool and electricity overuse incur extra charges, and Wi-Fi can be unreliable. Best suited for families, dog owners, and ferry travelers.
+
+  expected range for 'very_rich': 6-8 sentences → actual=9 [OK]

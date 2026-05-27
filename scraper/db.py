@@ -126,33 +126,70 @@ async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
     return row["id"]
 
 
+SKIP_ENRIQUECER = {"lat", "lon", "nombre", "fuentes", "source", "source_id",
+                   "_topic_id", "verificado", "page_url", "host_name", "space_id",
+                   "details_fetched"}
+JSONB_FIELDS = {"fotos_urls", "conflictos"}
+TEXT_ARRAY_FIELDS = {"idiomas_hablados", "productos_venta"}
+DEEP_MERGE_JSONB_FIELDS = {"servicios_extras"}
+
+
+def _deep_merge_jsonb(existing: dict | None, new: dict) -> dict:
+    """Merge recursivo por sub-keys con prioridad al valor existente.
+
+    Reglas:
+      - Dicts: deep merge. Si key existe en ambos como dict, recursa. Si existe
+        en `existing`, se preserva (nunca sobreescribimos info ya almacenada).
+        Si solo está en `new`, se añade.
+      - Listas: unión dedup (preservando orden de existing primero).
+      - Escalares: existing gana si está, si no se toma new.
+    """
+    if not existing:
+        return dict(new) if new else {}
+    if not isinstance(existing, dict):
+        existing = {}
+    result = dict(existing)
+    for k, vn in new.items():
+        if k not in result:
+            result[k] = vn
+            continue
+        ve = result[k]
+        if isinstance(ve, dict) and isinstance(vn, dict):
+            result[k] = _deep_merge_jsonb(ve, vn)
+        elif isinstance(ve, list) and isinstance(vn, list):
+            seen = set()
+            merged_list = []
+            for item in ve + vn:
+                key = json.dumps(item, sort_keys=True, default=str) if isinstance(item, (dict, list)) else str(item)
+                if key not in seen:
+                    seen.add(key)
+                    merged_list.append(item)
+            result[k] = merged_list
+        # escalar: existing gana, no tocamos
+    return result
+
+
 async def enriquecer_spot(conn: asyncpg.Connection, spot_id: int,
                            datos: dict, fuente: str) -> None:
     """Añade fuente al spot existente y rellena campos NULL.
 
     SKIP: campos que NO son columnas de `spots` pero pueden venir en el dict
-    normalizado (metadata para Phase 2 / source_records / debugging). Si un
-    scraper devuelve una key no listada aquí ni columna de spots, fallará
-    UPDATE con `column "X" does not exist`.
+    normalizado (metadata para Phase 2 / source_records / debugging).
 
-    - lat/lon/nombre: ya se setean en crear_spot, no se actualizan después
-    - fuentes/source/source_id: gestionados aparte (array_append)
-    - _topic_id: legacy furgovw
-    - verificado: legacy
-    - page_url: metadata interna promobil para Phase 2 reviews
-    - host_name, space_id: metadata interna campspace para Phase 2
-    - details_fetched: flag campercontact/campendium/campspace Phase 2
+    Maneja 4 tipos de columnas:
+      - Texto/numérico/bool: COALESCE (no pisa valor existente)
+      - JSONB_FIELDS (fotos_urls, conflictos): solo si estaba vacío
+      - TEXT_ARRAY_FIELDS (idiomas_hablados, productos_venta): unión dedup
+      - DEEP_MERGE_JSONB_FIELDS (servicios_extras): merge recursivo en Python
+        preservando keys ya pobladas (lee → merge → escribe en la misma TX)
     """
-    SKIP = {"lat", "lon", "nombre", "fuentes", "source", "source_id",
-            "_topic_id", "verificado", "page_url", "host_name", "space_id",
-            "details_fetched"}
-    JSONB_FIELDS = {"fotos_urls", "conflictos"}
     sets = []
     vals = []
     i = 1
+    deep_merge_pending: dict[str, dict] = {}
 
     for k, v in datos.items():
-        if k in SKIP or v is None:
+        if k in SKIP_ENRIQUECER or v is None:
             continue
         col = k
         if k == "rating_promedio":
@@ -162,7 +199,26 @@ async def enriquecer_spot(conn: asyncpg.Connection, spot_id: int,
         elif k == "nombre":
             col = "canonical_name"
 
-        # Serializar listas/dicts para campos jsonb
+        if col in DEEP_MERGE_JSONB_FIELDS:
+            if isinstance(v, dict) and v:
+                deep_merge_pending[col] = v
+            continue
+
+        if col in TEXT_ARRAY_FIELDS:
+            if not isinstance(v, list) or not v:
+                continue
+            arr = [str(x) for x in v if x is not None]
+            if not arr:
+                continue
+            sets.append(
+                f"{col} = ARRAY(SELECT DISTINCT unnest("
+                f"COALESCE({col}, ARRAY[]::text[]) || ${i}::text[]"
+                f"))"
+            )
+            vals.append(arr)
+            i += 1
+            continue
+
         if k in JSONB_FIELDS or isinstance(v, (list, dict)):
             v = json.dumps(v) if not isinstance(v, str) else v
             sets.append(f"{col} = CASE WHEN {col} = '[]'::jsonb OR {col} IS NULL THEN ${i}::jsonb ELSE {col} END")
@@ -188,6 +244,24 @@ async def enriquecer_spot(conn: asyncpg.Connection, spot_id: int,
         WHERE id = ${spot_idx}
     """
     await conn.execute(query, *vals)
+
+    # Deep-merge JSONB: read-merge-write en la misma transacción.
+    for col, new_val in deep_merge_pending.items():
+        row = await conn.fetchrow(
+            f"SELECT {col} AS cur FROM spots WHERE id = $1", spot_id
+        )
+        current = row["cur"] if row else None
+        if isinstance(current, str):
+            try:
+                current = json.loads(current)
+            except (json.JSONDecodeError, TypeError):
+                current = {}
+        merged = _deep_merge_jsonb(current if isinstance(current, dict) else None, new_val)
+        if merged != current:
+            await conn.execute(
+                f"UPDATE spots SET {col} = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                json.dumps(merged), spot_id,
+            )
 
 
 # ═══════════════════════════════════════════════════════════════

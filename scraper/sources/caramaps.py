@@ -7,6 +7,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_caramaps, merge_extra
 
 BASE_URL = "https://admin.caramaps.com/api/revisions/elastic"
 
@@ -250,7 +251,7 @@ class CaramapsSource(AbstractSource):
         country_name = addr.get("country") or ""
         country_iso = COUNTRY_ISO.get(country_name) or country_name[:2].upper() or None
 
-        return {
+        norm = {
             "source_id":       str(raw.get("id") or raw.get("uuid", "")),
             "nombre":          (raw.get("name") or "Sin nombre").strip()[:200],
             "lat":             lat,
@@ -265,6 +266,7 @@ class CaramapsSource(AbstractSource):
             "web":             f"https://www.caramaps.com/spot/{raw.get('uuid', '')}",
             **servicios,
         }
+        return merge_extra(norm, extract_caramaps(raw))
 
     async def download_reviews(self, pool, config) -> dict:
         from db import upsert_review

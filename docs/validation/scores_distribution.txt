@@ -1,0 +1,49 @@
+
+=== Distribución popularity_score (bucket=0.1) ===
+    0.1   440,291  ████████████████████████████████████████████████████████████████████████████████
+    0.2   101,841  ████████████████████████████████████████████████████████████████████████████████
+    0.3    95,591  ████████████████████████████████████████████████████████████████████████████████
+    0.4    79,814  ███████████████████████████████████████████████████████████████████████████████
+    0.5    33,353  █████████████████████████████████
+    0.6    21,754  █████████████████████
+    0.7    23,735  ███████████████████████
+    0.8    21,041  █████████████████████
+    0.9    13,437  █████████████
+    1.0    12,658  ████████████
+
+=== Distribución reliability_score (bucket=0.1) ===
+    0.3    21,829  █████████████████████
+    0.4   350,614  ████████████████████████████████████████████████████████████████████████████████
+    0.5   275,030  ████████████████████████████████████████████████████████████████████████████████
+    0.6    67,668  ███████████████████████████████████████████████████████████████████
+    0.7    50,845  ██████████████████████████████████████████████████
+    0.8    49,134  █████████████████████████████████████████████████
+    0.9    26,934  ██████████████████████████
+    1.0     1,461  █
+
+=== Top 8 spots por popularity_score ===
+  pop=1.000  rel=0.947  reviews=   10  fuentes=4  [es] camping    La Bella Vista
+  pop=1.000  rel=0.909  reviews=   20  fuentes=8  [it] camping    Cascina Mottainai
+  pop=1.000  rel=0.908  reviews=  109  fuentes=5  [FR] camping    Camping des Barolles
+  pop=1.000  rel=0.938  reviews=    6  fuentes=5  [it] area_ac    Roma Ciampino Garden
+  pop=1.000  rel=0.938  reviews=    0  fuentes=4  [de] area_ac    Neuhaus,Am Yachthafen,
+  pop=1.000  rel=0.934  reviews=   10  fuentes=5  [es] parking_publico Area autocaravanas Aínsa
+  pop=1.000  rel=0.898  reviews=   37  fuentes=5  [de] area_ac    Weingut Studert Prüm
+  pop=1.000  rel=0.947  reviews=    0  fuentes=4  [tr] camping    Mavi Cennet Camping & Pansion
+
+=== Top 8 spots por reliability_score ===
+  pop=0.958  rel=0.968  reviews=    0  fuentes=3  [es] camping    Área A Praíña Acampada Itinerante
+  pop=0.958  rel=0.968  reviews=    0  fuentes=3  [None] parking    Bauduen, 11 Rue des Jardins
+  pop=0.958  rel=0.968  reviews=    0  fuentes=3  [am] camping    Camping 3 Gs
+  pop=0.958  rel=0.968  reviews=    0  fuentes=3  [ba] camping    Restaurant by the Creek
+  pop=0.958  rel=0.968  reviews=    0  fuentes=3  [it] camping    Corte Canale Virgilio
+  pop=0.882  rel=0.968  reviews=    0  fuentes=3  [cz] camping    penzion a kemp Harasov
+  pop=0.958  rel=0.968  reviews=    0  fuentes=3  [gb] camping    Ben Nevis Holiday Park Laundrette
+  pop=0.958  rel=0.965  reviews=   27  fuentes=3  [None] area_ac    Aire de Camping-Car Gourdon
+
+=== Spots con popularity más BAJA (potencial 'aislados') ===
+  pop=0.129  rel=0.440  reviews=  0  [us] wild       Marathon
+  pop=0.129  rel=0.440  reviews=  0  [us] wild       Walmart water refill station
+  pop=0.129  rel=0.428  reviews=  0  [de] area_ac    Privatstellplatz Weingut Bangerth
+  pop=0.129  rel=0.440  reviews=  0  [ca] wild       Chain up area - Good spot for a night in the summer
+  pop=0.129  rel=0.440  reviews=  0  [cm] camping    The Figaro Bistro

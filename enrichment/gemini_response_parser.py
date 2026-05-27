@@ -71,13 +71,26 @@ class ValidatedClaim:
 @dataclass
 class ValidatedEnrichment:
     claims: list[ValidatedClaim]
-    summary_es: str | None
-    summary_en: str | None
+    summary: str | None       # v4: single English narrative (was summary_es/summary_en)
     tags: list[str]
     best_for: list[str]
     best_season: str | None
     avoid_season: str | None
-    errors: list[str] = field(default_factory=list)  # warnings no fatales
+    errors: list[str] = field(default_factory=list)  # non-fatal warnings
+
+    # ---- v3 compat shims (read-only) — temporary, helps tests/ingest during migration
+    @property
+    def summary_es(self) -> str | None:
+        """Deprecated v3 field. v4 emits English only; returns None.
+
+        Old code that reads parsed.summary_es will see None; new code uses .summary.
+        """
+        return None
+
+    @property
+    def summary_en(self) -> str | None:
+        """Deprecated v3 field. Mapped to .summary (now English-only)."""
+        return self.summary
 
 
 _MARKDOWN_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE | re.MULTILINE)
@@ -264,10 +277,17 @@ def parse_enrichment_response(text: str) -> ValidatedEnrichment:
         if vc:
             claims.append(vc)
 
+    # v4: prefer "summary" (English). Fallback to legacy "summary_en" or
+    # "summary_es" for transitional robustness if a model still emits old keys.
+    summary = (
+        _optional_str(data.get("summary"))
+        or _optional_str(data.get("summary_en"))
+        or _optional_str(data.get("summary_es"))
+    )
+
     return ValidatedEnrichment(
         claims=claims,
-        summary_es=_optional_str(data.get("summary_es")),
-        summary_en=_optional_str(data.get("summary_en")),
+        summary=summary,
         tags=_validate_str_list(data.get("tags")),
         best_for=_validate_str_list(data.get("best_for")),
         best_season=_optional_str(data.get("best_season"), max_len=100),

@@ -6,6 +6,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_campercontact, extract_campercontact_detail, merge_extra
 
 def _checksum(data: dict) -> str:
     import hashlib
@@ -145,7 +146,7 @@ class CamperContactSource(AbstractSource):
         if not cc_id:
             return None
 
-        return {
+        norm = {
             "source_id": cc_id,
             "nombre": (raw.get("title") or "Sin nombre").strip()[:200],
             "lat": lat,
@@ -166,6 +167,7 @@ class CamperContactSource(AbstractSource):
                 if raw.get("permalink") else None
             ),
         }
+        return merge_extra(norm, extract_campercontact(raw))
 
     def _parse_detail_html(self, html: str) -> dict | None:
         matches = re.findall(r'self\.__next_f\.push\(\[\d+,\s*"(.*?)"\]\)', html, re.DOTALL)
@@ -250,7 +252,7 @@ class CamperContactSource(AbstractSource):
         wc_publico = "toilet" in amenities_map
         perros = "dogsAllowed" in amenities_map
 
-        return {
+        norm = {
             "agua_potable": agua_potable,
             "vaciado_negras": vaciado_negras,
             "vaciado_grises": vaciado_grises,
@@ -273,6 +275,8 @@ class CamperContactSource(AbstractSource):
             "descripcion_en": desc_trans.get("en"),
             "descripcion_it": desc_trans.get("it"),
         }
+        # v4d: extras del detalle (terrain completo + amenity_pricing)
+        return merge_extra(norm, extract_campercontact_detail(poi))
 
     async def run(self, pool, config, log_id: int) -> dict:
         """Pipeline completo: grid → fetch → normalize → store → Phase 2 (enrichment & reviews)."""

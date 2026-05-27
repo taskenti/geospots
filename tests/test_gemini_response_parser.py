@@ -18,8 +18,7 @@ from enrichment.gemini_response_parser import (
 def test_parse_minimal_valid():
     text = json.dumps({
         "claims": [],
-        "summary_es": None,
-        "summary_en": None,
+        "summary": None,
         "tags": [],
         "best_for": [],
         "best_season": None,
@@ -28,10 +27,12 @@ def test_parse_minimal_valid():
     r = parse_enrichment_response(text)
     assert r.claims == []
     assert r.tags == []
+    assert r.summary is None
     assert r.errors == []
 
 
-def test_parse_full_response():
+def test_parse_full_response_v4():
+    """v4 native format: single English summary."""
     text = json.dumps({
         "claims": [
             {"signal": "quietness", "value": 0.8, "confidence": 0.9, "review_id": 100, "excerpt": "muy tranquilo"},
@@ -39,12 +40,11 @@ def test_parse_full_response():
             {"signal": "noise_source", "value": "highway", "confidence": 0.85, "review_id": 101, "excerpt": "ruido de autopista"},
             {"signal": "parking_capacity", "value": "medium", "confidence": 0.7, "review_id": "description", "excerpt": "20 plazas"},
         ],
-        "summary_es": "Aire frente al mar.",
-        "summary_en": "Seafront aire.",
-        "tags": ["mar", "gratuito"],
-        "best_for": ["parejas"],
-        "best_season": "primavera",
-        "avoid_season": "agosto",
+        "summary": "Seafront aire.",
+        "tags": ["sea", "free"],
+        "best_for": ["couples"],
+        "best_season": "spring",
+        "avoid_season": "august",
     })
     r = parse_enrichment_response(text)
     assert len(r.claims) == 4
@@ -55,9 +55,25 @@ def test_parse_full_response():
     assert r.claims[1].review_id is None  # "description" → None
     assert r.claims[2].value == "highway"
     assert r.claims[3].value == "medium"
-    assert r.summary_es == "Aire frente al mar."
-    assert r.tags == ["mar", "gratuito"]
+    assert r.summary == "Seafront aire."
+    # v4 compat shims: summary_es deprecated (None), summary_en maps to summary
+    assert r.summary_es is None
+    assert r.summary_en == "Seafront aire."
+    assert r.tags == ["sea", "free"]
     assert r.errors == []
+
+
+def test_parse_legacy_v3_response_falls_back_to_summary_en():
+    """Backward compat: a model still emitting summary_en gets read into .summary."""
+    text = json.dumps({
+        "claims": [],
+        "summary_en": "Quiet spot near the sea.",
+        "summary_es": "Spot tranquilo junto al mar.",  # ignored in v4
+    })
+    r = parse_enrichment_response(text)
+    assert r.summary == "Quiet spot near the sea."
+    # Shim: summary_es returns None always (v4 deprecation)
+    assert r.summary_es is None
 
 
 def test_parse_strips_markdown_fence():
@@ -173,10 +189,10 @@ def test_tags_lowercase_and_limited():
 def test_summary_truncated():
     text = json.dumps({
         "claims": [],
-        "summary_es": "x" * 5000,
+        "summary": "x" * 5000,
     })
     r = parse_enrichment_response(text)
-    assert len(r.summary_es) == 1000
+    assert len(r.summary) == 1000
 
 
 # ─── Errores y resiliencia ────────────────────────────────────────
@@ -237,6 +253,7 @@ def test_confidence_clamped_and_defaulted():
 def test_optional_fields_missing():
     text = json.dumps({"claims": []})
     r = parse_enrichment_response(text)
-    assert r.summary_es is None
+    assert r.summary is None
+    assert r.summary_es is None  # compat shim
     assert r.tags == []
     assert r.best_for == []

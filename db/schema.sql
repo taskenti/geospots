@@ -89,11 +89,41 @@ CREATE TABLE IF NOT EXISTS spots (
     iluminacion         BOOLEAN,
     seguridad           BOOLEAN,
 
+    -- v4c: amenidades extra (rescatadas de raw_data)
+    piscina             BOOLEAN,
+    lavanderia          BOOLEAN,
+    gas_recharge        BOOLEAN,
+    restaurant          BOOLEAN,
+    juegos_ninos        BOOLEAN,
+    mirador             BOOLEAN,
+    zona_protegida      BOOLEAN,
+    online_booking      BOOLEAN,
+    winter_friendly     BOOLEAN,
+    apto_motos          BOOLEAN,
+    -- Actividades cercanas
+    mtb_friendly        BOOLEAN,
+    surf_friendly       BOOLEAN,
+    fishing             BOOLEAN,
+    climbing            BOOLEAN,
+    hiking_nearby       BOOLEAN,
+    -- Capacidad eléctrica y estancia
+    amperaje            INT,
+    n_enchufes          INT,
+    max_noches          INT,
+    -- Arrays (idiomas, productos a la venta)
+    idiomas_hablados    TEXT[],
+    productos_venta     TEXT[],
+    -- JSONB flexible (prohibitions, risks, descriptions, pricing_breakdown, hours, nearby)
+    servicios_extras    JSONB DEFAULT '{}'::jsonb,
+
     -- Metadata agregada
     master_rating       REAL,
     total_reviews       INT DEFAULT 0,
     fuentes             TEXT[] DEFAULT '{}',
     num_fuentes         INT GENERATED ALWAYS AS (COALESCE(array_length(fuentes, 1), 0)) STORED,
+    -- v4 paso 2: scores derivados (recompute periódico, no trigger)
+    popularity_score    REAL,
+    reliability_score   REAL,
 
     -- Descripciones reconciliadas (nombres antiguos + pt/nl para máxima compatibilidad)
     descripcion_es      TEXT,

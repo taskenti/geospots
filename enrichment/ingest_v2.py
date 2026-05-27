@@ -5,7 +5,9 @@ Flujo en una transacción:
   2. Normalizar claim → insertar fila en normalized_observations (peso decayed).
   3. recompute_spot_state(spot_id) — recalcula scores agregados desde TODAS las observations.
   4. Materializar columnas v2: noise_sources[], parking_capacity, last_observation_at.
-  5. Update narrative fields: summary_es/en, tags, best_for, best_season, avoid_season.
+  5. Update narrative fields: summary_en (English only in v4), tags, best_for,
+     best_season, avoid_season. (summary_es column kept NULL — deprecated, the API
+     layer is responsible for translation when needed.)
   6. Set enrichment_version, llm_model.
 
 Diseño:
@@ -133,6 +135,9 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
     parking_capacity = aggregate_parking_capacity(observations)
     last_obs_at = await compute_last_observation_at(conn, spot_id)
 
+    # v4: parsed.summary es un único string en inglés. Lo escribimos en summary_en.
+    # summary_es se deja NULL (deprecated — el cliente API traducirá si necesita).
+    # parsed.summary_es es un property que devuelve None (compat shim del parser v4).
     await conn.execute(
         """
         UPDATE spot_semantic_state SET
@@ -152,8 +157,8 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
         WHERE spot_id = $1
         """,
         spot_id,
-        parsed.summary_es,
-        parsed.summary_en,
+        parsed.summary_es,  # v4: None (shim devuelve None) — futuro: drop column
+        parsed.summary or parsed.summary_en,  # v4 canonical: parsed.summary (English)
         parsed.tags or None,
         parsed.best_for or None,
         parsed.best_season,
