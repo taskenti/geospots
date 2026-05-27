@@ -14,6 +14,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_womostell, merge_extra
 
 
 # Mapping: place_type_id -> tipo canónico GeoSpots
@@ -177,7 +178,7 @@ class WomoStellplatzSource(AbstractSource):
             int_id = raw.get("int_id") or ""
             web = f"https://www.womo-stellplatz.eu/place/{int_id}" if int_id else None
 
-            return {
+            norm = {
                 "source_id": str(place_id),
                 "nombre": (raw.get("name") or "Sin nombre").strip()[:200],
                 "lat": lat,
@@ -205,6 +206,7 @@ class WomoStellplatzSource(AbstractSource):
                 "country_iso": None,  # Se infiere por region_id en segunda fase
                 "region": raw.get("city") or None,
             }
+            return merge_extra(norm, extract_womostell(raw))
         except Exception as e:
             logger.error(f"[womostell] Error normalizing place {raw.get('place_id')}: {e}")
             return None

@@ -6,6 +6,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_searchforsites, merge_extra
 
 MONTHS = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
@@ -315,7 +316,7 @@ class SearchForSitesSource(AbstractSource):
             elif all(x in {"14", "15", "16", "9"} for x in pitch_list):
                 acceso_grandes = False
 
-        return {
+        norm = {
             "source_id": str(raw.get("ID")),
             "nombre": raw.get("Name", "Sin nombre").strip()[:200],
             "lat": lat,
@@ -343,6 +344,7 @@ class SearchForSitesSource(AbstractSource):
             "perros": perros,
             "raw_facilities": facs_raw,
         }
+        return merge_extra(norm, extract_searchforsites(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (

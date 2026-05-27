@@ -560,6 +560,197 @@ def extract_camperstop(raw: dict) -> dict:
     return out
 
 
+def extract_womostell(raw: dict) -> dict:
+    """womostell: b_long_campers, b_reservation, city, price → v4c/servicios_extras.
+
+    normalize() ya captura: perros, wifi, electricidad, ducha, agua_potable,
+    vaciado_*, wc_publico, acceso_grandes, temporada_apertura, num_plazas.
+    Aquí añadimos los campos v4c que quedaron fuera.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {
+        # b_long_campers = "lange Wohnmobile erlaubt" → también acepta caravanas
+        # (normalize() lo pone en acceso_grandes; aquí lo duplicamos en acepta_caravanas)
+        "acepta_caravanas": _bool(raw.get("b_long_campers")),
+        # b_reservation = se puede/debe reservar → online_booking
+        # (normalize() lo guarda en reserva_req, campo distinto)
+        "online_booking":   _bool(raw.get("b_reservation")),
+        # city = municipio real (normalize() lo mete en `region` erróneamente)
+        "municipio":        _str_nonempty(raw.get("city")),
+    }
+    extras: dict = {}
+    price = raw.get("price")
+    if price is not None:
+        try:
+            f = float(price)
+            if f > 0:
+                extras["pricing_breakdown"] = {"pernocta": round(f, 2)}
+        except (TypeError, ValueError):
+            pass
+    if extras:
+        out["servicios_extras"] = extras
+    return out
+
+
+def extract_stayfree(raw: dict) -> dict:
+    """stayfree: features dict → v4c columns + environment/signal servicios_extras.
+
+    FEATURE_MAP en stayfree.py ya cubre SANITARY_* → canonical fields.
+    Aquí añadimos SERVICE_*, ACTIVITY_*, ROAD_*, ENVIRONMENT_*.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    features = raw.get("features") or {}
+    if not isinstance(features, dict):
+        features = {}
+
+    out: dict = {}
+
+    # Mapeo directo feature flag → columna v4c
+    BOOL_MAP = {
+        "SERVICE_ANIMALS":  "perros",
+        "SERVICE_CARAVANS": "acepta_caravanas",
+        "SERVICE_WIFI":     "wifi",        # no está en FEATURE_MAP del scraper
+        "ACTIVITY_HIKING":  "hiking_nearby",
+        "ACTIVITY_BIKING":  "mtb_friendly",
+        "ACTIVITY_FISHING": "fishing",
+        "ACTIVITY_CLIMBING":"climbing",
+        "ACTIVITY_SWIMMING":"piscina",
+    }
+    for feat, col in BOOL_MAP.items():
+        val = features.get(feat)
+        if val is not None:
+            out[col] = bool(val)
+
+    # acceso_dificil: unpaved road = difícil; solo paved (sin unpaved) = fácil
+    if features.get("ROAD_UNPAVED"):
+        out["acceso_dificil"] = True
+    elif features.get("ROAD_PAVED") and not features.get("ROAD_UNPAVED"):
+        out["acceso_dificil"] = False
+
+    # temporada_apertura
+    if raw.get("is_always_open") in ("yes", "YES", True, 1, "1"):
+        out["temporada_apertura"] = "all_year"
+
+    # municipio: parsear de address "Building, Street?, City, State ZIP, Country"
+    # Saltamos partes que empiezan con dígito (números de calle)
+    address = _str_nonempty(raw.get("address"))
+    if address:
+        parts = [p.strip() for p in address.split(",") if p.strip()]
+        for part in parts[1:]:  # partes[0] = nombre del lugar
+            if part and not part[0].isdigit() and 3 <= len(part) <= 60:
+                out["municipio"] = part[:100]
+                break
+
+    extras: dict = {}
+    # environment_labels desde ENVIRONMENT_* features
+    env_labels = []
+    for feat, label in (
+        ("ENVIRONMENT_COUNTRYSIDE", "countryside"),
+        ("ENVIRONMENT_FOREST",      "forest"),
+        ("ENVIRONMENT_MOUNTAINS",   "mountains"),
+        ("ENVIRONMENT_SEA",         "sea"),
+        ("ENVIRONMENT_BEACH",       "beach"),
+        ("ENVIRONMENT_LAKE",        "lake"),
+        ("ENVIRONMENT_RIVER",       "river"),
+    ):
+        if features.get(feat):
+            env_labels.append(label)
+    if env_labels:
+        extras["environment_labels"] = env_labels
+    if features.get("SERVICE_MOBILE_3G_4G"):
+        extras["mobile_signal"] = "3g_4g"
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
+def extract_promobil(raw: dict) -> dict:
+    """promobil: caravan, city, beergarden, leisure/aiHighlights → v4c columns."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {
+        "acepta_caravanas": _bool(raw.get("caravan")),
+        "municipio":        _str_nonempty(raw.get("city")),
+    }
+    extras: dict = {}
+
+    if raw.get("beergarden") is True:
+        extras["beer_garden"] = True
+
+    # Texto de actividades de ocio cercanas — muy útil para el enrichment LLM
+    de_dict = raw.get("_de") if isinstance(raw.get("_de"), dict) else {}
+    leisure = _str_nonempty(de_dict.get("leisureActivitiesText"))
+    if leisure:
+        extras.setdefault("descriptions", {})["leisure"] = leisure[:500]
+
+    # Highlights AI generados por Promobil sobre puntos de interés cercanos
+    ai = de_dict.get("aiHighlights") if isinstance(de_dict.get("aiHighlights"), dict) else {}
+    highlights = ai.get("highlights")
+    if isinstance(highlights, list) and highlights:
+        extras.setdefault("descriptions", {})["nearby_highlights"] = [
+            str(h)[:200] for h in highlights[:5] if h
+        ]
+
+    if extras:
+        out["servicios_extras"] = extras
+    return out
+
+
+def extract_searchforsites(raw: dict) -> dict:
+    """searchforsites: facility codes extra + municipio desde address."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+
+    # Códigos de facilidades no mapeados en normalize():
+    # 18=lavandería (229/500 spots), 20=juegos niños, 8=perros (refuerza dog field)
+    facs_raw = raw.get("facilities", "")
+    if isinstance(facs_raw, (int, float)):
+        facs_set = {str(int(facs_raw))}
+    elif isinstance(facs_raw, str):
+        facs_set = {f.strip() for f in facs_raw.split(",") if f.strip()}
+    else:
+        facs_set = set()
+
+    if "18" in facs_set:
+        out["lavanderia"] = True
+    if "20" in facs_set:
+        out["juegos_ninos"] = True
+    if "8" in facs_set:
+        out["perros"] = True  # confirmación; `dog` field en normalize() ya lo hace
+
+    # municipio: primera parte de "City, State, ZIP"  (normalize() toma parts[1] = State)
+    address = _str_nonempty(raw.get("address"))
+    if address:
+        parts = [p.strip() for p in address.split(",") if p.strip()]
+        if parts and not parts[0][0].isdigit() and len(parts[0]) >= 2:
+            out["municipio"] = parts[0][:100]
+
+    # Pricing con símbolo de moneda
+    cost = raw.get("cost")
+    if isinstance(cost, dict):
+        try:
+            mn_f = float(cost["min"]) if cost.get("min") is not None else None
+            mx_f = float(cost["max"]) if cost.get("max") is not None else None
+        except (TypeError, ValueError):
+            mn_f = mx_f = None
+        sym = _str_nonempty(cost.get("sym"))
+        pb: dict = {}
+        if mn_f is not None and mn_f > 0:
+            pb["min"] = round(mn_f, 2)
+        if mx_f is not None and mx_f > 0:
+            pb["max"] = round(mx_f, 2)
+        if sym:
+            pb["currency_sym"] = sym
+        if pb:
+            out.setdefault("servicios_extras", {})["pricing_breakdown"] = pb
+
+    return out
+
+
 def merge_extra(norm: dict, extra: dict) -> dict:
     """Mergea el output de un extractor sobre el dict de normalize().
 

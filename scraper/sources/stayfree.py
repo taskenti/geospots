@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_stayfree, merge_extra
 
 BASE_URL    = "https://www.stayfree.app/api/spots"
 DETAIL_URL  = "https://www.stayfree.app/api/spots/{sid}"
@@ -313,7 +314,7 @@ class StayFreeSource(AbstractSource):
         sid = raw.get("_id") or raw.get("id") or ""
         country_raw = raw.get("country") or ""
 
-        return {
+        norm = {
             "source_id":       str(sid),
             "nombre":          clean_surrogates(raw.get("name") or "StayFree Spot").strip()[:200],
             "lat":             lat,
@@ -330,6 +331,7 @@ class StayFreeSource(AbstractSource):
             "web":             f"https://www.stayfree.app/es/spot/{sid}",
             **kwargs,
         }
+        return merge_extra(norm, extract_stayfree(raw))
 
     async def _fetch_country(self, client, country: str) -> list[dict]:
         """Descarga todos los spots de un pais paginando la API."""

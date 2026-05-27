@@ -8,6 +8,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_promobil, merge_extra
 
 
 def _slugify(text: str) -> str:
@@ -344,7 +345,7 @@ class PromobilSource(AbstractSource):
         slug = _slugify(nombre)
         page_url = f"stellplatz/{slug}-{source_id}.html"
 
-        return {
+        norm = {
             "source_id":       source_id,
             "nombre":          nombre,
             "lat":             lat,
@@ -374,6 +375,7 @@ class PromobilSource(AbstractSource):
             "descripcion_de":  descripcion_de,
             "page_url":        page_url,
         }
+        return merge_extra(norm, extract_promobil(raw))
 
     async def download_reviews(self, pool, config) -> dict:
         import re

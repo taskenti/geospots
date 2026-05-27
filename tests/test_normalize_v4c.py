@@ -27,6 +27,10 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_camperstop,
     extract_caramaps,
     extract_park4night,
+    extract_womostell,
+    extract_stayfree,
+    extract_promobil,
+    extract_searchforsites,
     merge_extra,
 )
 
@@ -508,3 +512,256 @@ def test_park4night_normalize_emits_v4c():
     assert out["hiking_nearby"] is True
     assert out["apto_motos"] is False
     assert out["servicios_extras"]["pricing_breakdown"] == {"services": "Free"}
+
+
+# ─── womostell ────────────────────────────────────────────────────────
+
+
+def test_womostell_basic():
+    raw = {
+        "b_long_campers": "1",
+        "b_reservation": "1",
+        "city": "Freiburg",
+        "price": "12.50",
+    }
+    out = extract_womostell(raw)
+    assert out["acepta_caravanas"] is True
+    assert out["online_booking"] is True
+    assert out["municipio"] == "Freiburg"
+    assert out["servicios_extras"]["pricing_breakdown"]["pernocta"] == 12.50
+
+
+def test_womostell_free_no_pricing():
+    raw = {"price": "0", "b_long_campers": "0", "city": ""}
+    out = extract_womostell(raw)
+    assert out["acepta_caravanas"] is False
+    # price == 0 should NOT produce a pricing_breakdown entry
+    assert "servicios_extras" not in out or "pricing_breakdown" not in out.get("servicios_extras", {})
+
+
+def test_womostell_no_price():
+    raw = {"b_reservation": "0"}
+    out = extract_womostell(raw)
+    assert out["online_booking"] is False
+    assert "servicios_extras" not in out
+
+
+def test_womostell_normalize_emits_v4c():
+    """WomoStellplatz normalize() deve emitir acepta_caravanas y municipio."""
+    from sources.womostell import WomoStellplatzSource
+    raw = {
+        "place_id": "9999",
+        "name": "Test Stellplatz",
+        "latitude": "48.1",
+        "longitude": "11.5",
+        "place_type_id": 2,
+        "b_long_campers": "1",
+        "city": "München",
+        "price": "8.00",
+    }
+    out = WomoStellplatzSource().normalize(raw)
+    assert out is not None
+    assert out["acepta_caravanas"] is True
+    assert out["municipio"] == "München"
+    assert out["servicios_extras"]["pricing_breakdown"]["pernocta"] == 8.0
+
+
+# ─── stayfree ─────────────────────────────────────────────────────────
+
+
+def test_stayfree_services_and_activities():
+    raw = {
+        "features": {
+            "SERVICE_ANIMALS": True,
+            "SERVICE_CARAVANS": True,
+            "SERVICE_WIFI": True,
+            "ACTIVITY_HIKING": True,
+            "ACTIVITY_BIKING": True,
+            "ACTIVITY_FISHING": False,
+            "ROAD_UNPAVED": True,
+        }
+    }
+    out = extract_stayfree(raw)
+    assert out["perros"] is True
+    assert out["acepta_caravanas"] is True
+    assert out["wifi"] is True
+    assert out["hiking_nearby"] is True
+    assert out["mtb_friendly"] is True
+    assert out.get("fishing") is False
+    assert out["acceso_dificil"] is True
+
+
+def test_stayfree_paved_road_not_difficult():
+    raw = {
+        "features": {
+            "ROAD_PAVED": True,
+            "ROAD_UNPAVED": False,
+        }
+    }
+    out = extract_stayfree(raw)
+    assert out["acceso_dificil"] is False
+
+
+def test_stayfree_environment_labels_in_extras():
+    raw = {
+        "features": {
+            "ENVIRONMENT_FOREST": True,
+            "ENVIRONMENT_MOUNTAINS": True,
+            "ENVIRONMENT_SEA": False,
+            "SERVICE_MOBILE_3G_4G": True,
+        }
+    }
+    out = extract_stayfree(raw)
+    labels = out["servicios_extras"]["environment_labels"]
+    assert "forest" in labels
+    assert "mountains" in labels
+    assert "sea" not in labels
+    assert out["servicios_extras"]["mobile_signal"] == "3g_4g"
+
+
+def test_stayfree_always_open():
+    raw = {"is_always_open": "yes", "features": {}}
+    out = extract_stayfree(raw)
+    assert out["temporada_apertura"] == "all_year"
+
+
+def test_stayfree_municipio_from_address():
+    raw = {"address": "123 Main St, Sevilla, Andalucía, Spain", "features": {}}
+    out = extract_stayfree(raw)
+    assert out["municipio"] == "Sevilla"
+
+
+def test_stayfree_empty_features():
+    out = extract_stayfree({"features": None})
+    assert isinstance(out, dict)
+
+
+# ─── promobil ─────────────────────────────────────────────────────────
+
+
+def test_promobil_basic():
+    raw = {
+        "caravan": True,
+        "city": "Heidelberg",
+    }
+    out = extract_promobil(raw)
+    assert out["acepta_caravanas"] is True
+    assert out["municipio"] == "Heidelberg"
+
+
+def test_promobil_beergarden_in_extras():
+    raw = {"beergarden": True, "caravan": False}
+    out = extract_promobil(raw)
+    assert out["acepta_caravanas"] is False
+    assert out["servicios_extras"]["beer_garden"] is True
+
+
+def test_promobil_leisure_text():
+    raw = {
+        "_de": {
+            "leisureActivitiesText": "Wandern, Radfahren, Schwimmen",
+        }
+    }
+    out = extract_promobil(raw)
+    assert out["servicios_extras"]["descriptions"]["leisure"] == "Wandern, Radfahren, Schwimmen"
+
+
+def test_promobil_ai_highlights():
+    raw = {
+        "_de": {
+            "aiHighlights": {
+                "highlights": ["Schwarzwald", "Rhein", "Schloss"]
+            }
+        }
+    }
+    out = extract_promobil(raw)
+    assert "Schwarzwald" in out["servicios_extras"]["descriptions"]["nearby_highlights"]
+
+
+def test_promobil_no_extras():
+    raw = {"caravan": None, "city": ""}
+    out = extract_promobil(raw)
+    assert "servicios_extras" not in out
+    assert out.get("municipio") is None
+
+
+def test_promobil_normalize_emits_v4c():
+    from sources.promobil import PromobilSource
+    raw = {
+        "id": "42",
+        "gps": [48.5, 9.2],
+        "caravan": True,
+        "city": "Stuttgart",
+        "beergarden": True,
+        "_de": {"name": "Schöner Platz"},
+        "pitchType": "Stellplatz",
+    }
+    out = PromobilSource().normalize(raw)
+    assert out is not None
+    assert out["acepta_caravanas"] is True
+    assert out["municipio"] == "Stuttgart"
+    assert out["servicios_extras"]["beer_garden"] is True
+
+
+# ─── searchforsites ───────────────────────────────────────────────────
+
+
+def test_searchforsites_lavanderia_and_juegos():
+    raw = {"facilities": "1,4,18,20"}
+    out = extract_searchforsites(raw)
+    assert out["lavanderia"] is True
+    assert out["juegos_ninos"] is True
+
+
+def test_searchforsites_perros_from_facilities():
+    raw = {"facilities": "8,1"}
+    out = extract_searchforsites(raw)
+    assert out["perros"] is True
+
+
+def test_searchforsites_municipio_from_address():
+    raw = {"address": "Llanberis, Gwynedd, Wales"}
+    out = extract_searchforsites(raw)
+    assert out["municipio"] == "Llanberis"
+
+
+def test_searchforsites_pricing_with_currency():
+    raw = {
+        "cost": {"min": "5.0", "max": "15.0", "sym": "£"},
+    }
+    out = extract_searchforsites(raw)
+    pb = out["servicios_extras"]["pricing_breakdown"]
+    assert pb["min"] == 5.0
+    assert pb["max"] == 15.0
+    assert pb["currency_sym"] == "£"
+
+
+def test_searchforsites_no_extras_when_empty():
+    raw = {"facilities": "1,4,6"}
+    out = extract_searchforsites(raw)
+    # facs 1,4,6 → water, wc, shower: no lavanderia/juegos/perros → no extras, no servicios_extras
+    assert "lavanderia" not in out
+    assert "juegos_ninos" not in out
+    assert "servicios_extras" not in out
+
+
+def test_searchforsites_normalize_emits_v4c():
+    from sources.searchforsites import SearchForSitesSource
+    raw = {
+        "ID": "77",
+        "Name": "Test Site",
+        "latlng": {"lat": "51.5", "lng": "-3.2"},
+        "Type": "CL",
+        "facilities": "1,18,20",
+        "address": "Cardiff, South Wales",
+        "cost": {"min": "10", "max": "20", "sym": "£"},
+        "dog": "1",
+    }
+    out = SearchForSitesSource().normalize(raw)
+    assert out is not None
+    assert out["lavanderia"] is True
+    assert out["juegos_ninos"] is True
+    assert out["municipio"] == "Cardiff"
+    pb = out["servicios_extras"]["pricing_breakdown"]
+    assert pb["min"] == 10.0
+    assert pb["currency_sym"] == "£"

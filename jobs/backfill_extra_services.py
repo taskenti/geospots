@@ -73,6 +73,10 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_camperstop,
     extract_caramaps,
     extract_park4night,
+    extract_womostell,
+    extract_stayfree,
+    extract_promobil,
+    extract_searchforsites,
 )
 
 
@@ -84,6 +88,10 @@ EXTRACTORS = {
     "campy":          extract_campy,
     "campercontact":  extract_campercontact,
     "camperstop":     extract_camperstop,
+    "womostell":      extract_womostell,
+    "stayfree":       extract_stayfree,
+    "promobil":       extract_promobil,
+    "searchforsites": extract_searchforsites,
 }
 
 
