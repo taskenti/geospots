@@ -24,6 +24,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_campercontact_detail,
     extract_campingcarpark,
     extract_campy,
+    extract_camperstop,
     extract_caramaps,
     extract_park4night,
     merge_extra,
@@ -359,6 +360,129 @@ def test_agricamper_normalize_emits_v4d():
     assert out["acceso_dificil"] is True
     assert out["idiomas_hablados"] == ["en", "it"]
     assert out["restaurant"] is True
+
+
+# ─── camperstop ───────────────────────────────────────────────────────
+
+
+def test_camperstop_basic_fields():
+    raw = {
+        "animalsAllowed": 1,
+        "winterSports": 0,
+        "place": "Arques",
+        "powerQuantity": 12,
+        "groundType": "gravel",
+        "environment": "urban",
+    }
+    out = extract_camperstop(raw)
+    assert out["perros"] is True
+    assert out["winter_friendly"] is False
+    assert out["municipio"] == "Arques"
+    assert out["n_enchufes"] == 12
+    assert out["servicios_extras"]["ground_type"] == "gravel"
+    assert out["servicios_extras"]["environment"] == "urban"
+
+
+def test_camperstop_pricing_breakdown_skips_zeros():
+    raw = {
+        "waterPrice": "1.50",
+        "powerPrice": "0.00",
+        "showerPrice": "1.50",
+        "toiletPrice": "0.00",
+        "serviceRate": "water € 2,50",
+    }
+    out = extract_camperstop(raw)
+    pb = out["servicios_extras"]["pricing_breakdown"]
+    assert pb["water"] == 1.50
+    assert "electricity" not in pb  # 0.00 se omite
+    assert pb["shower"] == 1.50
+    assert "toilet" not in pb       # 0.00 se omite
+    assert pb["service_rate"] == "water € 2,50"
+
+
+def test_camperstop_credit_card_and_payment():
+    raw = {"creditCard": 1, "paymentType": "Reception/office"}
+    out = extract_camperstop(raw)
+    assert out["servicios_extras"]["credit_card"] is True
+    assert out["servicios_extras"]["payment_type"] == "Reception/office"
+
+
+def test_camperstop_remarks_as_descriptions():
+    raw = {"remarks": ["behind camp site Beauséjour", "sanitary at campsite"]}
+    out = extract_camperstop(raw)
+    assert out["servicios_extras"]["descriptions"]["remarks"] == [
+        "behind camp site Beauséjour",
+        "sanitary at campsite",
+    ]
+
+
+def test_camperstop_environment_labels():
+    raw = {
+        "calm": 1, "loud": 0, "verySimple": 1,
+        "forest": 0, "mountains": 1, "touristic": 0,
+    }
+    out = extract_camperstop(raw)
+    labels = out["servicios_extras"]["environment_labels"]
+    assert "calm" in labels
+    assert "very_simple" in labels
+    assert "mountains" in labels
+    assert "loud" not in labels   # 0 → no añadido
+    assert "forest" not in labels
+
+
+def test_camperstop_no_extras_when_empty():
+    out = extract_camperstop({})
+    assert out == {"perros": None, "winter_friendly": None, "municipio": None, "n_enchufes": None}
+    assert "servicios_extras" not in out
+
+
+def test_camperstop_normalize_emits_v4e():
+    """Wire end-to-end: CamperstopSource.normalize() emite campos v4e."""
+    from sources.camperstop import CamperstopSource
+    raw = {
+        "id": "42",
+        "name": "Aire de Beauvais",
+        "latitude": 49.43,
+        "longitude": 2.08,
+        "camperStopTypeId": 1,
+        "countryCode": "fr",
+        "waterAvailable": True,
+        "drainageAvailable": False,
+        "chemicalAvailable": False,
+        "powerAvailable": True,
+        "toiletAvailable": False,
+        "showerAvailable": False,
+        "wifiAvailable": False,
+        "images": [],
+        "contactWebsite": "",
+        "averageScore": 8,
+        "totalReviews": 5,
+        "camperRate": "free",
+        # campos v4e
+        "animalsAllowed": 1,
+        "winterSports": 0,
+        "place": "Beauvais",
+        "powerQuantity": 6,
+        "groundType": "asphalt",
+        "environment": "urban",
+        "waterPrice": "2.00",
+        "creditCard": 0,
+        "remarks": ["Next to the tourist office"],
+        "calm": 1,
+        "touristic": 1,
+    }
+    out = CamperstopSource().normalize(raw)
+    assert out is not None
+    assert out["perros"] is True
+    assert out["winter_friendly"] is False
+    assert out["municipio"] == "Beauvais"
+    assert out["n_enchufes"] == 6
+    assert out["servicios_extras"]["ground_type"] == "asphalt"
+    assert out["servicios_extras"]["pricing_breakdown"]["water"] == 2.0
+    assert out["servicios_extras"]["descriptions"]["remarks"] == ["Next to the tourist office"]
+    labels = out["servicios_extras"]["environment_labels"]
+    assert "calm" in labels
+    assert "touristic" in labels
 
 
 def test_park4night_normalize_emits_v4c():

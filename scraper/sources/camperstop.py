@@ -7,6 +7,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_camperstop, merge_extra
 
 HEADERS = {
     "accept": "application/json, text/plain, */*",
@@ -104,7 +105,7 @@ class CamperstopSource(AbstractSource):
         if "free" in rate_str or "gratis" in rate_str or "0" in rate_str:
             gratuito = True
 
-        return {
+        norm = {
             "source_id": str(raw.get("id")),
             "nombre": raw.get("name", "Camperstop").strip()[:200],
             "lat": lat,
@@ -122,8 +123,9 @@ class CamperstopSource(AbstractSource):
             "fotos_urls": fotos[:5],
             "web": web,
             "rating_promedio": rating_promedio,
-            "num_reviews": num_reviews
+            "num_reviews": num_reviews,
         }
+        return merge_extra(norm, extract_camperstop(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (

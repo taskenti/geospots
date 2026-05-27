@@ -476,6 +476,90 @@ def extract_campercontact_detail(poi: dict) -> dict:
     return {}
 
 
+def extract_camperstop(raw: dict) -> dict:
+    """camperstop: structured services, pricing per amenity, environment labels."""
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict = {
+        "perros":          _bool(raw.get("animalsAllowed")),
+        "winter_friendly": _bool(raw.get("winterSports")),
+        "municipio":       _str_nonempty(raw.get("place")),
+        "n_enchufes":      _int(raw.get("powerQuantity")),
+    }
+
+    extras: dict = {}
+
+    # Tipo de suelo y entorno físico
+    gt = _str_nonempty(raw.get("groundType"))
+    if gt:
+        extras["ground_type"] = gt[:30]
+
+    env = _str_nonempty(raw.get("environment"))
+    if env:
+        extras["environment"] = env[:30]
+
+    # Precios por servicio (solo los > 0)
+    pricing: dict = {}
+    for field, label in (
+        ("waterPrice",  "water"),
+        ("powerPrice",  "electricity"),
+        ("showerPrice", "shower"),
+        ("toiletPrice", "toilet"),
+    ):
+        val = raw.get(field)
+        if val is not None:
+            try:
+                f = float(val)
+                if f > 0:
+                    pricing[label] = round(f, 2)
+            except (TypeError, ValueError):
+                pass
+    sr = _str_nonempty(raw.get("serviceRate"))
+    if sr:
+        pricing["service_rate"] = sr[:80]
+    if pricing:
+        extras["pricing_breakdown"] = pricing
+
+    # Tarjeta de crédito y forma de pago
+    if _bool(raw.get("creditCard")):
+        extras["credit_card"] = True
+    pt = _str_nonempty(raw.get("paymentType"))
+    if pt:
+        extras["payment_type"] = pt[:60]
+
+    # Remarks: notas textuales del operador
+    remarks = raw.get("remarks")
+    if isinstance(remarks, list) and remarks:
+        texts = [str(r)[:200] for r in remarks if r][:10]
+        if texts:
+            extras.setdefault("descriptions", {})["remarks"] = texts
+
+    # Etiquetas de ambiente/carácter (flags 0/1 del API)
+    env_labels = []
+    for field, label in (
+        ("calm",         "calm"),
+        ("loud",         "loud"),
+        ("verySimple",   "very_simple"),
+        ("comfortable",  "comfortable"),
+        ("luxurious",    "luxurious"),
+        ("forest",       "forest"),
+        ("mountains",    "mountains"),
+        ("touristic",    "touristic"),
+        ("healthResort", "health_resort"),
+        ("shoppingCity", "shopping_city"),
+    ):
+        if _bool(raw.get(field)):
+            env_labels.append(label)
+    if env_labels:
+        extras["environment_labels"] = env_labels
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
 def merge_extra(norm: dict, extra: dict) -> dict:
     """Mergea el output de un extractor sobre el dict de normalize().
 
