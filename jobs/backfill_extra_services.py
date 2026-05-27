@@ -68,6 +68,7 @@ if _HELPERS_DIR not in _sys.path:
 
 from sources._normalize_helpers import (  # noqa: E402
     extract_agricamper,
+    extract_alpacacamping,
     extract_bobilguiden,
     extract_campercontact,
     extract_campercontact_detail,
@@ -114,6 +115,7 @@ EXTRACTORS = {
     "campspace":      extract_campspace,
     "vansite":        extract_vansite,
     "roadsurfer":     extract_roadsurfer,
+    "alpacacamping":  extract_alpacacamping,
 }
 
 

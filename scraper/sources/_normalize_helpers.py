@@ -1085,6 +1085,191 @@ def extract_thedyrt(raw: dict) -> dict:
     return out
 
 
+def extract_alpacacamping(raw: dict) -> dict:
+    """alpacacamping: amenities_infos.title (alemán) + property_address + atributos.
+
+    normalize() ya cubre vía amenities_infos.id: agua_potable (14/238), electricidad
+    (13/223), wc_publico (16/284), ducha (17/476), wifi (1), perros (41/315/229/231
+    vs 4), vaciado_grises (20), vaciado_negras (21), acceso_grandes (26), tipo
+    (25/27/28), country_iso/region, descripcion_de, rating, precio_*, fotos.
+
+    Aquí matcheamos los `title` (alemán) de amenities_infos contra patrones para sacar:
+      v4c: lavanderia (waschmaschine), juegos_ninos (kinderfreundlich/familienfreundlich/
+           für kinder), mtb_friendly (bikepark/radwege), hiking_nearby (für wanderfreunde/
+           wandern), fishing (für angler/angeln), winter_friendly (wintercamping),
+           mirador (tolle aussicht/weitblick/sonnenuntergang), acceso_dificil
+           (erfordert allrad vs stellplatz befestigt), municipio (address.city).
+      extras: environment_labels (wiese/hof/feld/wald/unter_bäumen/weinberg/see/fluss/
+              meer/agua/secluded/shaded), vibes (romantic/cozy/laid_back/pure_nature/
+              wow_factor/glamping/starry_sky), audience (adventurers/groups/hikers/
+              anglers/wine_lovers/families/buddies), alpacas_onsite, horse_onsite,
+              animals_onsite, farm_shop, campfire (feuerstelle vs kein lagerfeuer),
+              bbq (holzkohlegrill vs kein grillen), firewood_available, kitchen
+              (küche), outdoor_seating, car_at_pitch, free_parking, requires_4wd,
+              ground (paved si stellplatz befestigt), no_grey_water_disposal,
+              no_fruit_picking, max_persons (accommodates), area_sqm (space_amount),
+              booking_type, bedrooms, bathrooms.
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    ai = raw.get("amenities_infos") or {}
+    titles_raw = ai.get("title") if isinstance(ai, dict) else None
+    if not isinstance(titles_raw, list):
+        titles_raw = []
+    titles = [str(t).strip().lower() for t in titles_raw if t]
+
+    def has(*needles) -> bool:
+        return any(any(n in t for t in titles) for n in needles)
+
+    out: dict = {}
+
+    # ── columnas v4c ───────────────────────────────────────────────────
+    if has("waschmaschine"):
+        out["lavanderia"] = True
+    if has("kinderfreundlich", "familienfreundlich", "für kinder"):
+        out["juegos_ninos"] = True
+    if has("bikepark", "radwege"):
+        out["mtb_friendly"] = True
+    if has("für wanderfreunde", "wandern"):
+        out["hiking_nearby"] = True
+    if has("für angler", "angeln"):
+        out["fishing"] = True
+    if has("wintercamping"):
+        out["winter_friendly"] = True
+    if has("tolle aussicht", "weitblick", "sonnenuntergang"):
+        out["mirador"] = True
+
+    # 4WD requerido > stellplatz befestigt (en caso de conflicto, 4WD gana)
+    if has("erfordert allrad"):
+        out["acceso_dificil"] = True
+    elif has("stellplatz befestigt"):
+        out["acceso_dificil"] = False
+
+    # municipio
+    addr = raw.get("property_address") or {}
+    if isinstance(addr, dict):
+        muni = _str_nonempty(addr.get("city"))
+        if muni:
+            out["municipio"] = muni[:100]
+
+    # ── servicios_extras ───────────────────────────────────────────────
+    extras: dict = {}
+
+    # Environment / location labels
+    env_map = (
+        ("auf einer wiese",         "meadow"),
+        ("auf einem (bauern-) hof", "farm"),
+        ("am feld",                 "field"),
+        ("am wald",                 "forest"),
+        ("unter bäumen",            "under_trees"),
+        ("im weinberg",             "vineyard"),
+        ("beim winzer",             "vineyard"),
+        ("ab an den see",           "lake_nearby"),
+        ("ab an den fluss",         "river_nearby"),
+        ("ab ans meer",             "sea_nearby"),
+        ("direkt am wasser",        "on_water"),
+        ("wasser in der nähe",      "water_nearby"),
+        ("alleinlage",              "secluded"),
+        ("schattiges plätzchen",    "shaded"),
+    )
+    env_labels = sorted({label for kw, label in env_map if has(kw)})
+    if env_labels:
+        extras["environment_labels"] = env_labels
+
+    # Vibe / atmosphere
+    vibe_map = (
+        ("romantisch", "romantic"),
+        ("gemütlich",  "cozy"),
+        ("lässig",     "laid_back"),
+        ("natur pur",  "pure_nature"),
+        ("wow",        "wow_factor"),
+        ("glamping",   "glamping"),
+        ("sterne gucken", "starry_sky"),
+    )
+    vibes = sorted({label for kw, label in vibe_map if has(kw)})
+    if vibes:
+        extras["vibes"] = vibes
+
+    # Target audience
+    audience_map = (
+        ("für abenteurer",     "adventurers"),
+        ("gemeinsam verreisen","groups"),
+        ("für wanderfreunde",  "hikers"),
+        ("für angler",         "anglers"),
+        ("für weinliebhaber",  "wine_lovers"),
+        ("familienfreundlich", "families"),
+        ("kinderfreundlich",   "families"),
+        ("unterwegs mit dem campingbuddy", "buddies"),
+    )
+    aud = sorted({label for kw, label in audience_map if has(kw)})
+    if aud:
+        extras["audience"] = aud
+
+    # On-site animals / farm services
+    if has("alpakas vor ort"):
+        extras["alpacas_onsite"] = True
+    if has("pferde vor ort"):
+        extras["horse_onsite"] = True
+    if has("tiere vor ort"):
+        extras["animals_onsite"] = True
+    if has("hofladen"):
+        extras["farm_shop"] = True
+
+    # Campfire / BBQ con negativos explícitos
+    if has("kein lagerfeuer"):
+        extras["campfire"] = False
+    elif has("feuerstelle"):
+        extras["campfire"] = True
+    if has("kein grillen"):
+        extras["bbq"] = False
+    elif has("holzkohlegrill"):
+        extras["bbq"] = True
+    if has("brennholz"):
+        extras["firewood_available"] = True
+
+    # Otras facilities
+    if has("küche"):
+        extras["kitchen"] = True
+    if has("sitzplätze im freien"):
+        extras["outdoor_seating"] = True
+    if has("auto am standplatz"):
+        extras["car_at_pitch"] = True
+    if has("kostenloser parkplatz"):
+        extras["free_parking"] = True
+    if has("erfordert allrad"):
+        extras["requires_4wd"] = True
+    if has("stellplatz befestigt"):
+        extras["ground"] = "paved"
+    if has("keine schmutzwasserentsorgung"):
+        extras["no_grey_water_disposal"] = True
+    if has("keine früchte ernten"):
+        extras["no_fruit_picking"] = True
+
+    # Capacidad / área desde campos top-level
+    accommodates = raw.get("accommodates")
+    if isinstance(accommodates, (int, float)) and not isinstance(accommodates, bool) and accommodates > 0:
+        extras["max_persons"] = int(accommodates)
+
+    space = raw.get("space_amount")
+    if isinstance(space, (int, float)) and not isinstance(space, bool) and space > 0:
+        extras["area_sqm"] = round(float(space), 1)
+
+    booking_type = _str_nonempty(raw.get("booking_type"))
+    if booking_type:
+        extras["booking_type"] = booking_type[:30]
+
+    for k_in, k_out in (("bedrooms", "bedrooms"), ("bathrooms", "bathrooms")):
+        v = raw.get(k_in)
+        if isinstance(v, int) and v > 0:
+            extras[k_out] = v
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
 def extract_roadsurfer(raw: dict) -> dict:
     """roadsurfer: detail rico con facilities/activities/placeSituations.
 

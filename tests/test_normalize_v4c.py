@@ -20,6 +20,7 @@ if SCRAPER_DIR not in sys.path:
 
 from sources._normalize_helpers import (  # noqa: E402
     extract_agricamper,
+    extract_alpacacamping,
     extract_bobilguiden,
     extract_campercontact,
     extract_campercontact_detail,
@@ -1047,6 +1048,191 @@ def test_thedyrt_empty_attrs():
 def test_thedyrt_no_attrs_key():
     out = extract_thedyrt({})
     assert isinstance(out, dict)
+
+
+# ─── alpacacamping ────────────────────────────────────────────────────
+
+
+def _alpaca_raw(titles: list[str], **extra_fields) -> dict:
+    """Helper: construye raw con amenities_infos.title."""
+    d = {"amenities_infos": {"title": titles}}
+    d.update(extra_fields)
+    return d
+
+
+def test_alpaca_basic_v4c_columns():
+    raw = _alpaca_raw([
+        "Waschmaschine", "Kinderfreundlich", "Bikepark in der Nähe",
+        "Für Wanderfreunde", "Für Angler", "Wintercamping",
+        "Tolle Aussicht ",
+    ])
+    out = extract_alpacacamping(raw)
+    assert out["lavanderia"] is True
+    assert out["juegos_ninos"] is True
+    assert out["mtb_friendly"] is True
+    assert out["hiking_nearby"] is True
+    assert out["fishing"] is True
+    assert out["winter_friendly"] is True
+    assert out["mirador"] is True
+
+
+def test_alpaca_acceso_dificil_priority():
+    """Erfordert Allrad gana sobre Stellplatz befestigt."""
+    raw1 = _alpaca_raw(["Erfordert Allrad"])
+    assert extract_alpacacamping(raw1)["acceso_dificil"] is True
+    raw2 = _alpaca_raw(["Stellplatz befestigt"])
+    assert extract_alpacacamping(raw2)["acceso_dificil"] is False
+    raw3 = _alpaca_raw(["Erfordert Allrad", "Stellplatz befestigt"])
+    out3 = extract_alpacacamping(raw3)
+    assert out3["acceso_dificil"] is True  # 4WD wins
+    assert out3["servicios_extras"]["ground"] == "paved"
+    assert out3["servicios_extras"]["requires_4wd"] is True
+
+
+def test_alpaca_municipio_from_address():
+    raw = _alpaca_raw(["Wohnmobil & Van"], property_address={"city": "Markt Nordheim"})
+    out = extract_alpacacamping(raw)
+    assert out["municipio"] == "Markt Nordheim"
+
+
+def test_alpaca_environment_labels():
+    raw = _alpaca_raw(["Auf einer Wiese", "Am Wald", "Direkt am Wasser",
+                       "Im Weinberg", "Alleinlage"])
+    labels = extract_alpacacamping(raw)["servicios_extras"]["environment_labels"]
+    assert set(labels) == {"meadow", "forest", "on_water", "vineyard", "secluded"}
+
+
+def test_alpaca_vineyard_from_two_sources():
+    """Tanto 'Im Weinberg' como 'Beim Winzer' mapean a vineyard sin duplicar."""
+    raw = _alpaca_raw(["Im Weinberg", "Beim Winzer / Weingut"])
+    labels = extract_alpacacamping(raw)["servicios_extras"]["environment_labels"]
+    assert labels == ["vineyard"]
+
+
+def test_alpaca_vibes():
+    raw = _alpaca_raw(["Romantisch", "Gemütlich", "WOW-Faktor", "Natur pur ",
+                       "Sterne gucken", "Glamping"])
+    vibes = extract_alpacacamping(raw)["servicios_extras"]["vibes"]
+    assert "romantic" in vibes
+    assert "cozy" in vibes
+    assert "wow_factor" in vibes
+    assert "pure_nature" in vibes
+    assert "starry_sky" in vibes
+    assert "glamping" in vibes
+
+
+def test_alpaca_audience():
+    raw = _alpaca_raw(["Für Abenteurer", "Für Weinliebhaber", "Familienfreundlich",
+                       "Gemeinsam verreisen"])
+    aud = extract_alpacacamping(raw)["servicios_extras"]["audience"]
+    assert set(aud) == {"adventurers", "wine_lovers", "families", "groups"}
+
+
+def test_alpaca_audience_families_dedup():
+    """'Familienfreundlich' y 'Kinderfreundlich' apuntan a families (no duplica)."""
+    raw = _alpaca_raw(["Familienfreundlich", "Kinderfreundlich"])
+    aud = extract_alpacacamping(raw)["servicios_extras"]["audience"]
+    assert aud == ["families"]
+
+
+def test_alpaca_onsite_animals():
+    raw = _alpaca_raw(["Alpakas vor Ort", "Pferde vor Ort", "Tiere vor Ort", "Hofladen"])
+    se = extract_alpacacamping(raw)["servicios_extras"]
+    assert se["alpacas_onsite"] is True
+    assert se["horse_onsite"] is True
+    assert se["animals_onsite"] is True
+    assert se["farm_shop"] is True
+
+
+def test_alpaca_campfire_negative_overrides_positive():
+    """'kein Lagerfeuer' debe ganar sobre 'Feuerstelle'."""
+    raw = _alpaca_raw(["Feuerstelle", "kein Lagerfeuer"])
+    se = extract_alpacacamping(raw)["servicios_extras"]
+    assert se["campfire"] is False
+
+
+def test_alpaca_bbq_negative_overrides_positive():
+    raw = _alpaca_raw(["Holzkohlegrill erlaubt", "kein Grillen"])
+    se = extract_alpacacamping(raw)["servicios_extras"]
+    assert se["bbq"] is False
+
+
+def test_alpaca_facilities_to_extras():
+    raw = _alpaca_raw(["Küche", "Sitzplätze im Freien", "Auto am Standplatz erlaubt",
+                       "Kostenloser Parkplatz", "Brennholz verfügbar",
+                       "Keine Schmutzwasserentsorgung", "keine Früchte Ernten"])
+    se = extract_alpacacamping(raw)["servicios_extras"]
+    assert se["kitchen"] is True
+    assert se["outdoor_seating"] is True
+    assert se["car_at_pitch"] is True
+    assert se["free_parking"] is True
+    assert se["firewood_available"] is True
+    assert se["no_grey_water_disposal"] is True
+    assert se["no_fruit_picking"] is True
+
+
+def test_alpaca_capacity_and_area():
+    raw = _alpaca_raw([], accommodates=4, space_amount=80.0, bedrooms=2, bathrooms=1)
+    se = extract_alpacacamping(raw)["servicios_extras"]
+    assert se["max_persons"] == 4
+    assert se["area_sqm"] == 80.0
+    assert se["bedrooms"] == 2
+    assert se["bathrooms"] == 1
+
+
+def test_alpaca_booking_type():
+    raw = _alpaca_raw([], booking_type="instant")
+    assert extract_alpacacamping(raw)["servicios_extras"]["booking_type"] == "instant"
+
+
+def test_alpaca_empty_raw():
+    assert extract_alpacacamping({}) == {}
+    assert extract_alpacacamping(None) == {}
+    assert extract_alpacacamping({"amenities_infos": None}) == {}
+
+
+def test_alpaca_normalize_emits_v4c():
+    from sources.alpacacamping import AlpacaCampingSource
+    raw = {
+        "id": 9999,
+        "name": "Bauernhof in Bayern",
+        "property_address": {
+            "latitude": 49.5,
+            "longitude": 11.0,
+            "city": "Nuremberg",
+            "country": "DE",
+            "state": "Bayern",
+        },
+        "amenities_infos": {
+            "id": [14, 13, 16, 17, 25, 41],
+            "title": ["Wasser", "Strom", "WC", "Dusche", "Wohnmobil & Van",
+                      "Hunde willkommen", "Waschmaschine", "Auf einer Wiese",
+                      "Pferde vor Ort", "Feuerstelle", "Tolle Aussicht ",
+                      "Für Wanderfreunde", "Familienfreundlich"],
+        },
+        "accommodates": 6,
+        "space_amount": 120.0,
+        "booking_type": "instant",
+        "photos": [],
+    }
+    out = AlpacaCampingSource().normalize(raw)
+    assert out is not None
+    # normalize() canónicos por id
+    assert out["agua_potable"] is True
+    assert out["electricidad"] is True
+    # del extractor
+    assert out["lavanderia"] is True
+    assert out["hiking_nearby"] is True
+    assert out["juegos_ninos"] is True
+    assert out["mirador"] is True
+    assert out["municipio"] == "Nuremberg"
+    se = out["servicios_extras"]
+    assert "meadow" in se["environment_labels"]
+    assert "families" in se["audience"]
+    assert se["horse_onsite"] is True
+    assert se["campfire"] is True
+    assert se["max_persons"] == 6
+    assert se["area_sqm"] == 120.0
 
 
 # ─── roadsurfer ───────────────────────────────────────────────────────

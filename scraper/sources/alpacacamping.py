@@ -8,6 +8,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_alpacacamping, merge_extra
 
 class AlpacaCampingSource(AbstractSource):
     name = "alpacacamping"
@@ -91,7 +92,7 @@ class AlpacaCampingSource(AbstractSource):
             # Description summary
             desc_de = (raw.get("property_description") or {}).get("summary")
 
-            return {
+            norm = {
                 "source_id": str(alpaca_id),
                 "nombre": name,
                 "lat": float(lat),
@@ -117,6 +118,7 @@ class AlpacaCampingSource(AbstractSource):
                 "acceso_grandes": acceso_grandes,
                 "fotos_urls": photos[:10],
             }
+            return merge_extra(norm, extract_alpacacamping(raw))
         except Exception as e:
             logger.error(f"[alpacacamping] Error normalizing item: {e}")
             return None
