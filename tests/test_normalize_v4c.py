@@ -20,17 +20,21 @@ if SCRAPER_DIR not in sys.path:
 
 from sources._normalize_helpers import (  # noqa: E402
     extract_agricamper,
+    extract_bobilguiden,
     extract_campercontact,
     extract_campercontact_detail,
+    extract_campendium,
     extract_campingcarpark,
     extract_campy,
     extract_camperstop,
     extract_caramaps,
+    extract_furgovw,
+    extract_osm,
     extract_park4night,
-    extract_womostell,
-    extract_stayfree,
     extract_promobil,
     extract_searchforsites,
+    extract_stayfree,
+    extract_womostell,
     merge_extra,
 )
 
@@ -769,3 +773,216 @@ def test_searchforsites_normalize_emits_v4c():
     pb = out["servicios_extras"]["pricing_breakdown"]
     assert pb["min"] == 10.0
     assert pb["currency_sym"] == "£"
+
+
+# ─── bobilguiden ──────────────────────────────────────────────────────
+
+
+def test_bobilguiden_municipio_from_city():
+    raw = {
+        "location": {"address": {"city": "Bergen", "county": "Vestland"}},
+        "facilityIds": [],
+    }
+    out = extract_bobilguiden(raw)
+    assert out["municipio"] == "Bergen"
+
+
+def test_bobilguiden_caravan_allowed():
+    raw = {"location": {}, "caravanAllowed": True, "facilityIds": []}
+    out = extract_bobilguiden(raw)
+    assert out["acepta_caravanas"] is True
+
+
+def test_bobilguiden_caravan_not_allowed():
+    raw = {"caravanAllowed": False, "facilityIds": []}
+    out = extract_bobilguiden(raw)
+    assert out["acepta_caravanas"] is False
+
+
+def test_bobilguiden_short_description():
+    raw = {"shortDescription": "Fantastisk utsikt over fjorden.", "facilityIds": []}
+    out = extract_bobilguiden(raw)
+    assert out["descripcion_no"] == "Fantastisk utsikt over fjorden."
+
+
+def test_bobilguiden_empty_raw():
+    out = extract_bobilguiden({})
+    assert isinstance(out, dict)
+
+
+def test_bobilguiden_normalize_emits_v4c():
+    from sources.bobilguiden import BobilguidenSource
+    raw = {
+        "id": "123",
+        "name": "Camping Bergen",
+        "type": "CAMPING_SITE",
+        "location": {
+            "coordinates": {"latitude": 60.4, "longitude": 5.3},
+            "address": {"city": "Bergen", "county": "Vestland", "countryId": 1},
+        },
+        "facilityIds": [2, 3, 5, 6],
+        "caravanAllowed": True,
+        "shortDescription": "Rolig plass ved vannet.",
+    }
+    out = BobilguidenSource().normalize(raw)
+    assert out is not None
+    assert out["municipio"] == "Bergen"
+    assert out["acepta_caravanas"] is True
+    assert out["descripcion_no"] == "Rolig plass ved vannet."
+
+
+# ─── campendium ───────────────────────────────────────────────────────
+
+
+def test_campendium_pool_and_water():
+    raw = {
+        "properties": {
+            "place_detail": {"pool": True, "water": True},
+        }
+    }
+    out = extract_campendium(raw)
+    assert out["piscina"] is True
+    assert out["agua_potable"] is True
+
+
+def test_campendium_municipio_from_city():
+    raw = {"properties": {"city": "Tucson", "state": "AZ"}}
+    out = extract_campendium(raw)
+    assert out["municipio"] == "Tucson"
+
+
+def test_campendium_num_plazas_from_capacity():
+    raw = {"properties": {"place_detail": {"capacity": "48"}}}
+    out = extract_campendium(raw)
+    assert out["num_plazas"] == 48
+
+
+def test_campendium_empty():
+    out = extract_campendium({})
+    assert isinstance(out, dict)
+
+
+# ─── osm ──────────────────────────────────────────────────────────────
+
+
+def test_osm_acepta_caravanas_yes():
+    raw = {"tags": {"caravans": "yes"}}
+    out = extract_osm(raw)
+    assert out["acepta_caravanas"] is True
+
+
+def test_osm_acepta_caravanas_no():
+    raw = {"tags": {"caravans": "no"}}
+    out = extract_osm(raw)
+    assert out["acepta_caravanas"] is False
+
+
+def test_osm_acceso_dificil_gravel():
+    raw = {"tags": {"surface": "gravel"}}
+    out = extract_osm(raw)
+    assert out["acceso_dificil"] is True
+
+
+def test_osm_acceso_facil_asphalt():
+    raw = {"tags": {"surface": "asphalt"}}
+    out = extract_osm(raw)
+    assert out["acceso_dificil"] is False
+
+
+def test_osm_municipio():
+    raw = {"tags": {"addr:city": "Malaga"}}
+    out = extract_osm(raw)
+    assert out["municipio"] == "Malaga"
+
+
+def test_osm_ev_charging():
+    raw = {"tags": {"motorhome:charging": "yes"}}
+    out = extract_osm(raw)
+    assert out["servicios_extras"]["ev_charging"] is True
+
+
+def test_osm_stars():
+    raw = {"tags": {"stars": "3"}}
+    out = extract_osm(raw)
+    assert out["servicios_extras"]["stars"] == 3
+
+
+def test_osm_stars_out_of_range():
+    raw = {"tags": {"stars": "9"}}
+    out = extract_osm(raw)
+    assert "stars" not in out.get("servicios_extras", {})
+
+
+def test_osm_empty_tags():
+    out = extract_osm({"tags": {}})
+    assert isinstance(out, dict)
+
+
+def test_osm_normalize_emits_v4c():
+    from sources.osm import OSMSource
+    raw = {
+        "type": "node",
+        "id": 12345,
+        "lat": 36.7,
+        "lon": -4.4,
+        "tags": {
+            "tourism": "caravan_site",
+            "caravans": "yes",
+            "surface": "gravel",
+            "addr:city": "Marbella",
+            "stars": "4",
+            "motorhome:charging": "yes",
+        },
+    }
+    out = OSMSource().normalize(raw)
+    assert out is not None
+    assert out["acepta_caravanas"] is True
+    assert out["acceso_dificil"] is True
+    assert out["municipio"] == "Marbella"
+    assert out["servicios_extras"]["stars"] == 4
+    assert out["servicios_extras"]["ev_charging"] is True
+
+
+# ─── furgovw ──────────────────────────────────────────────────────────
+
+
+def test_furgovw_perros_positivo():
+    raw = {"body": "Agua: si\nPerros permitidos\nElectricidad: no"}
+    out = extract_furgovw(raw)
+    assert out["perros"] is True
+
+
+def test_furgovw_perros_negativo():
+    raw = {"body": "No se admiten perros en este lugar."}
+    out = extract_furgovw(raw)
+    assert out["perros"] is False
+
+
+def test_furgovw_wifi():
+    raw = {"body": "Hay wifi gratuito para los campistas."}
+    out = extract_furgovw(raw)
+    assert out["wifi"] is True
+
+
+def test_furgovw_sin_wifi():
+    raw = {"body": "Sin wifi en este área."}
+    out = extract_furgovw(raw)
+    assert out["wifi"] is False
+
+
+def test_furgovw_acepta_caravanas():
+    raw = {"body": "Caravanas permitidas junto a autocaravanas."}
+    out = extract_furgovw(raw)
+    assert out["acepta_caravanas"] is True
+
+
+def test_furgovw_autocaravanas_no_contamina_caravanas():
+    """Mencionar autocaravanas NO debe activar acepta_caravanas."""
+    raw = {"body": "Autocaravanas bienvenidas. Furgonetas sí."}
+    out = extract_furgovw(raw)
+    assert "acepta_caravanas" not in out
+
+
+def test_furgovw_body_none():
+    out = extract_furgovw({"body": None})
+    assert isinstance(out, dict)

@@ -10,6 +10,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_furgovw, merge_extra
 
 FURGOVW_API = "https://www.furgovw.org/api.php"
 FURGOVW_FORUM = "https://www.furgovw.org/foro/index.php"
@@ -328,7 +329,7 @@ class FurgovwSource(AbstractSource):
                 "vaciado_grises": body_data.get("vaciado_grises"),
             }
             result["_topic_id"] = int(topic_id) if topic_id else None
-            return result
+            return merge_extra(result, extract_furgovw(raw))
         except Exception as e:
             logger.warning(f"Error normalizando furgovw {raw.get('id')}: {e}")
             return None

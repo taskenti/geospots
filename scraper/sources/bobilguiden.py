@@ -7,6 +7,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_bobilguiden, merge_extra
 
 def clean_surrogates(text: str) -> str:
     if not text:
@@ -217,7 +218,7 @@ class BobilguidenSource(AbstractSource):
             "fotos_urls": fotos_urls,
         }
         norm.update(desc_fields)
-        return norm
+        return merge_extra(norm, extract_bobilguiden(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (
@@ -336,4 +337,146 @@ class BobilguidenSource(AbstractSource):
 
         dur = (datetime.now(timezone.utc) - inicio).total_seconds()
         logger.info(f"[bobilguiden] Completado en {dur:.0f}s | {stats}")
+        return stats
+
+    async def download_reviews(self, pool, config) -> dict:
+        """Descarga reviews completas del endpoint de detalle por spot.
+
+        El bulk /places/mobile solo incluye los últimos N comentarios (típicamente
+        3-5). Este método consulta /places/{id} para cada spot donde el conteo de
+        la DB es menor que review_count almacenado en source_records.
+        """
+        from db import upsert_review
+
+        stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}
+
+        async with pool.acquire() as conn:
+            jobs = await conn.fetch("""
+                SELECT sr.spot_id, sr.source_id, sr.review_count,
+                       COALESCE(r.cnt, 0) AS db_review_count
+                FROM source_records sr
+                LEFT JOIN (
+                    SELECT spot_id, COUNT(*) AS cnt
+                    FROM reviews WHERE source = 'bobilguiden'
+                    GROUP BY spot_id
+                ) r ON sr.spot_id = r.spot_id
+                WHERE sr.source = 'bobilguiden'
+                  AND sr.review_count > 0
+                  AND COALESCE(r.cnt, 0) < sr.review_count
+                ORDER BY sr.review_count DESC
+            """)
+
+        if not jobs:
+            logger.info("[bobilguiden] No hay reviews pendientes.")
+            return stats
+
+        logger.info(f"[bobilguiden] {len(jobs)} spots con reviews pendientes.")
+
+        headers = {
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "accept": "application/json",
+        }
+
+        async def fetch_spot_detail(client: httpx.AsyncClient, source_id: str) -> list:
+            """Intenta obtener la lista completa de comentarios de un spot."""
+            # Endpoint de detalle (devuelve el spot con todos los comments)
+            url = f"https://api.bobilguiden.no/places/{source_id}"
+            try:
+                resp = await client.get(url, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # El detalle puede estar en la raíz o en un campo "place"/"data"
+                    if isinstance(data, dict):
+                        comments = (data.get("comments") or data.get("ratings")
+                                    or data.get("reviews") or [])
+                        if not comments:
+                            # A veces viene dentro de un objeto anidado
+                            for key in ("place", "data", "result"):
+                                nested = data.get(key) or {}
+                                if isinstance(nested, dict):
+                                    comments = nested.get("comments") or nested.get("ratings") or []
+                                    if comments:
+                                        break
+                        return comments if isinstance(comments, list) else []
+                elif resp.status_code == 404:
+                    return []
+                else:
+                    logger.warning(f"[bobilguiden] Detail HTTP {resp.status_code} for {source_id}")
+                    return []
+            except Exception as e:
+                logger.warning(f"[bobilguiden] Error detail {source_id}: {e}")
+                return []
+
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=15) as client:
+            for job in jobs:
+                spot_id = job["spot_id"]
+                source_id = job["source_id"]
+                await asyncio.sleep(self.rate_limit)
+
+                comments = await fetch_spot_detail(client, source_id)
+                if not comments:
+                    stats["actualizados"] += 1
+                    continue
+
+                inserted = 0
+                try:
+                    async with pool.acquire() as conn:
+                        async with conn.transaction():
+                            for c in comments:
+                                if not isinstance(c, dict):
+                                    continue
+                                c_id = c.get("id")
+                                c_text = clean_surrogates(
+                                    c.get("content") or c.get("text") or c.get("comment") or ""
+                                ).strip()
+                                if not c_id or not c_text:
+                                    continue
+
+                                c_date = None
+                                for date_key in ("createdDate", "created_at", "date", "timestamp"):
+                                    date_str = c.get(date_key)
+                                    if date_str:
+                                        try:
+                                            c_date = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+                                            break
+                                        except Exception:
+                                            pass
+
+                                rating_val = None
+                                for r_key in ("rating", "score", "stars"):
+                                    rv = c.get(r_key)
+                                    if rv is not None:
+                                        try:
+                                            rating_val = float(rv)
+                                            break
+                                        except (ValueError, TypeError):
+                                            pass
+
+                                author = clean_surrogates(
+                                    c.get("username") or c.get("author") or c.get("name") or "Camper"
+                                )
+                                lang = detect_language(c_text)
+
+                                ok = await upsert_review(conn, {
+                                    "spot_id": spot_id,
+                                    "source": self.name,
+                                    "source_review_id": f"bg_{c_id}",
+                                    "texto": c_text,
+                                    "rating": rating_val,
+                                    "autor": author,
+                                    "fecha": c_date,
+                                    "idioma": lang,
+                                })
+                                if ok:
+                                    inserted += 1
+
+                    stats["reviews_nuevas"] += inserted
+                    stats["actualizados"] += 1
+                    if inserted:
+                        logger.info(f"[bobilguiden] spot {source_id}: +{inserted} reviews")
+                except Exception as e:
+                    logger.error(f"[bobilguiden] Error guardando reviews {source_id}: {e}")
+                    stats["errores"] += 1
+
+        logger.info(f"[bobilguiden] download_reviews done: {stats}")
         return stats

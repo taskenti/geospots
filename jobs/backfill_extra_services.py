@@ -68,17 +68,21 @@ if _HELPERS_DIR not in _sys.path:
 
 from sources._normalize_helpers import (  # noqa: E402
     extract_agricamper,
+    extract_bobilguiden,
     extract_campercontact,
     extract_campercontact_detail,
+    extract_campendium,
     extract_campingcarpark,
     extract_campy,
     extract_camperstop,
     extract_caramaps,
+    extract_furgovw,
+    extract_osm,
     extract_park4night,
-    extract_womostell,
-    extract_stayfree,
     extract_promobil,
     extract_searchforsites,
+    extract_stayfree,
+    extract_womostell,
 )
 
 
@@ -94,6 +98,10 @@ EXTRACTORS = {
     "stayfree":       extract_stayfree,
     "promobil":       extract_promobil,
     "searchforsites": extract_searchforsites,
+    "bobilguiden":    extract_bobilguiden,
+    "campendium":     extract_campendium,
+    "osm":            extract_osm,
+    "furgovw":        extract_furgovw,
 }
 
 

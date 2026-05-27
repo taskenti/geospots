@@ -753,6 +753,271 @@ def extract_searchforsites(raw: dict) -> dict:
     return out
 
 
+# ─── Extractors added in PR10 ────────────────────────────────────────────────
+
+
+def extract_bobilguiden(raw: dict) -> dict:
+    """bobilguiden: campos no capturados por normalize().
+
+    normalize() ya extrae: wc_publico(3), ducha(2), electricidad(5), agua_potable(6),
+    vaciado_grises(10), vaciado_negras(11), wifi(15) por facilityIds; email, telefono,
+    web, region (addr.county||city), num_plazas (vehicleCount), precio/gratuito.
+
+    Aquí añadimos: municipio (addr.city, más específico que county), caravanAllowed,
+    y shortDescription si existe.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+
+    # municipio: addr.city más específico que county (que va a region)
+    loc = raw.get("location") or {}
+    addr = loc.get("address") or {} if isinstance(loc, dict) else {}
+    if isinstance(addr, dict):
+        city = _str_nonempty(addr.get("city"))
+        if city:
+            out["municipio"] = city[:100]
+
+    # acepta_caravanas: caravana remolcada (NO autocaravana). Defensivo.
+    caravan = raw.get("caravanAllowed")
+    if caravan is not None:
+        b = _bool(caravan)
+        if b is not None:
+            out["acepta_caravanas"] = b
+
+    # Descripción corta en noruego (bulk a veces trae este campo)
+    short = _str_nonempty(raw.get("shortDescription"))
+    if short:
+        out["descripcion_no"] = short[:500]
+
+    return out
+
+
+def extract_campendium(raw: dict) -> dict:
+    """campendium: campos del tile/place_detail no cubiertos por normalize().
+
+    normalize() ya extrae: wc_publico, ducha, wifi, perros, acceso_grandes,
+    electricidad, vaciado_* del place_detail embedded en el tile response.
+    agua_potable está explícitamente a None (la API básica no lo da).
+
+    Aquí buscamos campos opcionales que algunos tiles sí traen.
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    props = raw.get("properties", raw)
+    if not isinstance(props, dict):
+        props = raw
+    pd = props.get("place_detail") or {}
+    if not isinstance(pd, dict):
+        pd = {}
+
+    def _b(val) -> bool | None:
+        if val is None:
+            return None
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in ("true", "yes", "1")
+        return bool(val) if val in (0, 1) else None
+
+    out: dict = {}
+
+    # agua_potable: conocida laguna de la ruta básica (tile no trae esto,
+    # pero el detail fetch posterior lo añade a normalized_data directamente)
+    water = _b(pd.get("water")) or _b(pd.get("water_hookup"))
+    if water is not None:
+        out["agua_potable"] = water
+
+    # piscina (pool / swimming)
+    pool = _b(pd.get("pool")) or _b(pd.get("swimming_pool"))
+    if pool is not None:
+        out["piscina"] = pool
+
+    # num_plazas
+    cap = pd.get("capacity") or pd.get("sites") or props.get("capacity")
+    if cap is not None:
+        try:
+            n = int(cap)
+            if n > 0:
+                out["num_plazas"] = n
+        except (TypeError, ValueError):
+            pass
+
+    # municipio desde props.city / props.locality
+    muni = _str_nonempty(props.get("city")) or _str_nonempty(props.get("locality"))
+    if muni:
+        out["municipio"] = muni[:100]
+
+    return out
+
+
+def extract_osm(raw: dict) -> dict:
+    """osm: tags OSM no capturados por normalize().
+
+    normalize() ya extrae: agua_potable, vaciado_negras/grises, wc_publico, ducha,
+    electricidad, wifi, perros, temporada_apertura (opening_hours), email, web,
+    telefono, region (addr:city||town), num_plazas (capacity).
+
+    Aquí añadimos: acepta_caravanas, acceso_dificil, municipio, ev_charging, stars.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    tags = raw.get("tags") or {}
+    if not isinstance(tags, dict):
+        return {}
+
+    out: dict = {}
+
+    # acepta_caravanas: OSM usa tag "caravans" (yes/no/permissive/private)
+    caravans = (tags.get("caravans") or "").lower().strip()
+    if caravans in ("yes", "permissive", "1"):
+        out["acepta_caravanas"] = True
+    elif caravans in ("no", "0", "private"):
+        out["acepta_caravanas"] = False
+
+    # acceso_dificil: surface no pavimentada → difícil para vehículos grandes
+    surface = (tags.get("surface") or "").lower().strip()
+    HARD_SURFACES = {"asphalt", "paved", "concrete", "sett", "cobblestone", "metal"}
+    SOFT_SURFACES = {"unpaved", "gravel", "dirt", "grass", "ground", "mud",
+                     "sand", "earth", "compacted", "fine_gravel", "wood"}
+    if surface in SOFT_SURFACES:
+        out["acceso_dificil"] = True
+    elif surface in HARD_SURFACES:
+        out["acceso_dificil"] = False
+
+    # municipio: normalize() ya pone addr:city en region. Lo duplicamos en
+    # municipio (columna separada, más específica que region en multi-fuente).
+    muni = (tags.get("addr:city") or tags.get("addr:town")
+            or tags.get("addr:municipality") or tags.get("addr:village"))
+    if muni:
+        out["municipio"] = str(muni).strip()[:100]
+
+    # servicios_extras opcionales
+    extras: dict = {}
+
+    # Carga para vehículos eléctricos (tag motorhome:charging o similar)
+    if (tags.get("motorhome:charging") or "").lower() in ("yes", "1", "service"):
+        extras["ev_charging"] = True
+    elif (tags.get("electric_vehicle:charging") or "").lower() in ("yes", "1"):
+        extras["ev_charging"] = True
+
+    # Estrellas oficiales (campings homologados)
+    stars_raw = tags.get("stars")
+    if stars_raw is not None:
+        try:
+            s = int(str(stars_raw).strip())
+            if 1 <= s <= 5:
+                extras["stars"] = s
+        except (TypeError, ValueError):
+            pass
+
+    # Piscina (raro en spots pero existe en campings de 4+ estrellas)
+    if (tags.get("swimming_pool") or "").lower() in ("yes", "1"):
+        extras["pool"] = True
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
+def extract_furgovw(raw: dict) -> dict:
+    """furgovw: extrae perros, wifi, acepta_caravanas del body del post de foro.
+
+    normalize() ya parsea el body vía _parsear_body() para: agua, wc, electricidad,
+    ducha, vaciado_*, precio, tipo, gratuito, descripcion_es, acceso_grandes.
+    Aquí añadimos los que _parsear_body() no cubre.
+
+    NOTA: furgovw es un foro de furgonetas/autocaravanas. Las "caravanas remolcadas"
+    son raras; solo marcamos acepta_caravanas si hay mención explícita y afirmativa.
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    body = raw.get("body") or ""
+    if not isinstance(body, str):
+        body = str(body)
+
+    # Limpiar HTML/BBCode básico para búsqueda de keywords
+    import re as _re
+    body_clean = _re.sub(r'<[^>]+>', ' ', body)
+    body_clean = _re.sub(r'\[[^\]]+\]', ' ', body_clean)  # BBCode
+    body_low = body_clean.lower()
+
+    out: dict = {}
+
+    # ── perros ──────────────────────────────────────────────────────────
+    PERROS_SI = [
+        "perros permitidos", "perros sí", "perros si", "se admiten perros",
+        "admiten perros", "perros bienvenidos", "dog friendly", "dogs welcome",
+        "mascotas permitidas", "mascotas bienvenidas", "se admiten mascotas",
+        "animales permitidos", "con perro", "con mascotas",
+    ]
+    PERROS_NO = [
+        "no se admiten perros", "no admiten perros", "no perros",
+        "perros no", "sin perros", "prohibido perros", "no mascotas",
+        "no se admiten mascotas", "no animales", "sin mascotas",
+    ]
+    for kw in PERROS_NO:
+        if kw in body_low:
+            out["perros"] = False
+            break
+    if "perros" not in out:
+        for kw in PERROS_SI:
+            if kw in body_low:
+                out["perros"] = True
+                break
+
+    # ── wifi ────────────────────────────────────────────────────────────
+    WIFI_SI = ["wifi", "wi-fi", "internet disponible", "hay internet", "conexión a internet"]
+    WIFI_NO = ["sin wifi", "sin wi-fi", "no hay wifi", "no wifi", "sin internet"]
+    for kw in WIFI_NO:
+        if kw in body_low:
+            out["wifi"] = False
+            break
+    if "wifi" not in out:
+        for kw in WIFI_SI:
+            if kw in body_low:
+                out["wifi"] = True
+                break
+
+    # ── acepta_caravanas ────────────────────────────────────────────────
+    # Solo "caravana" en sentido remolcada (NO autocaravana, NO "caravanismo")
+    # Negativo primero para evitar falsos positivos.
+    # CUIDADO: "autocaravanas" contiene "caravanas" → usar regex con lookbehind negativo.
+    import re as _re2
+    def _caravana_match(kw: str, text: str) -> bool:
+        """Comprueba que kw aparece en text pero NO precedido por 'auto'."""
+        idx = text.find(kw)
+        while idx != -1:
+            if idx < 4 or text[idx-4:idx] != "auto":
+                return True
+            idx = text.find(kw, idx + 1)
+        return False
+
+    CARAVANA_NO = [
+        "no caravanas", "sin caravanas", "caravanas no", "prohibido caravanas",
+        "no se admiten caravanas",
+    ]
+    CARAVANA_SI = [
+        "caravanas permitidas", "se admiten caravanas", "admiten caravanas",
+        "caravanas bienvenidas", "caravanas sí", "caravanas si",
+        "caravanas y autocaravanas",
+    ]
+    for kw in CARAVANA_NO:
+        if _caravana_match(kw, body_low):
+            out["acepta_caravanas"] = False
+            break
+    if "acepta_caravanas" not in out:
+        for kw in CARAVANA_SI:
+            if _caravana_match(kw, body_low):
+                out["acepta_caravanas"] = True
+                break
+
+    return out
+
+
 def merge_extra(norm: dict, extra: dict) -> dict:
     """Mergea el output de un extractor sobre el dict de normalize().
 

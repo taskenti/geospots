@@ -7,6 +7,7 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_osm, merge_extra
 
 OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
 
@@ -252,7 +253,7 @@ class OSMSource(AbstractSource):
             country_raw = (tags.get("addr:country") or "").lower().strip()
             country_iso = OSM_COUNTRY_TO_ISO.get(country_raw)
 
-            return {
+            norm = {
                 "source_id": str(osm_id),
                 "nombre": nombre,
                 "lat": lat, "lon": lon, "tipo": tipo,
@@ -275,6 +276,7 @@ class OSMSource(AbstractSource):
                 "wifi": wifi,
                 "perros": perros,
             }
+            return merge_extra(norm, extract_osm(raw))
         except Exception as e:
             logger.error(f"Error normalizando OSM {raw.get('id')}: {e}")
             return None

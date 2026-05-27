@@ -14,6 +14,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_campendium, merge_extra
 
 
 # North America bounding box for grid filtering
@@ -225,7 +226,7 @@ class CampendiumSource(AbstractSource):
                     return val.lower() == "true"
                 return bool(val)
 
-            return {
+            norm = {
                 "source_id": str(poi_id),
                 "nombre": name,
                 "lat": lat,
@@ -251,6 +252,7 @@ class CampendiumSource(AbstractSource):
                 "vaciado_grises": _bool(place_detail.get("dump_station")) or _bool(place_detail.get("sewer_hookup")),
                 "vaciado_negras": _bool(place_detail.get("dump_station")) or _bool(place_detail.get("sewer_hookup")),
             }
+            return merge_extra(norm, extract_campendium(raw))
         except Exception as e:
             logger.error(f"[{self.name}] Error normalizing: {e}")
             return None
