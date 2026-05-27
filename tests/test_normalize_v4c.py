@@ -34,6 +34,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_osm,
     extract_park4night,
     extract_promobil,
+    extract_roadsurfer,
     extract_searchforsites,
     extract_stayfree,
     extract_thedyrt,
@@ -1046,6 +1047,161 @@ def test_thedyrt_empty_attrs():
 def test_thedyrt_no_attrs_key():
     out = extract_thedyrt({})
     assert isinstance(out, dict)
+
+
+# ─── roadsurfer ───────────────────────────────────────────────────────
+
+
+def test_roadsurfer_facilities_to_v4c():
+    raw = {"facilities": ["washingMachine", "childrenPlaygrounds", "swimmingPool",
+                          "handicappedAccessible", "bicycleCellar", "looseUnderground"]}
+    out = extract_roadsurfer(raw)
+    assert out["lavanderia"] is True
+    assert out["juegos_ninos"] is True
+    assert out["piscina"] is True
+    assert out["accesibilidad_reducida"] is True
+    assert out["mtb_friendly"] is True
+    assert out["acceso_dificil"] is True
+
+
+def test_roadsurfer_activities_to_v4c():
+    raw = {"activities": ["hikingTrails", "fishing", "climbing", "surfingSailing",
+                          "sup", "barRestaurant"]}
+    out = extract_roadsurfer(raw)
+    assert out["hiking_nearby"] is True
+    assert out["fishing"] is True
+    assert out["climbing"] is True
+    assert out["surf_friendly"] is True
+    assert out["restaurant"] is True
+
+
+def test_roadsurfer_environment_labels():
+    raw = {"placeSituations": ["forest", "farm", "seaCoast", "country", "garden"]}
+    labels = extract_roadsurfer(raw)["servicios_extras"]["environment_labels"]
+    assert set(labels) == {"forest", "farm", "sea_coast", "countryside", "garden"}
+
+
+def test_roadsurfer_activities_split():
+    raw = {"activities": ["hikingTrails", "fishing", "cultural", "wellbeing",
+                          "skiing", "boat"]}
+    extras_acts = extract_roadsurfer(raw)["servicios_extras"]["activities"]
+    # v4c activities filtradas
+    assert "hikingTrails" not in extras_acts
+    assert "fishing" not in extras_acts
+    # resto va a extras
+    assert "cultural" in extras_acts
+    assert "wellbeing" in extras_acts
+    assert "skiing" in extras_acts
+    assert "boat" in extras_acts
+
+
+def test_roadsurfer_facilities_to_extras():
+    raw = {"facilities": ["campfire", "grillPlace", "picnicTable", "fridge",
+                          "shops", "trainOrBus", "fkk", "stable", "horse",
+                          "closedArea", "parking", "separateEntrance"]}
+    se = extract_roadsurfer(raw)["servicios_extras"]
+    assert se["campfire"] is True
+    assert se["bbq"] is True
+    assert se["picnic_table"] is True
+    assert se["fridge"] is True
+    assert se["shops_nearby"] is True
+    assert se["public_transit"] is True
+    assert se["naturism"] is True
+    assert se["stable"] is True
+    assert se["horse_onsite"] is True
+    assert se["closed_area"] is True
+    assert se["parking"] is True
+    assert se["separate_entrance"] is True
+
+
+def test_roadsurfer_ground_priority_concrete_over_lawn():
+    """Si hay concreteFloorSpace, gana sobre lawn/loose."""
+    raw = {"facilities": ["concreteFloorSpace", "lawnArea"]}
+    assert extract_roadsurfer(raw)["servicios_extras"]["ground"] == "concrete"
+    raw2 = {"facilities": ["looseUnderground", "lawnArea"]}
+    assert extract_roadsurfer(raw2)["servicios_extras"]["ground"] == "loose"
+    raw3 = {"facilities": ["lawnArea"]}
+    assert extract_roadsurfer(raw3)["servicios_extras"]["ground"] == "lawn"
+
+
+def test_roadsurfer_kitchen_any_variant():
+    raw1 = {"facilities": ["kitchen"]}
+    raw2 = {"facilities": ["separateKitchen"]}
+    assert extract_roadsurfer(raw1)["servicios_extras"]["kitchen"] is True
+    assert extract_roadsurfer(raw2)["servicios_extras"]["kitchen"] is True
+
+
+def test_roadsurfer_online_booking_and_municipio():
+    raw = {"isBookable": True, "city": "Maissana"}
+    out = extract_roadsurfer(raw)
+    assert out["online_booking"] is True
+    assert out["municipio"] == "Maissana"
+
+
+def test_roadsurfer_hours_parsing():
+    raw = {"checkInFrom": "16:00", "checkInUntil": "", "checkOutFrom": "08:30",
+           "checkOutUntil": "10:00"}
+    hours = extract_roadsurfer(raw)["servicios_extras"]["hours"]
+    # empty checkInUntil queda omitido (no ":" → no se guarda)
+    assert hours["check_in_from"] == "16:00"
+    assert "check_in_until" not in hours
+    assert hours["check_out_from"] == "08:30"
+    assert hours["check_out_by"] == "10:00"
+
+
+def test_roadsurfer_booking_limits():
+    raw = {"minNights": 2, "maxNights": 14}
+    se = extract_roadsurfer(raw)["servicios_extras"]
+    assert se["min_nights"] == 2
+    assert se["max_nights"] == 14
+
+
+def test_roadsurfer_area_and_pitch_location():
+    raw = {"areaInQm": 70.0, "pitchLocation": "On a hill with view"}
+    se = extract_roadsurfer(raw)["servicios_extras"]
+    assert se["area_sqm"] == 70.0
+    assert se["pitch_location"] == "On a hill with view"
+
+
+def test_roadsurfer_labels_and_badge():
+    raw = {"labels": ["Most Booked", "Eco-friendly"], "badgeLabel": "Top Pick"}
+    se = extract_roadsurfer(raw)["servicios_extras"]
+    assert se["labels"] == ["Most Booked", "Eco-friendly"]
+    assert se["badge"] == "Top Pick"
+
+
+def test_roadsurfer_addon_prices_cents_to_euros():
+    raw = {"adultAddonPrice": 1500, "childAddonPrice": 750}
+    addon = extract_roadsurfer(raw)["servicios_extras"]["addon_prices"]
+    assert addon["adult_addon"] == 15.0
+    assert addon["child_addon"] == 7.5
+
+
+def test_roadsurfer_house_rules_link():
+    raw = {"houseRulesLink": "https://example.com/rules.pdf"}
+    se = extract_roadsurfer(raw)["servicios_extras"]
+    assert se["house_rules_link"] == "https://example.com/rules.pdf"
+    # Fallback a download
+    raw2 = {"houseRulesDownload": "https://example.com/rules2.pdf"}
+    assert extract_roadsurfer(raw2)["servicios_extras"]["house_rules_link"] == "https://example.com/rules2.pdf"
+
+
+def test_roadsurfer_cancellation_policy():
+    raw = {"cancellationPolicy": "Free cancellation up to 7 days before arrival"}
+    se = extract_roadsurfer(raw)["servicios_extras"]
+    assert se["cancellation_policy"] == "Free cancellation up to 7 days before arrival"
+
+
+def test_roadsurfer_empty_raw():
+    assert extract_roadsurfer({}) == {}
+    assert extract_roadsurfer(None) == {}
+
+
+def test_roadsurfer_isbookable_false():
+    """isBookable=False NO debe poner online_booking=False (sin info → omit)."""
+    raw = {"isBookable": False}
+    out = extract_roadsurfer(raw)
+    assert "online_booking" not in out
 
 
 # ─── vansite ──────────────────────────────────────────────────────────

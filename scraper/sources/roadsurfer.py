@@ -7,6 +7,7 @@ import httpx
 import re
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_roadsurfer, merge_extra
 
 BASE_URL = "https://spots.roadsurfer.com/en_GB/search/spot"
 
@@ -308,7 +309,9 @@ class RoadsurferSource(AbstractSource):
         if desc:
             res[f"descripcion_{lang}"] = desc
 
-        return res
+        # El extractor lee de detail si existe (estructura rica con facilities/activities/
+        # placeSituations); si solo hay raw de Phase 1, devolverá poco.
+        return merge_extra(res, extract_roadsurfer(detail or raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (

@@ -1085,6 +1085,194 @@ def extract_thedyrt(raw: dict) -> dict:
     return out
 
 
+def extract_roadsurfer(raw: dict) -> dict:
+    """roadsurfer: detail rico con facilities/activities/placeSituations.
+
+    normalize() ya extrae: agua_potable (drinkingWater), wc_publico (toilet/separateToilet/
+    separateDryToilet), ducha (shower), wifi (wlan/internet), electricidad, perros (pets),
+    vaciado_grises/negras (veStation), acceso_grandes/tipo (campingTypes), gratuito/precio_*,
+    num_plazas, rating, descripcion_<lang>, fotos.
+
+    Aquí añadimos:
+      v4c: lavanderia (washingMachine/tumbleDryer/clothesline), juegos_ninos
+           (childrenPlaygrounds), piscina (swimmingPool), accesibilidad_reducida
+           (handicappedAccessible), mtb_friendly (bicycleCellar/selfServiceBicycles),
+           hiking_nearby, fishing, climbing, surf_friendly (surfingSailing/sup),
+           restaurant (barRestaurant), online_booking (isBookable),
+           acceso_dificil (looseUnderground), municipio (city).
+      extras: environment_labels (placeSituations), activities (resto),
+              campfire, bbq (grillPlace), picnic_table, kitchen, fridge,
+              shops_nearby, public_transit (trainOrBus), naturism (fkk),
+              stable, horse_onsite, closed_area, parking, separate_entrance,
+              ground (concrete/loose/lawn), min_nights, max_nights, hours,
+              cancellation_policy, area_sqm, pitch_location, badge, labels,
+              house_rules_link, addon_prices.
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    def _set(key):
+        v = raw.get(key) or []
+        if not isinstance(v, list):
+            return set()
+        return {x for x in v if isinstance(x, str)}
+
+    fac = _set("facilities")
+    act = _set("activities")
+    plc = _set("placeSituations")
+
+    out: dict = {}
+
+    # ── columnas v4c ───────────────────────────────────────────────────
+    if fac & {"washingMachine", "tumbleDryer", "clothesline"}:
+        out["lavanderia"] = True
+    if "childrenPlaygrounds" in fac:
+        out["juegos_ninos"] = True
+    if "swimmingPool" in fac:
+        out["piscina"] = True
+    if "handicappedAccessible" in fac:
+        out["accesibilidad_reducida"] = True
+    if fac & {"bicycleCellar", "selfServiceBicycles"}:
+        out["mtb_friendly"] = True
+    if "hikingTrails" in act:
+        out["hiking_nearby"] = True
+    if "fishing" in act:
+        out["fishing"] = True
+    if "climbing" in act:
+        out["climbing"] = True
+    if act & {"surfingSailing", "sup"}:
+        out["surf_friendly"] = True
+    if "barRestaurant" in act:
+        out["restaurant"] = True
+    if raw.get("isBookable") is True:
+        out["online_booking"] = True
+    if "looseUnderground" in fac:
+        out["acceso_dificil"] = True
+
+    city = _str_nonempty(raw.get("city"))
+    if city:
+        out["municipio"] = city[:100]
+
+    # ── servicios_extras ───────────────────────────────────────────────
+    extras: dict = {}
+
+    # placeSituations → environment_labels (camelCase → snake)
+    env_map = {
+        "forest": "forest", "farm": "farm", "garden": "garden",
+        "mountains": "mountains", "river": "river", "lake": "lake",
+        "seaCoast": "sea_coast", "beach": "beach", "city": "urban",
+        "country": "countryside", "carpark": "carpark",
+        "hotelParking": "hotel_parking",
+    }
+    env_labels = sorted({env_map[p] for p in plc if p in env_map})
+    if env_labels:
+        extras["environment_labels"] = env_labels
+
+    # Activities extra (no en v4c columns)
+    v4c_acts = {"hikingTrails", "fishing", "climbing", "surfingSailing",
+                "sup", "barRestaurant"}
+    extra_acts = sorted(a for a in act if a not in v4c_acts)
+    if extra_acts:
+        extras["activities"] = extra_acts
+
+    # Boolean facilities → extras
+    bool_extras = (
+        ("campfire",        "campfire"),
+        ("grillPlace",      "bbq"),
+        ("picnicTable",     "picnic_table"),
+        ("fridge",          "fridge"),
+        ("shops",           "shops_nearby"),
+        ("trainOrBus",      "public_transit"),
+        ("fkk",             "naturism"),
+        ("stable",          "stable"),
+        ("horse",           "horse_onsite"),
+        ("closedArea",      "closed_area"),
+        ("parking",         "parking"),
+        ("separateEntrance","separate_entrance"),
+    )
+    for k_in, k_out in bool_extras:
+        if k_in in fac:
+            extras[k_out] = True
+
+    # Kitchen (cualquier variante)
+    if fac & {"kitchen", "separateKitchen"}:
+        extras["kitchen"] = True
+
+    # Ground type derivado
+    if "concreteFloorSpace" in fac:
+        extras["ground"] = "concrete"
+    elif "looseUnderground" in fac:
+        extras["ground"] = "loose"
+    elif "lawnArea" in fac:
+        extras["ground"] = "lawn"
+
+    # Booking limits
+    mn = raw.get("minNights")
+    if isinstance(mn, (int, float)) and not isinstance(mn, bool) and mn > 0:
+        extras["min_nights"] = int(mn)
+    mx = raw.get("maxNights")
+    if isinstance(mx, (int, float)) and not isinstance(mx, bool) and mx > 0:
+        extras["max_nights"] = int(mx)
+
+    # Hours (4 fields, ya vienen "HH:MM" o "")
+    hours: dict = {}
+    for k_raw, k_out in (
+        ("checkInFrom",   "check_in_from"),
+        ("checkInUntil",  "check_in_until"),
+        ("checkOutFrom",  "check_out_from"),
+        ("checkOutUntil", "check_out_by"),
+    ):
+        v = _str_nonempty(raw.get(k_raw))
+        if v and ":" in v:
+            hours[k_out] = v[:5]
+    if hours:
+        extras["hours"] = hours
+
+    # Cancellation policy
+    cp = _str_nonempty(raw.get("cancellationPolicy"))
+    if cp:
+        extras["cancellation_policy"] = cp[:80]
+
+    # Área del spot
+    area = raw.get("areaInQm")
+    if isinstance(area, (int, float)) and not isinstance(area, bool) and area > 0:
+        extras["area_sqm"] = round(float(area), 1)
+
+    # Texto cortos
+    pitch_loc = _str_nonempty(raw.get("pitchLocation"))
+    if pitch_loc:
+        extras["pitch_location"] = pitch_loc[:200]
+    badge = _str_nonempty(raw.get("badgeLabel"))
+    if badge:
+        extras["badge"] = badge[:60]
+    labels = raw.get("labels")
+    if isinstance(labels, list) and labels:
+        labs = [str(l)[:40] for l in labels if l]
+        if labs:
+            extras["labels"] = labs[:10]
+
+    # House rules link (descargable o enlace)
+    rules_link = _str_nonempty(raw.get("houseRulesLink")) or \
+                 _str_nonempty(raw.get("houseRulesDownload"))
+    if rules_link:
+        extras["house_rules_link"] = rules_link[:300]
+
+    # Addon prices (céntimos → euros)
+    addon = {}
+    for k_raw, k_out in (("adultAddonPrice", "adult_addon"),
+                         ("childAddonPrice", "child_addon")):
+        v = raw.get(k_raw)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            addon[k_out] = round(float(v) / 100.0, 2)
+    if addon:
+        extras["addon_prices"] = addon
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
 def extract_vansite(raw: dict) -> dict:
     """vansite (Sharetribe Flex Transit JSON): publicData rica con amenities,
     activities, surroundings, kfz, locationPlace, verified, self-sufficient, etc.
