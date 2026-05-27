@@ -82,6 +82,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_promobil,
     extract_searchforsites,
     extract_stayfree,
+    extract_thedyrt,
     extract_womostell,
 )
 
@@ -102,6 +103,7 @@ EXTRACTORS = {
     "campendium":     extract_campendium,
     "osm":            extract_osm,
     "furgovw":        extract_furgovw,
+    "thedyrt":        extract_thedyrt,
 }
 
 

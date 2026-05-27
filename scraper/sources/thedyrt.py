@@ -13,6 +13,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_thedyrt, merge_extra
 
 
 class TheDyrtSource(AbstractSource):
@@ -171,7 +172,7 @@ class TheDyrtSource(AbstractSource):
                 except (ValueError, TypeError):
                     pass
 
-            return {
+            norm = {
                 "source_id": str(loc_id),
                 "nombre": (attrs.get("name") or "Sin nombre").strip()[:200],
                 "lat": lat,
@@ -198,6 +199,7 @@ class TheDyrtSource(AbstractSource):
                 "vaciado_negras": sanitary_dump,
                 "num_plazas": num_plazas,
             }
+            return merge_extra(norm, extract_thedyrt(raw))
         except Exception as e:
             logger.error(f"[thedyrt] Error normalizing raw data: {e}")
             return None

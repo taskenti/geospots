@@ -1018,6 +1018,73 @@ def extract_furgovw(raw: dict) -> dict:
     return out
 
 
+def extract_thedyrt(raw: dict) -> dict:
+    """thedyrt: campos de attrs no mapeados en normalize().
+
+    normalize() ya extrae: agua_potable (drinking-water/water-hookups), wc_publico
+    (toilets), ducha (showers), wifi, perros (pets-allowed), acceso_grandes
+    (big-rig-friendly), reserva_req (reservable/permit-required), vaciado_grises/negras
+    (sanitary-dump), num_plazas (campsites-count), tipo, gratuito/precio_aprox/precio_info,
+    rating_promedio, descripcion_en, fotos_urls, web, region, country_iso.
+
+    Aquí añadimos: electricidad (electric-hookups), municipio (nearest-city-name),
+    acceso_dificil (access-road), y servicios_extras con max_vehicle_length_ft,
+    cell_service, campfire, max_nights.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    attrs = raw.get("attributes") or {}
+    if not isinstance(attrs, dict):
+        return {}
+
+    out: dict = {}
+
+    # electricidad: normalize() no tiene electric-hookups
+    elec = _bool(attrs.get("electric-hookups"))
+    if elec is not None:
+        out["electricidad"] = elec
+
+    # municipio: nearest-city-name (normalize() solo guarda region-name)
+    city = _str_nonempty(attrs.get("nearest-city-name"))
+    if city:
+        out["municipio"] = city[:100]
+
+    # acceso_dificil: access-road (paved → fácil; dirt/gravel/unpaved → difícil)
+    road = (attrs.get("access-road") or "").lower().strip()
+    if road in ("dirt", "gravel", "unpaved", "rough"):
+        out["acceso_dificil"] = True
+    elif road in ("paved", "paved road"):
+        out["acceso_dificil"] = False
+
+    # servicios_extras opcionales
+    extras: dict = {}
+
+    # Longitud máxima de vehículo (en pies — estándar US/CA)
+    mvl = _int(attrs.get("max-vehicle-length"))
+    if mvl is not None:
+        extras["max_vehicle_length_ft"] = mvl
+
+    # Cobertura móvil
+    cell = _bool(attrs.get("cell-service"))
+    if cell is not None:
+        extras["cell_service"] = cell
+
+    # Hogueras permitidas
+    campfire = _bool(attrs.get("campfire"))
+    if campfire is not None:
+        extras["campfire"] = campfire
+
+    # Estancia máxima (noches)
+    max_nights = _int(attrs.get("max-nights") or attrs.get("max-vehicle-nights"))
+    if max_nights is not None:
+        extras["max_nights"] = max_nights
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
 def merge_extra(norm: dict, extra: dict) -> dict:
     """Mergea el output de un extractor sobre el dict de normalize().
 

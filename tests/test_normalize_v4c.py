@@ -34,6 +34,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_promobil,
     extract_searchforsites,
     extract_stayfree,
+    extract_thedyrt,
     extract_womostell,
     merge_extra,
 )
@@ -986,3 +987,92 @@ def test_furgovw_autocaravanas_no_contamina_caravanas():
 def test_furgovw_body_none():
     out = extract_furgovw({"body": None})
     assert isinstance(out, dict)
+
+
+# ─── thedyrt ──────────────────────────────────────────────────────────
+
+
+def test_thedyrt_electricidad():
+    raw = {"attributes": {"electric-hookups": True}}
+    out = extract_thedyrt(raw)
+    assert out["electricidad"] is True
+
+
+def test_thedyrt_municipio_from_nearest_city():
+    raw = {"attributes": {"nearest-city-name": "Moab"}}
+    out = extract_thedyrt(raw)
+    assert out["municipio"] == "Moab"
+
+
+def test_thedyrt_acceso_dificil_dirt():
+    raw = {"attributes": {"access-road": "dirt"}}
+    out = extract_thedyrt(raw)
+    assert out["acceso_dificil"] is True
+
+
+def test_thedyrt_acceso_facil_paved():
+    raw = {"attributes": {"access-road": "paved"}}
+    out = extract_thedyrt(raw)
+    assert out["acceso_dificil"] is False
+
+
+def test_thedyrt_servicios_extras():
+    raw = {
+        "attributes": {
+            "max-vehicle-length": 35,
+            "cell-service": True,
+            "campfire": False,
+            "max-nights": 14,
+        }
+    }
+    out = extract_thedyrt(raw)
+    se = out["servicios_extras"]
+    assert se["max_vehicle_length_ft"] == 35
+    assert se["cell_service"] is True
+    assert se["campfire"] is False
+    assert se["max_nights"] == 14
+
+
+def test_thedyrt_empty_attrs():
+    out = extract_thedyrt({"attributes": {}})
+    assert isinstance(out, dict)
+    assert "servicios_extras" not in out
+
+
+def test_thedyrt_no_attrs_key():
+    out = extract_thedyrt({})
+    assert isinstance(out, dict)
+
+
+def test_thedyrt_normalize_emits_v4c():
+    from sources.thedyrt import TheDyrtSource
+    raw = {
+        "id": "abc123",
+        "attributes": {
+            "location-id": "abc123",
+            "name": "Arches Dispersed",
+            "latitude": 38.68,
+            "longitude": -109.59,
+            "category": "dispersed",
+            "price-low": 0,
+            "rating": 4.5,
+            "reviews-count": 120,
+            "electric-hookups": False,
+            "nearest-city-name": "Moab",
+            "access-road": "gravel",
+            "big-rig-friendly": False,
+            "cell-service": False,
+            "campfire": True,
+            "max-nights": 7,
+        },
+    }
+    out = TheDyrtSource().normalize(raw)
+    assert out is not None
+    assert out["tipo"] == "wild"
+    assert out["electricidad"] is False
+    assert out["municipio"] == "Moab"
+    assert out["acceso_dificil"] is True
+    se = out["servicios_extras"]
+    assert se["cell_service"] is False
+    assert se["campfire"] is True
+    assert se["max_nights"] == 7
