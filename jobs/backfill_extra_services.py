@@ -85,6 +85,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_searchforsites,
     extract_stayfree,
     extract_thedyrt,
+    extract_vansite,
     extract_womostell,
     extract_wtmg,
 )
@@ -110,6 +111,7 @@ EXTRACTORS = {
     "wtmg":           extract_wtmg,
     "nomady":         extract_nomady,
     "campspace":      extract_campspace,
+    "vansite":        extract_vansite,
 }
 
 

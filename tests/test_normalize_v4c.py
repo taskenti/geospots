@@ -37,6 +37,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_searchforsites,
     extract_stayfree,
     extract_thedyrt,
+    extract_vansite,
     extract_womostell,
     extract_wtmg,
     merge_extra,
@@ -1045,6 +1046,193 @@ def test_thedyrt_empty_attrs():
 def test_thedyrt_no_attrs_key():
     out = extract_thedyrt({})
     assert isinstance(out, dict)
+
+
+# ─── vansite ──────────────────────────────────────────────────────────
+
+
+def _vansite_raw(public_data: dict) -> dict:
+    """Helper: envuelve un publicData dict en la estructura Transit decoded."""
+    return {"~:attributes": {"~:publicData": public_data}}
+
+
+def test_vansite_basic_v4c_columns():
+    raw = _vansite_raw({
+        "~:amenities": ["wascher", "playground", "fireplace"],
+        "~:activities": ["cycling", "hiking", "fishing", "climbing", "surfing"],
+        "~:kfz": ["caravan", "camper", "tent"],
+        "~:locationPlace": "Hennef",
+    })
+    out = extract_vansite(raw)
+    assert out["lavanderia"] is True
+    assert out["juegos_ninos"] is True
+    assert out["mtb_friendly"] is True
+    assert out["hiking_nearby"] is True
+    assert out["fishing"] is True
+    assert out["climbing"] is True
+    assert out["surf_friendly"] is True
+    assert out["acepta_caravanas"] is True
+    assert out["municipio"] == "Hennef"
+
+
+def test_vansite_allwheeldrive_implies_acceso_dificil():
+    raw = _vansite_raw({"~:allWheelDrive": "yes"})
+    out = extract_vansite(raw)
+    assert out["acceso_dificil"] is True
+    assert out["servicios_extras"]["requires_4wd"] is True
+
+
+def test_vansite_environment_labels():
+    raw = _vansite_raw({"~:surroundings": ["forest", "meadow", "lake", "court"]})
+    labels = extract_vansite(raw)["servicios_extras"]["environment_labels"]
+    # court → yard alias
+    assert set(labels) == {"forest", "meadow", "lake", "yard"}
+
+
+def test_vansite_activities_split():
+    raw = _vansite_raw({"~:activities": [
+        "hiking", "cycling",  # v4c
+        "swimming", "wellness", "wine_tasting", "alpaca",  # extras
+    ]})
+    out = extract_vansite(raw)
+    extras_acts = out["servicios_extras"]["activities"]
+    assert "swimming" in extras_acts
+    assert "wellness" in extras_acts
+    assert "alpaca" in extras_acts
+    assert "hiking" not in extras_acts  # ya en v4c column
+    assert "cycling" not in extras_acts
+
+
+def test_vansite_amenities_to_extras():
+    raw = _vansite_raw({"~:amenities": ["fireplace", "garbage", "signal"]})
+    se = extract_vansite(raw)["servicios_extras"]
+    assert se["campfire"] is True
+    assert se["trash_disposal"] is True
+    assert se["cell_service"] is True
+
+
+def test_vansite_clock_parsing():
+    raw = _vansite_raw({
+        "~:earliestArrivalTime": "10_clock",
+        "~:latestArrivalTime":   "20_clock",
+        "~:latestDepartureTime": "15_clock",
+    })
+    hours = extract_vansite(raw)["servicios_extras"]["hours"]
+    assert hours["check_in_from"] == "10:00"
+    assert hours["check_in_until"] == "20:00"
+    assert hours["check_out_by"] == "15:00"
+
+
+def test_vansite_booking_min_max():
+    raw = _vansite_raw({"~:bookingMinimum": "min_2", "~:bookingLimit": "limit_5"})
+    se = extract_vansite(raw)["servicios_extras"]
+    assert se["min_nights"] == 2
+    assert se["max_nights"] == 5
+
+
+def test_vansite_booking_limit_bigger_means_no_max():
+    """'limit_bigger_4' = sin tope; NO debe guardar max_nights."""
+    raw = _vansite_raw({"~:bookingLimit": "limit_bigger_4"})
+    se = extract_vansite(raw).get("servicios_extras", {})
+    assert "max_nights" not in se
+
+
+def test_vansite_booking_limit_as_list():
+    """bookingLimit puede venir como list ['limit_3']."""
+    raw = _vansite_raw({"~:bookingLimit": ["limit_3"]})
+    assert extract_vansite(raw)["servicios_extras"]["max_nights"] == 3
+
+
+def test_vansite_verified_true_only():
+    """verified=1 o True → guardado; 0/False → no se guarda."""
+    assert extract_vansite(_vansite_raw({"~:verified": 1}))["servicios_extras"]["verified"] is True
+    assert extract_vansite(_vansite_raw({"~:verified": True}))["servicios_extras"]["verified"] is True
+    assert "verified" not in extract_vansite(_vansite_raw({"~:verified": 0})).get("servicios_extras", {})
+
+
+def test_vansite_self_sufficient_list():
+    raw = _vansite_raw({"~:selfSufficient": [True]})
+    assert extract_vansite(raw)["servicios_extras"]["self_sufficient_required"] is True
+    raw2 = _vansite_raw({"~:selfSufficient": [False]})
+    assert extract_vansite(raw2)["servicios_extras"]["self_sufficient_required"] is False
+
+
+def test_vansite_tent_friendly_from_kfz():
+    raw = _vansite_raw({"~:kfz": ["tent"]})
+    assert extract_vansite(raw)["servicios_extras"]["tent_friendly"] is True
+    raw2 = _vansite_raw({"~:kfz": ["carTent"]})
+    assert extract_vansite(raw2)["servicios_extras"]["tent_friendly"] is True
+
+
+def test_vansite_cancellation_policy():
+    raw = _vansite_raw({"~:cancellationPolicyTier": "flexible_24h"})
+    assert extract_vansite(raw)["servicios_extras"]["cancellation_policy"] == "flexible_24h"
+
+
+def test_vansite_empty_raw():
+    assert extract_vansite({}) == {}
+    assert extract_vansite({"~:attributes": {}}) == {}
+    assert extract_vansite({"~:attributes": {"~:publicData": {}}}) == {}
+
+
+def test_vansite_malformed_publicdata():
+    """publicData no-dict no debe petar."""
+    raw = {"~:attributes": {"~:publicData": "broken"}}
+    assert extract_vansite(raw) == {}
+
+
+def test_vansite_normalize_emits_v4c():
+    from sources.vansite import VansiteSource
+    raw = {
+        "~:id": "~uabc123",
+        "~:attributes": {
+            "~:title": "Bauernhof am See",
+            "~:description": "Quiet farm by the lake.",
+            "~:geolocation": ["~:geolocation", [50.4, 7.5]],
+            "~:price": ["~:m", [1500, "EUR"]],
+            "~:publicData": {
+                "~:amenities": ["electricity", "water", "wascher", "fireplace", "signal", "playground"],
+                "~:activities": ["hiking", "cycling", "swimming", "wellness"],
+                "~:surroundings": ["forest", "meadow", "lake"],
+                "~:kfz": ["camper", "caravan", "tent"],
+                "~:locationPlace": "Bonn",
+                "~:verified": 1,
+                "~:selfSufficient": [True],
+                "~:allWheelDrive": "no",
+                "~:earliestArrivalTime": "14_clock",
+                "~:latestDepartureTime": "11_clock",
+                "~:bookingMinimum": "min_1",
+                "~:bookingLimit": "limit_4",
+                "~:category": "campsite",
+                "~:amountOfSeats": 5,
+            },
+        },
+    }
+    out = VansiteSource().normalize(raw)
+    assert out is not None
+    # campos de normalize()
+    assert out["electricidad"] is True
+    assert out["agua_potable"] is True
+    assert out["acceso_grandes"] is True  # de kfz
+    assert out["num_plazas"] == 5
+    # de extractor
+    assert out["lavanderia"] is True
+    assert out["juegos_ninos"] is True
+    assert out["mtb_friendly"] is True
+    assert out["hiking_nearby"] is True
+    assert out["acepta_caravanas"] is True
+    assert out["municipio"] == "Bonn"
+    se = out["servicios_extras"]
+    assert "lake" in se["environment_labels"]
+    assert "swimming" in se["activities"]
+    assert se["campfire"] is True
+    assert se["cell_service"] is True
+    assert se["verified"] is True
+    assert se["self_sufficient_required"] is True
+    assert se["min_nights"] == 1
+    assert se["max_nights"] == 4
+    assert se["hours"]["check_in_from"] == "14:00"
+    assert se["hours"]["check_out_by"] == "11:00"
 
 
 # ─── campspace ────────────────────────────────────────────────────────

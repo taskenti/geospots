@@ -1085,6 +1085,172 @@ def extract_thedyrt(raw: dict) -> dict:
     return out
 
 
+def extract_vansite(raw: dict) -> dict:
+    """vansite (Sharetribe Flex Transit JSON): publicData rica con amenities,
+    activities, surroundings, kfz, locationPlace, verified, self-sufficient, etc.
+
+    raw_data en DB tiene keys con prefijo `~:` (formato Transit JSON ya decodificado).
+    normalize() ya extrae: agua_potable (amenities.water), wc_publico (toilet/wc),
+    ducha (shower), electricidad, wifi, perros (dog/pets), vaciado_grises/negras,
+    acceso_grandes (kfz: motorhome/camper/bus/caravan), num_plazas, rating,
+    precio_*, descripcion_<lang>, fotos.
+
+    Aquí añadimos:
+      v4c: lavanderia (wascher), juegos_ninos (kidsFriendly/playground), mtb_friendly,
+           hiking_nearby, fishing, climbing, surf_friendly, acepta_caravanas (kfz),
+           acceso_dificil (allWheelDrive=yes), municipio (locationPlace).
+      extras: campfire (fireplace), trash_disposal (garbage), cell_service (signal),
+              tent_friendly (kfz tent/carTent), environment_labels (surroundings),
+              activities (rest), verified, self_sufficient_required (selfSufficient),
+              requires_4wd (allWheelDrive), hours (check_in/check_out parsed from
+              X_clock), min_nights (booking min_X), max_nights (limit_X),
+              cancellation_policy (cancellationPolicyTier).
+    """
+    if not isinstance(raw, dict):
+        return {}
+    attrs = raw.get("~:attributes") or {}
+    if not isinstance(attrs, dict):
+        return {}
+    pd = attrs.get("~:publicData") or {}
+    if not isinstance(pd, dict):
+        return {}
+
+    def _as_set(key):
+        v = pd.get(key) or []
+        if not isinstance(v, list):
+            return set()
+        return {x for x in v if isinstance(x, str)}
+
+    amen_set = _as_set("~:amenities")
+    act_set = _as_set("~:activities")
+    surr_set = _as_set("~:surroundings")
+    kfz_set = _as_set("~:kfz")
+
+    out: dict = {}
+
+    # ── columnas v4c ───────────────────────────────────────────────────
+    if "wascher" in amen_set:
+        out["lavanderia"] = True
+    if "kidsFriendly" in amen_set or "playground" in amen_set:
+        out["juegos_ninos"] = True
+    if "cycling" in act_set:
+        out["mtb_friendly"] = True
+    if "hiking" in act_set:
+        out["hiking_nearby"] = True
+    if "fishing" in act_set:
+        out["fishing"] = True
+    if "climbing" in act_set:
+        out["climbing"] = True
+    if "surfing" in act_set:
+        out["surf_friendly"] = True
+    if "caravan" in kfz_set:
+        out["acepta_caravanas"] = True
+
+    location_place = _str_nonempty(pd.get("~:locationPlace"))
+    if location_place:
+        out["municipio"] = location_place[:100]
+
+    awd = pd.get("~:allWheelDrive")
+    if isinstance(awd, str) and awd.lower() == "yes":
+        out["acceso_dificil"] = True
+
+    # ── servicios_extras ───────────────────────────────────────────────
+    extras: dict = {}
+
+    if "fireplace" in amen_set:
+        extras["campfire"] = True
+    if "garbage" in amen_set:
+        extras["trash_disposal"] = True
+    if "signal" in amen_set:
+        extras["cell_service"] = True
+    if "tent" in kfz_set or "carTent" in kfz_set:
+        extras["tent_friendly"] = True
+
+    # Environment labels
+    env_map = {
+        "forest": "forest", "forrest": "forest",
+        "meadow": "meadow", "field": "field", "court": "yard",
+        "house":  "near_house", "lake": "lake", "river": "river",
+        "mountain": "mountain", "sea": "sea",
+    }
+    env_labels = sorted({env_map[s] for s in surr_set if s in env_map})
+    if env_labels:
+        extras["environment_labels"] = env_labels
+
+    # Activities extra (no en columnas v4c)
+    v4c_acts = {"hiking", "cycling", "fishing", "climbing", "surfing"}
+    extra_acts = sorted(a for a in act_set if a not in v4c_acts)
+    if extra_acts:
+        extras["activities"] = extra_acts
+
+    # Verified (sólo guardamos True; 0/false son no-info útil)
+    v = pd.get("~:verified")
+    if v == 1 or v is True:
+        extras["verified"] = True
+
+    # Self-sufficient required (autosuficiencia exigida al huésped)
+    ss = pd.get("~:selfSufficient")
+    if isinstance(ss, list) and ss:
+        ss = ss[0]
+    if isinstance(ss, bool):
+        extras["self_sufficient_required"] = ss
+
+    if awd and isinstance(awd, str) and awd.lower() == "yes":
+        extras["requires_4wd"] = True
+
+    # Horarios check-in / check-out (formato "10_clock" → "10:00")
+    def _clock(val):
+        if isinstance(val, str) and val.endswith("_clock"):
+            try:
+                return f"{int(val[:-6]):02d}:00"
+            except ValueError:
+                return None
+        return None
+
+    hours: dict = {}
+    for raw_key, out_key in (
+        ("~:earliestArrivalTime", "check_in_from"),
+        ("~:latestArrivalTime",   "check_in_until"),
+        ("~:latestDepartureTime", "check_out_by"),
+    ):
+        v = _clock(pd.get(raw_key))
+        if v:
+            hours[out_key] = v
+    if hours:
+        extras["hours"] = hours
+
+    # Min/max nights
+    bm = pd.get("~:bookingMinimum")
+    if isinstance(bm, str) and bm.startswith("min_"):
+        try:
+            n = int(bm[4:])
+            if n > 0:
+                extras["min_nights"] = n
+        except ValueError:
+            pass
+
+    bl = pd.get("~:bookingLimit")
+    if isinstance(bl, list) and bl:
+        bl = bl[0]
+    if isinstance(bl, str) and bl.startswith("limit_") and not bl.startswith("limit_bigger_"):
+        try:
+            n = int(bl[6:])
+            if n > 0:
+                extras["max_nights"] = n
+        except ValueError:
+            pass
+
+    # Cancellation policy
+    cp = _str_nonempty(pd.get("~:cancellationPolicyTier"))
+    if cp:
+        extras["cancellation_policy"] = cp[:50]
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
 def extract_campspace(raw: dict) -> dict:
     """campspace: amenities + surroundings lists del scraping Phase 2.
 

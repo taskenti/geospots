@@ -7,6 +7,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_vansite, merge_extra
 
 def decode_cache_code(code):
     """Decodifica un código de base-44 (ASCII 48-91) a entero."""
@@ -366,7 +367,7 @@ class VansiteSource(AbstractSource):
             except (ValueError, TypeError):
                 pass
 
-        return {
+        norm = {
             "source_id": sid,
             "nombre": attrs.get("~:title", "Vansite Spot").strip()[:200],
             "lat": lat,
@@ -395,6 +396,7 @@ class VansiteSource(AbstractSource):
             "web": f"https://vansite.eu/l/{sid}",
             "fotos_urls": fotos_urls
         }
+        return merge_extra(norm, extract_vansite(raw))
 
     async def run(self, pool, config, log_id: int) -> dict:
         from db import (
