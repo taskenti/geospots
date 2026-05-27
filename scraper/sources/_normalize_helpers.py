@@ -1085,6 +1085,156 @@ def extract_thedyrt(raw: dict) -> dict:
     return out
 
 
+def extract_campspace(raw: dict) -> dict:
+    """campspace: amenities + surroundings lists del scraping Phase 2.
+
+    `_normalize_detail()` del scraper ya cubre lo básico (agua_potable, wc_publico,
+    ducha, wifi, electricidad, vaciado_*, perros, seguridad, iluminacion, num_plazas).
+    normalize() de Phase 1 cubre nombre, lat/lon, precio_*, web.
+
+    Aquí añadimos columnas v4c desde amenities/surroundings y servicios_extras:
+      v4c: piscina, juegos_ninos, mirador, accesibilidad_reducida, mtb_friendly,
+           hiking_nearby, fishing, climbing, surf_friendly.
+      extras: environment_labels, activities, farm_animals, campfire, bbq,
+              picnic_table, kitchen, sauna, hot_tub, ev_charging, naturism, shelter,
+              cell_service, heating, glamping_linen, rv_hookup, rv_dump,
+              pricing_breakdown (de raw.price).
+    """
+    if not isinstance(raw, dict):
+        return {}
+
+    amenities = raw.get("amenities") or []
+    surroundings = raw.get("surroundings") or []
+    if not isinstance(amenities, list):
+        amenities = []
+    if not isinstance(surroundings, list):
+        surroundings = []
+
+    a_low = [str(a).lower() for a in amenities if a]
+    s_low = [str(s).lower() for s in surroundings if s]
+
+    def amen(*needles) -> bool:
+        return any(any(n in a for a in a_low) for n in needles)
+
+    def surr(*needles) -> bool:
+        return any(any(n in s for s in s_low) for n in needles)
+
+    out: dict = {}
+
+    # ── columnas v4c ───────────────────────────────────────────────────
+    if amen("swimming pool"):
+        out["piscina"] = True
+    if amen("playground", "trampoline"):
+        out["juegos_ninos"] = True
+    if amen("view"):  # sunset/sunrise/forest/field/hill/mountain/river/lake/sea view
+        out["mirador"] = True
+    if amen("barrier-free"):
+        out["accesibilidad_reducida"] = True
+    if amen("bicycle storage") or surr("cycling"):
+        out["mtb_friendly"] = True
+    if surr("hiking"):
+        out["hiking_nearby"] = True
+    if surr("fishing"):
+        out["fishing"] = True
+    if surr("climbing"):
+        out["climbing"] = True
+    if surr("surfing"):
+        out["surf_friendly"] = True
+
+    # ── servicios_extras ───────────────────────────────────────────────
+    extras: dict = {}
+
+    env_map = (
+        ("forest",             "forest"),
+        ("meadow or plain",    "meadow"),
+        ("river or stream",    "river"),
+        ("hills",              "hills"),
+        ("beach or seaside",   "beach"),
+        ("urban area",         "urban"),
+    )
+    env_labels = [label for kw, label in env_map if surr(kw)]
+    if env_labels:
+        extras["environment_labels"] = env_labels
+
+    act_map = (
+        ("making a campfire",   "campfire"),
+        ("swimming",            "swimming"),
+        ("canoeing or kayaking","canoeing"),
+        ("boating",             "boating"),
+        ("horseback riding",    "horseback_riding"),
+        ("outdoor cooking",     "outdoor_cooking"),
+        ("wine or beer tasting","wine_beer_tasting"),
+        ("sightseeing",         "sightseeing"),
+        ("wildlife watching",   "wildlife_watching"),
+    )
+    activities = [label for kw, label in act_map if surr(kw)]
+    if activities:
+        extras["activities"] = activities
+
+    farm_map = (("cows", "cows"), ("sheep", "sheep"), ("chickens", "chickens"),
+                ("horses or ponies", "horses"), ("deer", "deer"), ("birds", "birds"))
+    farm_animals = [out_label for kw, out_label in farm_map if surr(kw)]
+    if farm_animals:
+        extras["farm_animals"] = farm_animals
+
+    # Boolean amenities → extras (solo si True; no marcamos False porque la
+    # ausencia de un amenity no implica que esté prohibido)
+    if amen("fireplace", "fire basket", "fire bowl", "firewood", "wood burner", "wood-fired oven"):
+        extras["campfire"] = True
+    if amen("bbq"):
+        extras["bbq"] = True
+    if amen("picnic table"):
+        extras["picnic_table"] = True
+    if amen("kitchen", "refrigerator", "gas stove", "cooking basics", "dishes and cutlery"):
+        extras["kitchen"] = True
+    if amen("sauna"):
+        extras["sauna"] = True
+    if amen("hot tub"):
+        extras["hot_tub"] = True
+    if amen("ev car charging"):
+        extras["ev_charging"] = True
+    if amen("naturism"):
+        extras["naturism"] = True
+    if amen("rain shelter"):
+        extras["shelter"] = True
+    if amen("mobile reception"):
+        extras["cell_service"] = True
+    if amen("heating", "electrical heating", "wood burner"):
+        extras["heating"] = True
+    if amen("bed linen") or amen("towels"):
+        extras["glamping_linen"] = True
+    if amen("rv electricity"):
+        extras["rv_hookup"] = True
+    if amen("rv dump"):
+        extras["rv_dump"] = True
+
+    # Pricing de raw.price (Phase 1) — "from € 18", "£ 22.50", etc.
+    price_str = raw.get("price")
+    if isinstance(price_str, str) and price_str:
+        import re as _re
+        m = _re.search(r"(\d+(?:[.,]\d+)?)", price_str)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", "."))
+                if val > 0:
+                    currency = "€"
+                    if "£" in price_str:
+                        currency = "£"
+                    elif "$" in price_str:
+                        currency = "$"
+                    extras["pricing_breakdown"] = {
+                        "from": round(val, 2),
+                        "currency": currency,
+                    }
+            except ValueError:
+                pass
+
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
 def extract_nomady(raw: dict) -> dict:
     """nomady: API rica DACH/CH. Muchas facilities/activities/pricing.
 

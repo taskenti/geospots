@@ -73,6 +73,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_campercontact_detail,
     extract_campendium,
     extract_campingcarpark,
+    extract_campspace,
     extract_campy,
     extract_camperstop,
     extract_caramaps,
@@ -108,6 +109,7 @@ EXTRACTORS = {
     "thedyrt":        extract_thedyrt,
     "wtmg":           extract_wtmg,
     "nomady":         extract_nomady,
+    "campspace":      extract_campspace,
 }
 
 

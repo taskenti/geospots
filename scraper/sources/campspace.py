@@ -6,6 +6,7 @@ from loguru import logger
 import httpx
 
 from sources.base import AbstractSource
+from sources._normalize_helpers import extract_campspace, merge_extra
 
 BASE_URL = "https://campspace.com/en/discover/campsites?_format=json"
 
@@ -114,7 +115,7 @@ class CampspaceSource(AbstractSource):
         if precio_aprox == 0.0:
             gratuito = True
 
-        return {
+        norm = {
             "source_id": str(raw.get("id")),
             "nombre": raw.get("title", "Campspace Spot").strip()[:200],
             "lat": lat,
@@ -126,6 +127,7 @@ class CampspaceSource(AbstractSource):
             "web": web_url,
             "fotos_urls": []
         }
+        return merge_extra(norm, extract_campspace(raw))
 
     def _parse_detail_html(self, html: str) -> dict | None:
         from bs4 import BeautifulSoup
@@ -444,9 +446,10 @@ class CampspaceSource(AbstractSource):
                                 html = r_web.text
                                 detail_data = self._parse_detail_html(html)
                                 if detail_data:
-                                    # Normalizar
+                                    # Normalizar + merge v4c/extras desde amenities/surroundings
                                     detail_norm = self._normalize_detail(detail_data, fallback_web=web_url)
                                     if detail_norm:
+                                        detail_norm = merge_extra(detail_norm, extract_campspace(detail_data))
                                         async with pool.acquire() as conn:
                                             async with conn.transaction():
                                                 # Enriquecer spot en tabla spots

@@ -25,6 +25,7 @@ from sources._normalize_helpers import (  # noqa: E402
     extract_campercontact_detail,
     extract_campendium,
     extract_campingcarpark,
+    extract_campspace,
     extract_campy,
     extract_camperstop,
     extract_caramaps,
@@ -1044,6 +1045,115 @@ def test_thedyrt_empty_attrs():
 def test_thedyrt_no_attrs_key():
     out = extract_thedyrt({})
     assert isinstance(out, dict)
+
+
+# ─── campspace ────────────────────────────────────────────────────────
+
+
+def test_campspace_swimming_pool_and_playground():
+    raw = {"amenities": ["Swimming pool", "Playground for children", "Toilet"]}
+    out = extract_campspace(raw)
+    assert out["piscina"] is True
+    assert out["juegos_ninos"] is True
+
+
+def test_campspace_mirador_any_view():
+    raw = {"amenities": ["Sunset view", "BBQ"]}
+    out = extract_campspace(raw)
+    assert out["mirador"] is True
+
+
+def test_campspace_barrier_free_accessibility():
+    raw = {"amenities": ["Barrier-free access to pitch", "Toilet"]}
+    out = extract_campspace(raw)
+    assert out["accesibilidad_reducida"] is True
+
+
+def test_campspace_bike_storage_or_cycling():
+    """Bicycle storage en amenities O cycling en surroundings → mtb_friendly."""
+    out1 = extract_campspace({"amenities": ["Bicycle storage"]})
+    out2 = extract_campspace({"surroundings": ["Cycling"]})
+    assert out1["mtb_friendly"] is True
+    assert out2["mtb_friendly"] is True
+
+
+def test_campspace_surroundings_activities():
+    raw = {"surroundings": ["Hiking", "Fishing", "Climbing", "Surfing"]}
+    out = extract_campspace(raw)
+    assert out["hiking_nearby"] is True
+    assert out["fishing"] is True
+    assert out["climbing"] is True
+    assert out["surf_friendly"] is True
+
+
+def test_campspace_environment_labels():
+    raw = {"surroundings": ["Forest", "Meadow or plain", "Beach or seaside", "Urban area"]}
+    labels = extract_campspace(raw)["servicios_extras"]["environment_labels"]
+    assert set(labels) == {"forest", "meadow", "beach", "urban"}
+
+
+def test_campspace_activities_in_extras():
+    raw = {"surroundings": ["Swimming", "Canoeing or kayaking", "Making a campfire", "Horseback riding"]}
+    activities = extract_campspace(raw)["servicios_extras"]["activities"]
+    assert "swimming" in activities
+    assert "canoeing" in activities
+    assert "campfire" in activities
+    assert "horseback_riding" in activities
+
+
+def test_campspace_farm_animals():
+    raw = {"surroundings": ["Cows", "Sheep", "Horses or ponies"]}
+    fa = extract_campspace(raw)["servicios_extras"]["farm_animals"]
+    assert set(fa) == {"cows", "sheep", "horses"}
+
+
+def test_campspace_campfire_signals():
+    raw = {"amenities": ["Fireplace", "Firewood available"]}
+    se = extract_campspace(raw)["servicios_extras"]
+    assert se["campfire"] is True
+
+
+def test_campspace_kitchen_signals():
+    raw = {"amenities": ["Refrigerator", "Gas stove"]}
+    se = extract_campspace(raw)["servicios_extras"]
+    assert se["kitchen"] is True
+
+
+def test_campspace_rv_signals():
+    raw = {"amenities": ["RV electricity", "RV Dump station"]}
+    se = extract_campspace(raw)["servicios_extras"]
+    assert se["rv_hookup"] is True
+    assert se["rv_dump"] is True
+
+
+def test_campspace_glamping_linen():
+    raw = {"amenities": ["Bed linen, pillow and duvet", "Towels"]}
+    se = extract_campspace(raw)["servicios_extras"]
+    assert se["glamping_linen"] is True
+
+
+def test_campspace_pricing_from_phase1():
+    raw = {"price": "from £ 22.50"}
+    pb = extract_campspace(raw)["servicios_extras"]["pricing_breakdown"]
+    assert pb["from"] == 22.5
+    assert pb["currency"] == "£"
+
+
+def test_campspace_empty_raw():
+    assert extract_campspace({}) == {}
+    assert extract_campspace({"amenities": [], "surroundings": []}) == {}
+
+
+def test_campspace_normalize_phase1_noop_pricing():
+    """Phase 1 normalize() pasa por extract_campspace pero raw mínimo: solo pricing."""
+    from sources.campspace import CampspaceSource
+    raw = {"id": 99, "lat": 50.0, "lng": 4.0, "title": "X", "price": "from € 30"}
+    out = CampspaceSource().normalize(raw)
+    assert out is not None
+    # piscina/etc no aparecen porque no hay amenities en Phase 1 raw
+    assert "piscina" not in out
+    # pero servicios_extras.pricing_breakdown sí se rellena
+    assert out["servicios_extras"]["pricing_breakdown"]["from"] == 30.0
 
 
 # ─── nomady ───────────────────────────────────────────────────────────
