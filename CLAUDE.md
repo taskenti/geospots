@@ -137,6 +137,10 @@ psql -h localhost -p 25433 -U geospots -d geospots
 | `POSTGRES_USER` | Usuario PostgreSQL | Sí |
 | `POSTGRES_PASSWORD` | Contraseña PostgreSQL | Sí |
 | `GEMINI_API_KEY` | API key de Google (embeddings + LLM enrichment + search) | Sí para Phase 3/4 |
+| `DEEPSEEK_API_KEY` | API key de DeepSeek (provider alternativo para bulk enrichment) | Sólo si `ENRICHMENT_PROVIDER=deepseek` |
+| `ENRICHMENT_PROVIDER` | `gemini` \| `deepseek`. Provider activo del pipeline LLM (default `gemini`) | No |
+| `GEMINI_ENRICHMENT_MODEL` | Modelo Gemini activo (default `gemini-2.5-flash-lite`) | No |
+| `DEEPSEEK_ENRICHMENT_MODEL` | Modelo DeepSeek activo (default `deepseek-v4-flash`) | No |
 | `API_SECRET_KEY` | Clave para middleware de autenticación de la API | Opcional (sin key = sin auth) |
 | `STAYFREE_AUTHORIZATION` | JWT Bearer del usuario StayFree (DevTools → Network) | Opcional |
 | `STAYFREE_API_TOKEN` | Token estático de la app móvil (vía MITM del APK) | Opcional |
@@ -288,3 +292,39 @@ FUENTES EXTERNAS (20+ scrapers)
 **El pipeline de enriquecimiento** corre como: reviews (llm_processed=FALSE) → worker.py → extract_claims → normalize → update_semantic_state. El embedding batch corre desde jobs/nightly_embeddings.py.
 
 **La búsqueda semántica** está en `/search/semantic`: Gemini extrae intención → embedding query → ST_DWithin + SQL filters + pgvector ranking → Gemini genera respuesta.
+
+---
+
+## Pipeline LLM — Capa Unificada y Plan por Países
+
+### Capa única `llm_provider`
+
+**Todas las llamadas LLM** del proyecto pasan por `enrichment/llm_provider.py` (`call_llm_sync`). El provider activo lo define `ENRICHMENT_PROVIDER` (env). Llamantes confirmados:
+- `enrichment/claim_extractor.extract_claims_llm` — extracción de claims desde reviews (worker)
+- `enrichment/orchestrator_v2._call_llm` — enrichment a nivel spot (summary v2)
+- `enrichment/embedding_generator.extraer_intencion` — search intent
+- `enrichment/embedding_generator.generar_respuesta_busqueda` — recomendación en `/search/semantic`
+
+**Regla:** cualquier nueva llamada LLM DEBE usar `call_llm_sync` — nunca importar el SDK de Gemini/DeepSeek directamente. Si el flow necesita system prompt distinto o output libre (no-JSON), pasar `system_prompt=` / `response_format="text"`.
+
+### Plan operativo por países
+
+El enrichment de las ~500K reviews se procesa **país por país** en este orden:
+**test → Andorra (smoke) → Portugal → España → Francia → Alemania → Italia → UK → Países Bajos → EEUU → resto del mundo**
+
+**No lanzar enrichment hasta que termine la descarga de reviews.** Mientras se descargan reviews, el contenedor `geospots-enrichment` puede quedar parado (`docker-compose stop enrichment`) o correr en seco (sin reviews pendientes). El daemon procesa lo que haya — si no hay reviews `llm_processed=FALSE`, no consume API.
+
+### Patrón de provider por fase
+
+| Fase | `ENRICHMENT_PROVIDER` | Motivo |
+|---|---|---|
+| Test / Andorra (smoke) | `gemini` | Volumen mínimo, free tier sobra |
+| Bulk inicial por país (PT, ES, FR, DE, IT…) | `deepseek` | Más barato/calidad por volumen alto |
+| Steady-state diario (reviews nuevas) | `gemini` | Free tier 1500 req/día cubre flujo orgánico |
+
+Cambio de provider:
+```bash
+# Editar .env → ENRICHMENT_PROVIDER=deepseek
+docker-compose restart enrichment
+```
+El cambio NO requiere rebuild — sólo el restart relee env.

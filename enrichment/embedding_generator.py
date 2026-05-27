@@ -13,8 +13,10 @@ from loguru import logger
 
 EMBEDDING_MODEL = "text-embedding-004"
 GOOGLE_EMBEDDING_MODEL = "models/text-embedding-004"
-INTENT_MODEL = "gemini-2.5-flash-lite"
 EMBEDDING_DIMS = 768
+
+# Intent/respuesta de búsqueda semántica: provider y modelo vienen de ENV
+# (ENRICHMENT_PROVIDER + {GEMINI,DEEPSEEK}_ENRICHMENT_MODEL) vía llm_provider.
 
 
 FILTER_MAP = {
@@ -380,24 +382,24 @@ def extraer_intencion_heuristica(query: str) -> dict:
 
 
 async def extraer_intencion(query: str, use_gemini: bool = True) -> dict:
+    """Extrae intent vía LLM (provider activo via ENV). `use_gemini` mantiene el
+    nombre por compat; activa el LLM (sea Gemini o DeepSeek)."""
     if not use_gemini:
         return extraer_intencion_heuristica(query)
     try:
-        client = _google_client()
+        from .llm_provider import call_llm_sync
         prompt = INTENT_PROMPT.format(query=query.replace('"', '\\"'))
-
-        def _call():
-            return client.models.generate_content(model=INTENT_MODEL, contents=prompt)
-
-        response = await asyncio.to_thread(_call)
-        data = _parse_json_response(response.text or "")
+        resp = await asyncio.to_thread(
+            call_llm_sync, prompt, system_prompt="", response_format="json",
+        )
+        data = _parse_json_response(resp.text or "")
         filters = data.get("sql_filters") or {}
         clean_filters = {k: v for k, v in filters.items() if k in FILTER_MAP and v is not None}
         return SearchIntent(
             sql_filters=clean_filters,
             semantic_query=data.get("semantic_query") or query,
             explanation=data.get("explanation", ""),
-            source="gemini",
+            source=resp.provider,
         ).as_dict()
     except Exception as exc:
         logger.warning(f"[semantic_search] Intent extraction fallback: {exc}")
@@ -461,7 +463,7 @@ async def buscar_spots(
 async def generar_respuesta_busqueda(query: str, spots: list[dict]) -> str:
     if not spots:
         return ""
-    client = _google_client()
+    from .llm_provider import call_llm_sync
     contexto = "\n".join(
         (
             f"#{i + 1} {s['canonical_name']} ({s['tipo']}, {float(s['dist_km']):.1f}km, "
@@ -474,9 +476,7 @@ async def generar_respuesta_busqueda(query: str, spots: list[dict]) -> str:
         f"Top spots encontrados (DSL semantico):\n{contexto}\n\n"
         "Recomienda los mejores. Se conciso y directo. Usa el nombre del spot y la distancia."
     )
-
-    def _call():
-        return client.models.generate_content(model=INTENT_MODEL, contents=prompt)
-
-    response = await asyncio.to_thread(_call)
-    return response.text or ""
+    resp = await asyncio.to_thread(
+        call_llm_sync, prompt, system_prompt="", response_format="text",
+    )
+    return resp.text or ""

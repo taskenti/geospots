@@ -176,20 +176,29 @@ def call_gemini_once_sync(
     cache_name: str | None = None,
     model: str = DEFAULT_MODEL,
     temperature: float = 0.2,
+    system_prompt: str | None = None,
+    response_format: str = "json",
 ) -> tuple[str, dict]:
     """Llamada síncrona puntual. Devuelve (texto_respuesta, usage_metadata_dict).
 
     Si `cache_name` está, usa context caching. Si no, mete el system prompt inline.
+
+    `system_prompt=None` → SYSTEM_PROMPT_V2 (compat orchestrator v2).
+    `system_prompt=""`   → sin system_instruction (el user_prompt lleva las instrucciones).
+    `response_format="text"` → no fuerza JSON.
     """
     client = _genai_client()
-    config: dict = {
-        "response_mime_type": "application/json",
-        "temperature": temperature,
-    }
+    config: dict = {"temperature": temperature}
+    if response_format == "json":
+        config["response_mime_type"] = "application/json"
+
     if cache_name:
         config["cached_content"] = cache_name
     else:
-        config["system_instruction"] = SYSTEM_PROMPT_V2
+        if system_prompt is None:
+            system_prompt = SYSTEM_PROMPT_V2
+        if system_prompt:
+            config["system_instruction"] = system_prompt
 
     response = client.models.generate_content(
         model=model,

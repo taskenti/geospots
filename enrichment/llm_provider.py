@@ -57,11 +57,17 @@ def call_deepseek_sync(
     temperature: float = 0.2,
     thinking: bool = False,
     api_key: str | None = None,
+    system_prompt: str | None = None,
+    response_format: str = "json",
 ) -> LLMResponse:
-    """Llamada síncrona DeepSeek. JSON output forzado.
+    """Llamada síncrona DeepSeek. JSON output forzado por default.
 
     `thinking=False` desactiva el modo razonamiento (default ON en v4) para
     evitar output tokens innecesarios y respuestas no-JSON.
+
+    `system_prompt=None` → SYSTEM_PROMPT_V2 (compat orchestrator v2).
+    `system_prompt=""`   → sin mensaje system (el user_prompt lleva las instrucciones).
+    `response_format="text"` → no fuerza JSON (búsqueda libre, summaries, etc.).
     """
     api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
@@ -69,18 +75,24 @@ def call_deepseek_sync(
 
     model = model or os.environ.get("DEEPSEEK_ENRICHMENT_MODEL", "deepseek-v4-flash")
 
+    if system_prompt is None:
+        system_prompt = SYSTEM_PROMPT_V2
+
+    messages: list[dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_prompt})
+
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT_V2},
-            {"role": "user", "content": user_prompt},
-        ],
+        "messages": messages,
         "temperature": temperature,
-        "response_format": {"type": "json_object"},
         # Modo thinking se controla en deepseek-v4 vía parámetro custom.
         # Si la API rechaza el flag, lo retira el bloque except.
         "thinking": {"type": "enabled" if thinking else "disabled"},
     }
+    if response_format == "json":
+        payload["response_format"] = {"type": "json_object"}
 
     with httpx.Client(timeout=DEEPSEEK_TIMEOUT) as client:
         resp = client.post(
@@ -127,12 +139,15 @@ def call_deepseek_sync(
 
 
 def call_gemini_sync(user_prompt: str, *, cache_name: str | None = None,
-                    model: str | None = None, temperature: float = 0.2) -> LLMResponse:
+                    model: str | None = None, temperature: float = 0.2,
+                    system_prompt: str | None = None,
+                    response_format: str = "json") -> LLMResponse:
     from .gemini_cache import DEFAULT_MODEL, call_gemini_once_sync
 
     model = model or DEFAULT_MODEL
     text, usage = call_gemini_once_sync(
-        user_prompt, cache_name=cache_name, model=model, temperature=temperature
+        user_prompt, cache_name=cache_name, model=model, temperature=temperature,
+        system_prompt=system_prompt, response_format=response_format,
     )
     return LLMResponse(text=text, usage=usage, provider="gemini", model=model)
 
@@ -143,10 +158,20 @@ def call_gemini_sync(user_prompt: str, *, cache_name: str | None = None,
 
 
 def call_llm_sync(user_prompt: str, **kwargs) -> LLMResponse:
-    """Llamada síncrona al provider activo (definido por env)."""
+    """Llamada síncrona al provider activo (definido por env).
+
+    kwargs reenviados a call_deepseek_sync/call_gemini_sync:
+      model, temperature, system_prompt, response_format, (deepseek: thinking, api_key,
+      gemini: cache_name).
+    """
     provider = get_provider_name()
     if provider == "deepseek":
+        # cache_name es específico de Gemini; lo descartamos para deepseek.
+        kwargs.pop("cache_name", None)
         return call_deepseek_sync(user_prompt, **kwargs)
+    # thinking es específico de DeepSeek; lo descartamos para Gemini.
+    kwargs.pop("thinking", None)
+    kwargs.pop("api_key", None)
     return call_gemini_sync(user_prompt, **kwargs)
 
 

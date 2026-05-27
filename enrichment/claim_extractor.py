@@ -1,15 +1,15 @@
-"""Tiered claim extraction: regex first, Gemini Flash as optional fallback."""
+"""Tiered claim extraction: regex first, LLM (provider-agnostic) as optional fallback."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 from dataclasses import dataclass
 
 from loguru import logger
 
+from .llm_provider import call_llm_sync, get_active_model, get_provider_name
 from .prompts import build_extraction_prompt
 
 EXTRACTOR_VERSION = "phase3-2026-05-23"
@@ -90,7 +90,7 @@ def extract_claims_regex(text: str) -> list[dict]:
     return [claim.as_dict() for claim in claims]
 
 
-def _parse_json_response(text: str) -> list[dict]:
+def _parse_json_response(text: str, extractor_name: str) -> list[dict]:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?|```$", "", cleaned, flags=re.IGNORECASE | re.MULTILINE).strip()
     data = json.loads(cleaned)
@@ -107,30 +107,44 @@ def _parse_json_response(text: str) -> list[dict]:
                 value=str(value),
                 confidence=float(item.get("confidence", 0.7)),
                 excerpt=str(item.get("excerpt", ""))[:500],
-                extractor_name="gemini_flash",
+                extractor_name=extractor_name,
             ).as_dict()
         )
     return claims
 
 
-async def extract_claims_gemini(text: str, model: str = "gemini-2.5-flash-lite") -> list[dict]:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return []
+async def extract_claims_llm(text: str) -> list[dict]:
+    """Fallback LLM. Provider y modelo vienen de ENV (ENRICHMENT_PROVIDER,
+    GEMINI_ENRICHMENT_MODEL, DEEPSEEK_ENRICHMENT_MODEL). El prompt de extracción
+    ya contiene las instrucciones completas, así que se pasa como user_prompt y
+    se omite el system message (system_prompt="").
+    """
     try:
-        from google import genai
-
-        client = genai.Client(api_key=api_key)
         prompt = build_extraction_prompt(text)
-        response = await asyncio.to_thread(client.models.generate_content, model=model, contents=prompt)
-        return _parse_json_response(response.text or "")
+        resp = await asyncio.to_thread(
+            call_llm_sync,
+            prompt,
+            system_prompt="",
+            response_format="json",
+        )
+        extractor_name = f"llm_{resp.provider}"
+        return _parse_json_response(resp.text or "", extractor_name=extractor_name)
     except Exception as exc:
-        logger.warning(f"[enrichment] Gemini extraction failed: {exc}")
+        logger.warning(
+            f"[enrichment] LLM extraction failed "
+            f"(provider={get_provider_name()} model={get_active_model()}): {exc}"
+        )
         return []
+
+
+# Alias retro-compatible para tests/jobs antiguos que lo importan
+extract_claims_gemini = extract_claims_llm
 
 
 async def extract_claims(text: str, review: dict | None = None, use_gemini: bool = True) -> list[dict]:
+    """`use_gemini` mantiene el nombre por compat; activa el fallback LLM
+    (sea Gemini o DeepSeek según ENRICHMENT_PROVIDER)."""
     regex_claims = extract_claims_regex(text)
     if regex_claims or not use_gemini:
         return regex_claims
-    return await extract_claims_gemini(text)
+    return await extract_claims_llm(text)
