@@ -224,11 +224,10 @@ async def _extract_claims_with_retry(
                     )
                     await asyncio.sleep(wait)
                 else:
-                    logger.warning(
-                        f"[enrichment] LLM fallido tras {max_attempts} intentos, "
-                        f"review skipped: {exc}"
+                    logger.error(
+                        f"[enrichment] LLM fallido tras {max_attempts} intentos: {exc}"
                     )
-                    return []   # devolver vacío tras agotar intentos (no abortar)
+                    raise RuntimeError("llm_extraction_failed") from exc
 
     return []
 

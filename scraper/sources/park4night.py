@@ -485,15 +485,17 @@ class Park4NightSource(AbstractSource):
                             """, len(rev_list), spot_id)
                             
                     progress_state[0] += 1
-                    if job_id and progress_state[0] % 20 == 0:
-                        try:
-                            async with pool.acquire() as conn2:
-                                await conn2.execute(
-                                    "UPDATE scraper_jobs SET progress = $1::jsonb WHERE id = $2",
-                                    json.dumps({"processed_spots": progress_state[0], "total_spots": progress_state[1], "stats": stats}), job_id
-                                )
-                        except Exception:
-                            pass
+                    if progress_state[0] % 20 == 0:
+                        logger.info(f"[{self.name}] Progreso reviews: {progress_state[0]}/{progress_state[1]} spots | nuevas={stats['reviews_nuevas']} errores={stats['errores']}")
+                        if job_id:
+                            try:
+                                async with pool.acquire() as conn2:
+                                    await conn2.execute(
+                                        "UPDATE scraper_jobs SET progress = $1::jsonb WHERE id = $2",
+                                        json.dumps({"processed_spots": progress_state[0], "total_spots": progress_state[1], "stats": stats}), job_id
+                                    )
+                            except Exception:
+                                pass
                             
                 except Exception as e:
                     logger.warning(f"[{self.name}] Error fetching reviews for spot {sid}: {e}")

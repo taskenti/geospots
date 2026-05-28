@@ -3,7 +3,7 @@
 import os
 from datetime import datetime, timezone
 import asyncpg
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException, Query, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
@@ -66,6 +66,48 @@ async def startup():
                 value TEXT
             )
         """)
+        # Crear vista materializada de estadísticas si no existe
+        await conn.execute("""
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_source_stats AS
+            WITH sr_stats AS (
+                SELECT source,
+                       COUNT(*)::INT AS total_records,
+                       COUNT(*) FILTER (WHERE NOT COALESCE(stale, FALSE))::INT AS active_records
+                FROM source_records
+                GROUP BY source
+            ),
+            r_stats AS (
+                SELECT source,
+                       COUNT(*)::INT AS total_reviews
+                FROM reviews
+                GROUP BY source
+            ),
+            known_sources AS (
+                SELECT DISTINCT nombre AS source FROM (
+                    SELECT nombre FROM fuentes_config
+                    UNION
+                    SELECT source AS nombre FROM source_credibility
+                    UNION
+                    SELECT source AS nombre FROM source_records
+                    UNION
+                    SELECT source AS nombre FROM reviews
+                ) sub
+                WHERE nombre !~* '_(test|dev|staging|tmp)$'
+            )
+            SELECT
+                ks.source,
+                COALESCE(sr.total_records, 0)::INT AS total_records,
+                COALESCE(sr.active_records, 0)::INT AS active_records,
+                COALESCE(sr.active_records, 0)::INT AS spots_total,
+                COALESCE(r.total_reviews, 0)::INT AS total_reviews,
+                NOW() AS updated_at
+            FROM known_sources ks
+            LEFT JOIN sr_stats sr ON sr.source = ks.source
+            LEFT JOIN r_stats r ON r.source = ks.source;
+        """)
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_source_stats_source ON mv_source_stats(source)"
+        )
         # Limpieza one-shot al arrancar: si algún scraper crasheó en el último
         # ciclo, su scraper_log row quedó en 'running'. Marcarlo como zombie.
         cleanup = await _cleanup_stuck_runs(conn, max_hours=12)
@@ -498,9 +540,27 @@ def _compute_health(iniciado_en, terminado_en, estado, errores, nuevos, actualiz
     return "green", f"Al día — hace {days} día{'s' if days != 1 else ''}"
 
 
+async def refresh_mv_stats():
+    """Refresca la vista materializada de estadísticas en segundo plano."""
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_source_stats")
+            logger.info("mv_source_stats refreshed concurrently")
+    except Exception as e:
+        logger.error(f"Error refreshing mv_source_stats: {e}")
+
+
 @app.get("/admin/scrapers")
-async def admin_scrapers_list():
+async def admin_scrapers_list(background_tasks: BackgroundTasks):
     async with pool.acquire() as conn:
+        # Consultar la última actualización de la vista materializada
+        mvs_meta = await conn.fetchrow("SELECT MAX(updated_at) AS last_update FROM mv_source_stats")
+        last_update = mvs_meta["last_update"] if mvs_meta else None
+        
+        # Si no tiene datos o han pasado más de 2 minutos (120s), refrescar en segundo plano
+        if not last_update or (datetime.now(timezone.utc) - last_update.replace(tzinfo=timezone.utc)).total_seconds() > 120:
+            background_tasks.add_task(refresh_mv_stats)
+
         rows = await conn.fetch("""
             WITH known_sources AS (
                 SELECT nombre FROM (
@@ -520,11 +580,11 @@ async def admin_scrapers_list():
                 sc.base_score,
                 sc.coverage_region,
                 COALESCE(sc.active, TRUE) AS activa,
-                COALESCE((SELECT COUNT(*)::INT FROM source_records sr WHERE sr.source = ks.nombre), 0) AS total_records,
-                COALESCE((SELECT COUNT(*)::INT FROM source_records sr WHERE sr.source = ks.nombre AND COALESCE(sr.stale, FALSE) = FALSE), 0) AS active_records,
-                COALESCE((SELECT COUNT(*)::INT FROM source_records sr WHERE sr.source = ks.nombre AND COALESCE(sr.stale, FALSE) = FALSE), 0) AS spots_total,
+                COALESCE(mvs.total_records, 0)::INT AS total_records,
+                COALESCE(mvs.active_records, 0)::INT AS active_records,
+                COALESCE(mvs.active_records, 0)::INT AS spots_total,
                 0 AS spots_exclusive,
-                COALESCE((SELECT COUNT(*)::INT FROM reviews r WHERE r.source = ks.nombre), 0) AS total_reviews,
+                COALESCE(mvs.total_reviews, 0)::INT AS total_reviews,
                 lr.estado AS ultimo_estado,
                 lr.iniciado_en AS ultimo_inicio,
                 lr.terminado_en AS ultimo_fin,
@@ -533,10 +593,11 @@ async def admin_scrapers_list():
                 lr.reviews_nuevas AS ultimo_reviews_nuevas,
                 lr.errores AS ultimo_errores,
                 fc.cron_schedule,
-                (COALESCE((SELECT COUNT(*)::INT FROM reviews r WHERE r.source = ks.nombre), 0) > 0) AS has_reviews_support,
+                (COALESCE(mvs.total_reviews, 0) > 0) AS has_reviews_support,
                 aj.job_types AS active_job_types
             FROM known_sources ks
             LEFT JOIN source_credibility sc ON sc.source = ks.nombre
+            LEFT JOIN mv_source_stats mvs ON mvs.source = ks.nombre
             LEFT JOIN fuentes_config fc ON fc.nombre = ks.nombre
             LEFT JOIN LATERAL (
                 SELECT estado, iniciado_en, terminado_en, spots_nuevos, spots_actualizados, reviews_nuevas, errores

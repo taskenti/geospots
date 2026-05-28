@@ -212,7 +212,11 @@ INSERT INTO source_credibility (source, display_name, base_score, review_quality
 ('vansite',         'Vansite',             0.72, 0.70, ARRAY['EU']),
 ('nomady',          'Nomady',              0.76, 0.78, ARRAY['EU']),
 ('campspace',       'Campspace',           0.74, 0.76, ARRAY['EU']),
-('wtmg',            'Welcome To My Garden',0.70, 0.72, ARRAY['EU'])
+('wtmg',            'Welcome To My Garden',0.70, 0.72, ARRAY['EU']),
+('alpacacamping',    'AlpacaCamping',      0.75, 0.75, ARRAY['DE','AT','CH','EU']),
+('thedyrt',          'The Dyrt',           0.76, 0.80, ARRAY['US','CA']),
+('portugaleasycamp', 'Portugal Easy Camp', 0.80, 0.75, ARRAY['PT']),
+('womostell',        'Womostellplatz',     0.70, 0.70, ARRAY['DE','AT','CH','EU'])
 ON CONFLICT (source) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     base_score = EXCLUDED.base_score,

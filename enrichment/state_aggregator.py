@@ -125,6 +125,10 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
         for signal, column in MATERIALIZED_SCORE_COLUMNS.items()
     }
     materialized["overnight_safe"] = signals_data.get("overnight_safe", {}).get("score")
+    for signal, column in MATERIALIZED_V2_NUMERIC.items():
+        materialized[column] = signals_data.get(signal, {}).get("score")
+    for signal, column in MATERIALIZED_V2_BOOL.items():
+        materialized[column] = signals_data.get(signal, {}).get("score")
     consensus = min(1.0, total_weight / max(1.0, total_observations * 2.0))
     return {
         "signals_data": signals_data,
@@ -146,6 +150,18 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
         spot_id,
     )
     state = aggregate_observations([dict(r) for r in rows])
+    
+    # Calculate Phase 3 v2 materialized columns
+    from .v2_materializer import (
+        aggregate_noise_sources,
+        aggregate_parking_capacity,
+        compute_last_observation_at,
+    )
+    obs_dicts = [dict(r) for r in rows]
+    noise_sources = aggregate_noise_sources(obs_dicts) or None
+    parking_capacity = aggregate_parking_capacity(obs_dicts)
+    last_obs_at = await compute_last_observation_at(conn, spot_id)
+
     current = await conn.fetchrow("SELECT signals_data FROM spot_semantic_state WHERE spot_id = $1", spot_id)
     previous = _json_object(current["signals_data"]) if current else None
     distance = semantic_distance(previous, state["signals_data"])
@@ -168,9 +184,11 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
             spot_id, quietness_score, safety_score, police_risk_score, beauty_score,
             crowd_level_score, overnight_safe, stealth_score, signals_data, semantic_dsl,
             total_observations, consensus_confidence, weight_support, last_snapshot_data,
+            cell_coverage, wild_camping_legal, noise_sources, parking_capacity, last_observation_at,
             stale, updated_at, last_aggregated_at
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $9::jsonb,
+            $14, $15, $16, $17, $18,
             FALSE, NOW(), NOW()
         )
         ON CONFLICT (spot_id) DO UPDATE SET
@@ -187,6 +205,11 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
             consensus_confidence = EXCLUDED.consensus_confidence,
             weight_support = EXCLUDED.weight_support,
             last_snapshot_data = EXCLUDED.last_snapshot_data,
+            cell_coverage = EXCLUDED.cell_coverage,
+            wild_camping_legal = EXCLUDED.wild_camping_legal,
+            noise_sources = EXCLUDED.noise_sources,
+            parking_capacity = EXCLUDED.parking_capacity,
+            last_observation_at = EXCLUDED.last_observation_at,
             stale = FALSE,
             updated_at = NOW(),
             last_aggregated_at = NOW()
@@ -204,8 +227,14 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
         state["total_observations"],
         state["consensus_confidence"],
         state["weight_support"],
+        state.get("cell_coverage"),
+        state.get("wild_camping_legal"),
+        noise_sources,
+        parking_capacity,
+        last_obs_at,
     )
     return state
+
 
 
 async def update_semantic_state(conn, spot_id: int, observation: object | None = None) -> dict:
@@ -217,9 +246,14 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
     if not stype:
         return await recompute_spot_state(conn, spot_id)
 
+    # Trigger full recompute for complex v2 signal types
+    if signal in ("noise_source", "parking_capacity"):
+        return await recompute_spot_state(conn, spot_id)
+
     row = await conn.fetchrow(
         """
-        SELECT signals_data, total_observations, weight_support, last_snapshot_data
+        SELECT signals_data, total_observations, weight_support, last_snapshot_data,
+               noise_sources, parking_capacity, last_observation_at
         FROM spot_semantic_state
         WHERE spot_id = $1
         """,
@@ -264,6 +298,18 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
         for sig, column in MATERIALIZED_SCORE_COLUMNS.items()
     }
     materialized["overnight_safe"] = signals_data.get("overnight_safe", {}).get("score")
+    
+    # Retrieve v2 columns from existing row or state
+    noise_sources = row["noise_sources"] if row else None
+    parking_capacity = row["parking_capacity"] if row else None
+    last_obs_at = row["last_observation_at"] if row else None
+    obs_date = observation.observed_at
+    if last_obs_at is None or (obs_date and obs_date > last_obs_at):
+        last_obs_at = obs_date
+
+    cell_coverage = signals_data.get("cell_coverage", {}).get("score")
+    wild_camping_legal = signals_data.get("wild_camping_legal", {}).get("score")
+
     semantic_dsl = generate_spot_dsl(signals_data)
     total_observations = (row["total_observations"] if row else 0) + 1
     weight_support = float(row["weight_support"] if row else 0.0) + obs_weight
@@ -302,9 +348,11 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
             spot_id, quietness_score, safety_score, police_risk_score, beauty_score,
             crowd_level_score, overnight_safe, stealth_score, signals_data, semantic_dsl,
             total_observations, consensus_confidence, weight_support, last_snapshot_data,
+            cell_coverage, wild_camping_legal, noise_sources, parking_capacity, last_observation_at,
             stale, updated_at, last_aggregated_at
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14::jsonb,
+            $15, $16, $17, $18, $19,
             FALSE, NOW(), NOW()
         )
         ON CONFLICT (spot_id) DO UPDATE SET
@@ -321,6 +369,11 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
             consensus_confidence = EXCLUDED.consensus_confidence,
             weight_support = EXCLUDED.weight_support,
             last_snapshot_data = EXCLUDED.last_snapshot_data,
+            cell_coverage = EXCLUDED.cell_coverage,
+            wild_camping_legal = EXCLUDED.wild_camping_legal,
+            noise_sources = EXCLUDED.noise_sources,
+            parking_capacity = EXCLUDED.parking_capacity,
+            last_observation_at = EXCLUDED.last_observation_at,
             stale = FALSE,
             updated_at = NOW(),
             last_aggregated_at = NOW()
@@ -339,5 +392,11 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
         consensus,
         weight_support,
         json.dumps(next_snapshot_data),
+        cell_coverage,
+        wild_camping_legal,
+        noise_sources,
+        parking_capacity,
+        last_obs_at,
     )
     return state
+
