@@ -255,6 +255,107 @@ If nothing extractable: {{"claims":[],"summary":null,"tags":[],"best_for":[],"be
 """
 
 
+# ═══════════════════════════════════════════════════════════════
+# Few-shot examples (T1.1 — Sprint 1 hardening)
+# ═══════════════════════════════════════════════════════════════
+#
+# REGLA DE VERSIONADO (Phase 3 hardening):
+#   - Cambiar FEW_SHOT_EXAMPLES → bumpar PROMPT_VERSION (invalida el cache de DeepSeek).
+#   - Cambiar el SCHEMA del output (añadir/quitar claves del JSON) → bumpar también
+#     ENRICHMENT_VERSION (fuerza re-enrichment de los spots ya procesados).
+#   - Cambiar SOLO few-shots sin tocar el schema: PROMPT_VERSION sí, ENRICHMENT_VERSION no.
+#
+# Los 3 ejemplos cubren las 3 patologías detectadas en la auditoría pre-batch:
+#   1. Construcción documentada en review vieja vs. tranquilidad en review reciente.
+#   2. SERVICES (datos estructurados de la fuente) contradichos por una review.
+#   3. Review multilingüe con palabra culturalmente cargada (NL "bouwput").
+#
+# Mantener el bloque BYTE-ESTABLE entre llamadas — cualquier cambio rompe el prefix cache.
+
+PROMPT_VERSION = "v4-fewshot-1"   # T1.1: introducción de FEW_SHOT_EXAMPLES_V4
+
+FEW_SHOT_EXAMPLES_V4 = """
+
+═══ FEW-SHOT EXAMPLES (canonical, do not paraphrase across calls) ═══
+
+EXAMPLE 1 — Older review reports construction; recent review reports quiet.
+The summary MUST mention the transition (do not invert chronology — older
+issues remain relevant unless explicitly contradicted by recent visits).
+
+INPUT (compact):
+  SPOT id=99001 | Name: "Aire de la rivière" | Type: aire_ac | Country: FR
+  SERVICES: Drinking water: Yes | Grey water dump: Yes | Electricity: No | Free: Yes
+  REVIEWS:
+    [review_id=501] [2024-06] [park4night] ★★ Bruit insupportable, gros chantier à côté, gravats partout.
+    [review_id=502] [2026-04] [park4night] ★★★★★ Très calme, parfait pour la nuit. L'eau fonctionne.
+
+OUTPUT:
+{
+  "claims": [
+    {"signal": "quietness", "value": 0.6, "confidence": 0.7, "review_id": 502, "excerpt": "Très calme, parfait pour la nuit"},
+    {"signal": "water_working", "value": true, "confidence": 0.85, "review_id": "services", "excerpt": "Drinking water: Yes"},
+    {"signal": "electricity_working", "value": false, "confidence": 0.9, "review_id": "services", "excerpt": "Electricity: No"},
+    {"signal": "dump_station_working", "value": true, "confidence": 0.85, "review_id": "services", "excerpt": "Grey water dump: Yes"}
+  ],
+  "summary": "Free aire AC by the river with potable water and grey water dump but no electricity. A 2024 review reported heavy nearby construction and noise; a 2026 visit found the area very quiet, suggesting the works have ended.",
+  "tags": ["free", "aire", "river", "water", "quiet"],
+  "best_for": ["overnighting", "budget travel"],
+  "best_season": null,
+  "avoid_season": null
+}
+
+EXAMPLE 2 — SERVICES says water=Yes; a recent review says the tap is broken.
+The review overrides the structured datum. Cite the structured field for the
+unaffected services, cite the review for the contradicted one.
+
+INPUT (compact):
+  SPOT id=99002 | Name: "Stellplatz am Wald" | Type: aire_ac | Country: DE
+  SERVICES: Drinking water: Yes | Electricity: Yes | Free: No | Approx price: ~10€
+  REVIEWS:
+    [review_id=601] [2026-03] [campercontact] ★★★ Schöner Stellplatz, aber das Wasser am Hahn ist defekt.
+
+OUTPUT:
+{
+  "claims": [
+    {"signal": "water_working", "value": false, "confidence": 0.8, "review_id": 601, "excerpt": "das Wasser am Hahn ist defekt"},
+    {"signal": "electricity_working", "value": true, "confidence": 0.85, "review_id": "services", "excerpt": "Electricity: Yes"}
+  ],
+  "summary": "Paid stellplatz (around 10€) next to a forest, with electricity. A recent visitor reports the drinking water tap is broken.",
+  "tags": ["paid", "stellplatz", "forest", "electricity"],
+  "best_for": ["overnighting"],
+  "best_season": null,
+  "avoid_season": null
+}
+
+EXAMPLE 3 — Dutch review with culturally strong word "bouwput".
+Excerpt MUST stay in original language. Severity should reflect the strong
+negative connotation in NL (not a mild concern — visitor warns against it).
+
+INPUT (compact):
+  SPOT id=99003 | Name: "Strandparkeerplaats" | Type: parking | Country: NL
+  REVIEWS:
+    [review_id=701] [2025-08] [campercontact] ★ Dit deel is op dit moment één grote bouwput, niet aan te raden.
+
+OUTPUT:
+{
+  "claims": [
+    {"signal": "beauty", "value": 0.2, "confidence": 0.7, "review_id": 701, "excerpt": "één grote bouwput"},
+    {"signal": "noise", "value": 0.7, "confidence": 0.6, "review_id": 701, "excerpt": "één grote bouwput, niet aan te raden"}
+  ],
+  "summary": "A parking area near the beach. As of summer 2025 one visitor described it as a major construction site (Dutch: 'bouwput') and explicitly advised against staying.",
+  "tags": ["beach", "construction", "avoid"],
+  "best_for": [],
+  "best_season": null,
+  "avoid_season": null
+}
+
+═══ END FEW-SHOT EXAMPLES ═══
+"""
+
+# Concatenar few-shots al system prompt (mantener byte-estable entre llamadas).
+SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V2 + FEW_SHOT_EXAMPLES_V4
+
+
 def _fmt_bool_en(b) -> str:
     if b is True:
         return "Yes"
@@ -515,7 +616,11 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
     if isinstance(fuentes, str):
         fuentes = [fuentes]
 
+    # T1.1: marcadores explícitos === SPOT DATA === / === END === para preparar
+    # la separación STATIC_CONTEXT vs REVIEW_EVIDENCE de T1.2 (Sprint 1).
+    # T1.3 (Sprint 1) inyectará aquí CURRENT_DATE: YYYY-MM-DD y [age: Xd ago] por review.
     lines = [
+        "=== SPOT DATA (volatile per-spot) ===",
         f"SPOT id={spot['id']}",
         f'Name: "{(spot.get("canonical_name") or "").strip()}"',
         f"Type: {spot.get('tipo') or 'other'}",
@@ -559,6 +664,21 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
     lines.append("")
     lines.append(f"SUMMARY_RICHNESS: {level}")
     lines.append(f"SUMMARY_INSTRUCTION: {summary_instruction_for(level)}")
+    lines.append("=== END SPOT DATA ===")
+
+    # T1.1: mini-directiva final anti recency-bias. Vive en el SUFIJO VOLÁTIL
+    # del user prompt — no afecta al prefix cache porque es texto fijo emitido
+    # después del bloque que ya rompe la caché (SPOT DATA).
+    # Refuerza la lección del Example 1: estados durables (obras, cierres, daños
+    # estructurales) NO desaparecen porque la última review fuera positiva.
+    lines.append("")
+    lines.append(
+        "REMINDER: durable conditions reported in older reviews (construction, "
+        "closures, structural damage, theft incidents) remain relevant unless a "
+        "more recent review explicitly contradicts them. If old and recent reviews "
+        "disagree on durable state, note the transition in the summary; do NOT "
+        "silently drop the older signal."
+    )
 
     return "\n".join(lines)
 

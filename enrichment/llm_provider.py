@@ -87,7 +87,11 @@ def call_deepseek_sync(
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": 1500,
+        # T1.1: subido de 1500 → 2500 — outputs `very_rich` (camping con 30+
+        # servicios + 8 frases de summary + arrays largos) podían quedar truncados
+        # con 1500, lo que se manifiesta como parse error silencioso aguas abajo.
+        # 2500 ≈ 1.5KB de JSON, suficiente para el peor caso observado.
+        "max_tokens": 2500,
         # Modo thinking se controla en deepseek-v4 vía parámetro custom.
         # Si la API rechaza el flag, lo retira el bloque except.
         "thinking": {"type": "enabled" if thinking else "disabled"},
