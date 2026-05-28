@@ -57,14 +57,14 @@ def _load_source(key: str):
     return getattr(mod, class_name)()
 
 
-async def run_source(source_key: str):
+async def run_source(source_key: str, job_id: int = None):
     """Ejecuta un scraper individual."""
     source = _load_source(source_key)
     logger.info(f"=== Iniciando {source.name} ===")
     async with pool.acquire() as conn:
         log_id = await init_scraper_log(conn, source.name)
     try:
-        stats = await source.run(pool, config, log_id)
+        stats = await source.run(pool, config, log_id, job_id=job_id)
         logger.info(f"{source.name} completado: {stats}")
         return stats
     except Exception as e:
@@ -75,14 +75,14 @@ async def run_source(source_key: str):
                 "errores": 1, "nuevos": 0, "actualizados": 0, "reviews_nuevas": 0
             })
 
-async def run_source_reviews(source_key: str):
+async def run_source_reviews(source_key: str, job_id: int = None):
     """Ejecuta la descarga desacoplada de reviews para una fuente."""
     source = _load_source(source_key)
     logger.info(f"=== Iniciando descarga de reviews para {source.name} ===")
     async with pool.acquire() as conn:
         log_id = await init_scraper_log(conn, f"{source.name}_reviews")
     try:
-        stats = await source.download_reviews(pool, config)
+        stats = await source.download_reviews(pool, config, job_id=job_id)
         logger.info(f"Descarga de reviews para {source.name} completada: {stats}")
         from db import finish_scraper_log
         async with pool.acquire() as conn:
@@ -141,6 +141,13 @@ async def daemon_loop(interval_s: int = 30):
     # Background task — nunca termina (no se await-ea explícitamente)
     asyncio.create_task(_heartbeat_task(period_s=20))
 
+    # Limpieza inmediata de zombies por reinicio: todo lo que diga 'running' al 
+    # arrancar el daemon es seguro que está muerto.
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE scraper_log SET estado = 'zombie', terminado_en = NOW() WHERE estado = 'running'")
+        await conn.execute("UPDATE scraper_jobs SET status = 'error', finished_at = NOW(), result = '{\"error\": \"daemon restarted\"}'::jsonb WHERE status = 'running'")
+        logger.info("[daemon] Limpiados posibles zombies por reinicio del daemon")
+
     while True:
         try:
             await run_pending_jobs()
@@ -149,7 +156,7 @@ async def daemon_loop(interval_s: int = 30):
         await asyncio.sleep(interval_s)
 
 
-async def cleanup_zombie_runs(max_hours: int = 12) -> dict:
+async def cleanup_zombie_runs(max_hours: int = 4) -> dict:
     """Marca como zombie scraper_log/scraper_jobs colgados >max_hours en running."""
     async with pool.acquire() as conn:
         log_res = await conn.execute(
@@ -168,25 +175,28 @@ async def cleanup_zombie_runs(max_hours: int = 12) -> dict:
 
 
 async def run_pending_jobs():
-    """Ejecuta los jobs de la cola scraper_jobs. Uso: python scheduler.py --run-pending"""
-    # Primero limpia los zombies. No queremos que un job stuck bloquee la cola.
-    cleanup = await cleanup_zombie_runs(max_hours=12)
+    """Ejecuta los jobs de la cola scraper_jobs de forma concurrente."""
+    cleanup = await cleanup_zombie_runs(max_hours=4)
     if cleanup["scraper_log_updated"] or cleanup["scraper_jobs_updated"]:
         logger.info(f"[queue] Limpieza zombies previa: {cleanup}")
 
-    # Marca atómicamente como 'running' hasta 5 jobs pending
     async with pool.acquire() as conn:
+        running_count = await conn.fetchval("SELECT COUNT(*) FROM scraper_jobs WHERE status='running'")
+        
+        limit = config.max_workers - running_count
+        if limit <= 0:
+            return
+
         jobs = await conn.fetch(
             "UPDATE scraper_jobs SET status='running', started_at=NOW() "
-            "WHERE id IN (SELECT id FROM scraper_jobs WHERE status='pending' ORDER BY created_at LIMIT 5) "
+            f"WHERE id IN (SELECT id FROM scraper_jobs WHERE status='pending' ORDER BY created_at LIMIT {limit}) "
             "RETURNING id, source, job_type"
         )
 
     if not jobs:
-        logger.info("[queue] No hay jobs pendientes")
         return
 
-    for job in jobs:
+    async def _run_one_job(job):
         job_id, source_key, job_type = job["id"], job["source"], job["job_type"]
         logger.info(f"[queue] Ejecutando job {job_id}: {source_key} ({job_type})")
 
@@ -196,13 +206,13 @@ async def run_pending_jobs():
                     "UPDATE scraper_jobs SET status='error', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
                     json.dumps({"error": f"Fuente desconocida: {source_key}"}), job_id,
                 )
-            continue
+            return
 
         try:
             if job_type == "reviews":
-                stats = await run_source_reviews(source_key)
+                stats = await run_source_reviews(source_key, job_id=job_id)
             else:
-                stats = await run_source(source_key)
+                stats = await run_source(source_key, job_id=job_id)
             async with pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE scraper_jobs SET status='done', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
@@ -216,6 +226,11 @@ async def run_pending_jobs():
                     "UPDATE scraper_jobs SET status='error', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
                     json.dumps({"error": str(e)}), job_id,
                 )
+
+    # Lanzar los jobs en background sin bloquear el loop principal
+    for job in jobs:
+        asyncio.create_task(_run_one_job(job))
+
 
 
 async def run_all_sources():

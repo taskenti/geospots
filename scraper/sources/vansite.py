@@ -551,7 +551,7 @@ class VansiteSource(AbstractSource):
         logger.info(f"[VANSITE] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Incremental review re-fetch for existing Vansite listings."""
         stats = {"reviews_nuevas": 0, "errores": 0, "procesados": 0}
         async with pool.acquire() as conn:

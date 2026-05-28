@@ -49,6 +49,25 @@ STATIC_SIGNALS = {
     "water_working": SignalType("water_working", "boolean", 60, "consensus_boolean", 1.5),
     "electricity_working": SignalType("electricity_working", "boolean", 60, "consensus_boolean", 1.5),
     "dump_station_working": SignalType("dump_station_working", "boolean", 60, "consensus_boolean", 1.5),
+    # Phase 3 v3 — nuevas señales identificadas de análisis de reviews reales (2026-05)
+    # Naturaleza / entorno
+    "dark_sky": SignalType("dark_sky", "boolean", 36500, "consensus_boolean", 1.5, "beauty"),
+    "beach_access": SignalType("beach_access", "boolean", 36500, "consensus_boolean", 0.8, "beauty"),
+    "river_nearby": SignalType("river_nearby", "boolean", 36500, "consensus_boolean", 0.5, "beauty"),
+    "hiking_nearby": SignalType("hiking_nearby", "boolean", 36500, "consensus_boolean", 0.7),
+    "cycling_nearby": SignalType("cycling_nearby", "boolean", 36500, "consensus_boolean", 0.6),
+    # Acceso / infraestructura
+    "height_restriction": SignalType("height_restriction", "numeric", 36500, "weighted_mean", 1.2),
+    "shower_working": SignalType("shower_working", "boolean", 60, "consensus_boolean", 1.2),
+    # Estado del spot
+    "spot_closed": SignalType("spot_closed", "boolean", 30, "consensus_boolean", 2.5),
+    # Seguridad / ambiente
+    "youth_trouble": SignalType("youth_trouble", "numeric", 60, "weighted_mean", 1.5, "safety"),
+    # Phase 3 v3b — señales para mapeo de datos scrapeados (source_records)
+    "campfire_allowed": SignalType("campfire_allowed", "boolean", 730, "consensus_boolean", 0.8),
+    "ev_charging":      SignalType("ev_charging",      "boolean", 730, "consensus_boolean", 0.7),
+    "swimming_access":  SignalType("swimming_access",  "boolean", 36500, "consensus_boolean", 0.7),
+    "caravan_accepted": SignalType("caravan_accepted",  "boolean", 3650, "consensus_boolean", 0.6),
 }
 
 

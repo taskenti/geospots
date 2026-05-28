@@ -298,7 +298,7 @@ class CampingCarParkSource(AbstractSource):
         logger.info(f"[campingcarpark] Completed in {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         from db import upsert_review
 
         stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}

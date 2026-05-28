@@ -9,6 +9,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
 
 from enrichment.embedding_generator import buscar_spots, generar_respuesta_busqueda
+import subprocess
+from enrichment.prompts import ENRICHMENT_VERSION
+from enrichment.llm_provider import get_provider_name, get_active_model
 
 app = FastAPI(title="GeoSpots API", version="1.1.0")
 
@@ -38,12 +41,20 @@ async def startup():
                 created_at  TIMESTAMPTZ DEFAULT NOW(),
                 started_at  TIMESTAMPTZ,
                 finished_at TIMESTAMPTZ,
-                result      JSONB
+                result      JSONB,
+                progress    JSONB
             )
         """)
         await conn.execute(
+            "ALTER TABLE scraper_jobs ADD COLUMN IF NOT EXISTS progress JSONB"
+        )
+        await conn.execute(
             "CREATE INDEX IF NOT EXISTS scraper_jobs_pending_idx "
             "ON scraper_jobs(status, created_at) WHERE status IN ('pending','running')"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scraper_log_fuente_iniciado "
+            "ON scraper_log(fuente, iniciado_en DESC)"
         )
         await conn.execute(
             "ALTER TABLE fuentes_config ADD COLUMN IF NOT EXISTS cron_schedule TEXT"
@@ -213,11 +224,41 @@ async def get_spot(spot_id: int):
             spot_id,
         )
 
+        # PR11: overrides temporales (ej. "agua reportada como rota hace 2 semanas").
+        # Solo los activos (expires_at > NOW()). El cliente debe mostrarlos como
+        # "estado actual reportado" junto al valor canónico de la columna.
+        field_overrides = await conn.fetch(
+            """
+            SELECT field, canonical_value, overridden_value,
+                   reason, source_signal_type,
+                   confidence, weight_support, n_observations,
+                   created_at, last_seen, expires_at
+            FROM spot_field_overrides
+            WHERE spot_id = $1 AND expires_at > NOW()
+            ORDER BY expires_at DESC
+            """,
+            spot_id,
+        )
+
     result = dict(spot)
+    for lang in ("es", "fr", "de", "it", "nl", "pt"):
+        result.pop(f"descripcion_{lang}", None)
+
+    # Decodificar campos JSON que por doble serialización histórica se guardaron como string
+    import json as _json
+    for field in ("fotos_urls", "conflictos", "servicios_extras"):
+        val = result.get(field)
+        if isinstance(val, str):
+            try:
+                result[field] = _json.loads(val)
+            except Exception:
+                pass
+
     result["sources"] = [dict(s) for s in sources]
     result["enrichment"] = dict(enrichment) if enrichment else None
     result["enrichment_source"] = enrichment_source
     result["reviews"] = [dict(r) for r in reviews]
+    result["field_overrides"] = [dict(o) for o in field_overrides]
     for key in list(result.keys()):
         if isinstance(result[key], (bytes, memoryview)):
             del result[key]
@@ -432,8 +473,8 @@ def _compute_health(iniciado_en, terminado_en, estado, errores, nuevos, actualiz
     days = (now - fin).days
 
     total = (nuevos or 0) + (actualizados or 0)
-    err_pct = (errores or 0) / total if total > 0 else 0.0
     n_errs = errores or 0
+    err_pct = n_errs / total if total > 0 else (1.0 if n_errs > 0 else 0.0)
 
     # ok_con_errores: nunca verde, mínimo ámbar
     if estado == "ok_con_errores":
@@ -461,61 +502,17 @@ def _compute_health(iniciado_en, terminado_en, estado, errores, nuevos, actualiz
 async def admin_scrapers_list():
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            WITH all_sources AS (
-                SELECT nombre FROM fuentes_config
-                UNION
-                SELECT DISTINCT source FROM source_records
-                UNION
-                SELECT DISTINCT regexp_replace(fuente, '_reviews$', '') FROM scraper_log
-            ),
-            known_sources AS (
-                -- Sólo fuentes con datos reales o config explícita.
-                -- Excluimos:
-                --   · seeds huérfanos de source_credibility (campernight, campininfo,
-                --     stellplatz, wikidata, eu_opendata, wikicamps...) — ya filtrados
-                --     al no estar en fuentes_config / source_records / scraper_log
-                --   · fuentes scratch de desarrollo: *_test, *_dev, *_staging, *_tmp
-                SELECT nombre FROM all_sources
+            WITH known_sources AS (
+                SELECT nombre FROM (
+                    SELECT nombre FROM fuentes_config
+                    UNION
+                    SELECT source AS nombre FROM source_credibility
+                    WHERE EXISTS (
+                        SELECT 1 FROM source_records sr
+                        WHERE sr.source = source_credibility.source LIMIT 1
+                    )
+                ) sub
                 WHERE nombre !~* '_(test|dev|staging|tmp)$'
-            ),
-            src_counts AS (
-                SELECT source,
-                       COUNT(*) AS total_records,
-                       COUNT(*) FILTER (WHERE COALESCE(stale, FALSE) = FALSE) AS active_records
-                FROM source_records GROUP BY source
-            ),
-            -- Cuenta spots vía JOIN con source_records (NO via spots.fuentes[]):
-            -- evita el problema de entradas huérfanas en fuentes[] cuando se
-            -- eliminó el record pero no se sincronizó el array. Esto explicaba
-            -- por qué CamperContact mostraba más spots (46K) que records (45K).
-            spot_counts AS (
-                SELECT sr.source,
-                       COUNT(DISTINCT s.id) AS spots_total,
-                       COUNT(DISTINCT s.id) FILTER (WHERE cardinality(s.fuentes) = 1) AS spots_exclusive
-                FROM source_records sr
-                JOIN spots s ON s.id = sr.spot_id
-                WHERE s.activo = TRUE AND COALESCE(sr.stale, FALSE) = FALSE
-                GROUP BY sr.source
-            ),
-            review_counts AS (
-                SELECT source, COUNT(*) AS total_reviews
-                FROM reviews GROUP BY source
-            ),
-            last_run AS (
-                SELECT DISTINCT ON (fuente)
-                    fuente, estado, iniciado_en, terminado_en,
-                    spots_nuevos, spots_actualizados, reviews_nuevas, errores
-                FROM scraper_log
-                ORDER BY fuente, iniciado_en DESC
-            ),
-            reviews_support AS (
-                SELECT DISTINCT regexp_replace(fuente, '_reviews$', '') AS source
-                FROM scraper_log WHERE fuente LIKE '%_reviews'
-            ),
-            active_jobs AS (
-                SELECT source, array_agg(DISTINCT job_type) AS job_types
-                FROM scraper_jobs WHERE status IN ('pending','running')
-                GROUP BY source
             )
             SELECT
                 ks.nombre,
@@ -523,11 +520,11 @@ async def admin_scrapers_list():
                 sc.base_score,
                 sc.coverage_region,
                 COALESCE(sc.active, TRUE) AS activa,
-                COALESCE(sr.total_records, 0) AS total_records,
-                COALESCE(sr.active_records, 0) AS active_records,
-                COALESCE(spc.spots_total, 0) AS spots_total,
-                COALESCE(spc.spots_exclusive, 0) AS spots_exclusive,
-                COALESCE(rc.total_reviews, 0) AS total_reviews,
+                COALESCE((SELECT COUNT(*)::INT FROM source_records sr WHERE sr.source = ks.nombre), 0) AS total_records,
+                COALESCE((SELECT COUNT(*)::INT FROM source_records sr WHERE sr.source = ks.nombre AND COALESCE(sr.stale, FALSE) = FALSE), 0) AS active_records,
+                COALESCE((SELECT COUNT(*)::INT FROM source_records sr WHERE sr.source = ks.nombre AND COALESCE(sr.stale, FALSE) = FALSE), 0) AS spots_total,
+                0 AS spots_exclusive,
+                COALESCE((SELECT COUNT(*)::INT FROM reviews r WHERE r.source = ks.nombre), 0) AS total_reviews,
                 lr.estado AS ultimo_estado,
                 lr.iniciado_en AS ultimo_inicio,
                 lr.terminado_en AS ultimo_fin,
@@ -536,17 +533,23 @@ async def admin_scrapers_list():
                 lr.reviews_nuevas AS ultimo_reviews_nuevas,
                 lr.errores AS ultimo_errores,
                 fc.cron_schedule,
-                (rs.source IS NOT NULL OR COALESCE(rc.total_reviews, 0) > 0) AS has_reviews_support,
+                (COALESCE((SELECT COUNT(*)::INT FROM reviews r WHERE r.source = ks.nombre), 0) > 0) AS has_reviews_support,
                 aj.job_types AS active_job_types
             FROM known_sources ks
             LEFT JOIN source_credibility sc ON sc.source = ks.nombre
             LEFT JOIN fuentes_config fc ON fc.nombre = ks.nombre
-            LEFT JOIN src_counts sr ON sr.source = ks.nombre
-            LEFT JOIN spot_counts spc ON spc.source = ks.nombre
-            LEFT JOIN review_counts rc ON rc.source = ks.nombre
-            LEFT JOIN last_run lr ON lr.fuente = ks.nombre
-            LEFT JOIN reviews_support rs ON rs.source = ks.nombre
-            LEFT JOIN active_jobs aj ON aj.source = ks.nombre
+            LEFT JOIN LATERAL (
+                SELECT estado, iniciado_en, terminado_en, spots_nuevos, spots_actualizados, reviews_nuevas, errores
+                FROM scraper_log
+                WHERE scraper_log.fuente = ks.nombre
+                ORDER BY iniciado_en DESC
+                LIMIT 1
+            ) lr ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT array_agg(DISTINCT job_type) AS job_types
+                FROM scraper_jobs
+                WHERE scraper_jobs.source = ks.nombre AND status IN ('pending','running')
+            ) aj ON TRUE
             ORDER BY ks.nombre
         """)
 
@@ -666,28 +669,40 @@ async def admin_scraper_detail(nombre: str):
 
 @app.get("/admin/worker/status")
 async def admin_worker_status():
-    """Devuelve si el scraper daemon está vivo (heartbeat < 90s)."""
+    """Devuelve si el scraper daemon está vivo (heartbeat < 90s) y la cola actual."""
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT value FROM scraper_jobs_meta WHERE key = 'worker_heartbeat'"
         )
-        pending = await conn.fetchval(
-            "SELECT COUNT(*) FROM scraper_jobs WHERE status IN ('pending','running')"
+        jobs = await conn.fetch(
+            "SELECT id, source, job_type, status, started_at, progress "
+            "FROM scraper_jobs WHERE status IN ('pending','running') "
+            "ORDER BY status DESC, created_at ASC"
         )
+    pending = len(jobs)
+    
+    jobs_out = []
+    for j in jobs:
+        d = dict(j)
+        if d.get("started_at"):
+            d["started_at"] = d["started_at"].isoformat()
+        jobs_out.append(d)
+
     if not row or not row["value"]:
-        return {"alive": False, "last_heartbeat": None, "seconds_ago": None, "pending_jobs": pending}
+        return {"alive": False, "last_heartbeat": None, "seconds_ago": None, "pending_jobs": pending, "jobs": jobs_out}
     try:
         last = datetime.fromisoformat(row["value"])
         if last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
         delta_s = int((datetime.now(timezone.utc) - last).total_seconds())
     except (ValueError, TypeError):
-        return {"alive": False, "last_heartbeat": row["value"], "seconds_ago": None, "pending_jobs": pending}
+        return {"alive": False, "last_heartbeat": row["value"], "seconds_ago": None, "pending_jobs": pending, "jobs": jobs_out}
     return {
         "alive": delta_s < 90,  # heartbeat cada 30s, margen 3x
         "last_heartbeat": row["value"],
         "seconds_ago": delta_s,
         "pending_jobs": pending,
+        "jobs": jobs_out
     }
 
 
@@ -702,7 +717,7 @@ async def admin_scraper_log_recent(limit: int = Query(25, ge=1, le=200)):
         rows = await conn.fetch("""
             SELECT id, fuente, estado, iniciado_en, terminado_en,
                    EXTRACT(EPOCH FROM (COALESCE(terminado_en, NOW()) - iniciado_en))::INT AS elapsed_s,
-                   spots_nuevos, spots_actualizados, reviews_nuevas, errores
+                   spots_nuevos, spots_actualizados, reviews_nuevas, errores, detalle
             FROM scraper_log
             ORDER BY iniciado_en DESC
             LIMIT $1
@@ -715,11 +730,18 @@ async def admin_force_zombie(nombre: str):
     """Marca como zombie el último 'running' de esta fuente (y su variante
     _reviews) sin esperar el umbral de 12h. Para desatascar manualmente."""
     async with pool.acquire() as conn:
-        n = await conn.execute(
-            "UPDATE scraper_log SET estado='zombie', terminado_en=NOW() "
-            "WHERE fuente IN ($1, $1 || '_reviews') AND estado='running'",
-            nombre,
-        )
+        async with conn.transaction():
+            n = await conn.execute(
+                "UPDATE scraper_log SET estado='zombie', terminado_en=NOW() "
+                "WHERE fuente IN ($1, $1 || '_reviews') AND estado='running'",
+                nombre,
+            )
+            await conn.execute(
+                "UPDATE scraper_jobs SET status = 'error', finished_at = NOW(), "
+                "result = COALESCE(result, '{}'::jsonb) || jsonb_build_object('error', 'Forced zombie manual') "
+                "WHERE source = $1 AND status IN ('pending','running')",
+                nombre,
+            )
     return {"fuente": nombre, "filas_actualizadas": int(n.split()[-1]) if n else 0}
 
 
@@ -738,18 +760,50 @@ async def admin_cleanup_fuentes_huerfanas(nombre: str = Query(..., description="
     no sincronizó el array (causa de spots_total > total_records).
     """
     async with pool.acquire() as conn:
-        n = await conn.execute(
-            """
-            UPDATE spots SET fuentes = array_remove(fuentes, $1)
-            WHERE activo = TRUE AND $1 = ANY(fuentes)
-              AND NOT EXISTS (
-                SELECT 1 FROM source_records sr
-                WHERE sr.spot_id = spots.id AND sr.source = $1 AND COALESCE(sr.stale,FALSE) = FALSE
-              )
-            """,
-            nombre,
-        )
+        async with conn.transaction():
+            n = await conn.execute(
+                """
+                UPDATE spots SET fuentes = array_remove(fuentes, $1)
+                WHERE activo = TRUE AND $1 = ANY(fuentes)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM source_records sr
+                    WHERE sr.spot_id = spots.id AND sr.source = $1 AND COALESCE(sr.stale,FALSE) = FALSE
+                  )
+                """,
+                nombre,
+            )
+            await conn.execute(
+                "UPDATE spots SET activo = FALSE "
+                "WHERE activo = TRUE AND (fuentes IS NULL OR cardinality(fuentes) = 0)"
+            )
     return {"fuente": nombre, "spots_actualizados": int(n.split()[-1]) if n else 0}
+
+
+@app.delete("/admin/jobs/{job_id}")
+async def admin_delete_job(job_id: int):
+    async with pool.acquire() as conn:
+        status = await conn.fetchval("SELECT status FROM scraper_jobs WHERE id = $1", job_id)
+        if not status:
+            raise HTTPException(404, "Job no encontrado")
+        if status != "pending":
+            raise HTTPException(400, f"No se puede cancelar un job en estado '{status}'. Solo se pueden cancelar jobs 'pending'.")
+        
+        await conn.execute("DELETE FROM scraper_jobs WHERE id = $1", job_id)
+    return {"message": "Job cancelado y eliminado de la cola"}
+
+
+@app.post("/admin/jobs/{job_id}/prioritize")
+async def admin_prioritize_job(job_id: int):
+    async with pool.acquire() as conn:
+        status = await conn.fetchval("SELECT status FROM scraper_jobs WHERE id = $1", job_id)
+        if not status:
+            raise HTTPException(404, "Job no encontrado")
+        if status != "pending":
+            raise HTTPException(400, f"No se puede priorizar un job en estado '{status}'. Solo se pueden priorizar jobs 'pending'.")
+        
+        # Mover `created_at` a hace 10 años para forzar FIFO al principio
+        await conn.execute("UPDATE scraper_jobs SET created_at = NOW() - INTERVAL '10 years' WHERE id = $1", job_id)
+    return {"message": "Job priorizado al inicio de la cola"}
 
 
 @app.post("/admin/scrapers/{nombre}/run")
@@ -768,6 +822,22 @@ async def admin_scraper_run(nombre: str, job_type: str = Query("spots", pattern=
     return {"job_id": job_id, "source": nombre, "job_type": job_type, "status": "pending"}
 
 
+@app.post("/admin/scrapers/{nombre}/cron")
+async def admin_update_cron(nombre: str, cron_expr: str = Query(..., description="Cron expression o 'none' para borrar")):
+    async with pool.acquire() as conn:
+        val = None if cron_expr.lower() in ("none", "null", "", "false") else cron_expr
+        res = await conn.execute(
+            "UPDATE fuentes_config SET cron_schedule = $2 WHERE nombre = $1",
+            nombre, val
+        )
+        if res == "UPDATE 0":
+            await conn.execute(
+                "INSERT INTO fuentes_config (nombre, cron_schedule, activa, spots_totales) VALUES ($1, $2, TRUE, 0)",
+                nombre, val
+            )
+    return {"fuente": nombre, "cron_schedule": val}
+
+
 @app.get("/admin/scrapers/{nombre}/history")
 async def admin_scraper_history(nombre: str, limit: int = Query(10, ge=1, le=100)):
     async with pool.acquire() as conn:
@@ -775,7 +845,7 @@ async def admin_scraper_history(nombre: str, limit: int = Query(10, ge=1, le=100
             """
             SELECT fuente, estado, iniciado_en, terminado_en,
                    EXTRACT(EPOCH FROM (terminado_en - iniciado_en))::INT AS duration_s,
-                   spots_nuevos, spots_actualizados, reviews_nuevas, errores
+                   spots_nuevos, spots_actualizados, reviews_nuevas, errores, detalle
             FROM scraper_log
             WHERE fuente = ANY($1::text[])
             ORDER BY iniciado_en DESC
@@ -807,6 +877,94 @@ async def admin_scraper_samples(nombre: str, limit: int = Query(5, ge=1, le=20))
 @app.get("/")
 async def index():
     return FileResponse("/pwa/index.html")
+
+
+@app.get("/admin/enrichment/countries")
+async def admin_enrichment_countries():
+    query = """
+        SELECT
+            UPPER(s.country_iso) as country_iso,
+            COUNT(DISTINCT s.id) as total_spots,
+            COUNT(DISTINCT s.id) FILTER (
+                WHERE COALESCE(s.total_reviews, 0) >= 3
+                AND (
+                    sss.spot_id IS NULL
+                    OR COALESCE(sss.enrichment_version, 0) < $1
+                    OR COALESCE(sss.stale, FALSE) = TRUE
+                )
+            ) as eligible_spots,
+            SUM(COALESCE(s.total_reviews, 0)) FILTER (
+                WHERE COALESCE(s.total_reviews, 0) >= 3
+                AND (
+                    sss.spot_id IS NULL
+                    OR COALESCE(sss.enrichment_version, 0) < $1
+                    OR COALESCE(sss.stale, FALSE) = TRUE
+                )
+            ) as eligible_reviews
+        FROM spots s
+        LEFT JOIN spot_semantic_state sss ON sss.spot_id = s.id
+        WHERE s.activo = TRUE AND s.country_iso IS NOT NULL
+        GROUP BY UPPER(s.country_iso)
+        ORDER BY eligible_spots DESC, total_spots DESC
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, ENRICHMENT_VERSION)
+    
+    # Obtener estado general del proveedor
+    provider = get_provider_name()
+    model = get_active_model()
+    
+    return {
+        "provider": provider,
+        "model": model,
+        "countries": [dict(r) for r in rows]
+    }
+
+
+@app.get("/admin/enrichment/batches")
+async def admin_enrichment_batches(limit: int = Query(25, ge=1, le=100)):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, batch_name, enrichment_version, llm_model, state,
+                   n_requested, n_succeeded, n_failed, tokens_input, tokens_output,
+                   cost_estimated_usd, error_msg, submitted_at, completed_at,
+                   EXTRACT(EPOCH FROM (COALESCE(completed_at, NOW()) - submitted_at))::INT AS duration_s
+            FROM enrichment_batches
+            ORDER BY submitted_at DESC
+            LIMIT $1
+        """, limit)
+    
+    res = []
+    for r in rows:
+        d = dict(r)
+        if d["submitted_at"]: d["submitted_at"] = d["submitted_at"].isoformat()
+        if d["completed_at"]: d["completed_at"] = d["completed_at"].isoformat()
+        res.append(d)
+    return res
+
+
+@app.post("/admin/enrichment/run/{country_iso}")
+async def admin_enrichment_run(country_iso: str, limit: int = Query(None)):
+    """Lanza el orchestrator_v2 para el país dado en background vía subprocess."""
+    country_iso = country_iso.upper()
+    cmd = [
+        "python", "-m", "jobs.nightly_enrichment_v2", 
+        "--country", country_iso
+    ]
+    if limit is not None and limit > 0:
+        cmd.extend(["--limit", str(limit)])
+
+    # Usamos Popen para no bloquear el event loop. El proceso correrá en background 
+    # y actualizará la base de datos (enrichment_batches) por su cuenta.
+    try:
+        # Popen without waiting
+        subprocess.Popen(cmd, start_new_session=True)
+        logger.info(f"[api] Launched background enrichment for {country_iso}: {' '.join(cmd)}")
+    except Exception as exc:
+        logger.error(f"[api] Failed to launch enrichment for {country_iso}: {exc}")
+        raise HTTPException(500, f"Error al lanzar el proceso: {exc}")
+        
+    return {"message": f"Enrichment batch for {country_iso} launched in background."}
 
 
 app.mount("/pwa", StaticFiles(directory="/pwa"), name="pwa")

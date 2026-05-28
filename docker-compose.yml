@@ -42,6 +42,8 @@ services:
       DB_NAME: ${POSTGRES_DB}
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
+      STAYFREE_AUTHORIZATION: ${STAYFREE_AUTHORIZATION}
+      STAYFREE_API_TOKEN: ${STAYFREE_API_TOKEN}
       REQUEST_DELAY_SECONDS: 2
       MAX_WORKERS: 3
       LOG_LEVEL: INFO
@@ -51,6 +53,7 @@ services:
       - ./scraper:/app
       - ./enrichment:/app/enrichment:ro
       - ./jobs:/app/jobs:ro
+      - ./stayfree_token.txt:/app/stayfree_token.txt:ro
     # IMPORTANTE: el contenedor es un DAEMON que procesa la cola scraper_jobs
     # cada 30s. NO arranca todos los scrapers automáticamente (eso causaba
     # crashes en cadena al reiniciar). Para ejecutar uno manualmente:

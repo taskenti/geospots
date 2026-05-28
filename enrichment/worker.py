@@ -1,4 +1,18 @@
-"""Batch worker for pending review enrichment."""
+"""Batch worker for pending review enrichment.
+
+Throttling para DeepSeek V4 Flash (provider por defecto para bulk):
+- ENRICHMENT_CONCURRENCY (env, default 8): llamadas LLM concurrentes.
+  DeepSeek no tiene RPM/RPD duros, pero limitar concurrencia controla costes
+  y evita saturar la pool de conexiones.
+- Backoff exponencial en errores transitorios (429, 5xx, timeout).
+- Parada automática si MAX_CONSECUTIVE_LLM_ERRORS fallos seguidos
+  (señal de que la API no está disponible o el crédito se agotó).
+- Progreso logueado cada PROGRESS_EVERY reviews.
+
+Para Gemini free tier (ENRICHMENT_PROVIDER=gemini, sin billing):
+  Poner ENRICHMENT_CONCURRENCY=1 y añadir delay manual:
+  ENRICHMENT_INTER_REQUEST_DELAY=4.3  (→ 14 RPM, bajo el límite de 15)
+"""
 
 from __future__ import annotations
 
@@ -7,6 +21,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -19,6 +34,27 @@ from .observation_normalizer import normalize_claims
 from .review_cleaner import clean_review_full
 from .state_aggregator import update_semantic_state
 
+# ── Configuración de throttling ──────────────────────────────────────────────
+
+# Cuántas llamadas LLM simultáneas como máximo.
+# DeepSeek bulk: 8-10 está bien. Gemini free: 1.
+_DEFAULT_CONCURRENCY = int(os.environ.get("ENRICHMENT_CONCURRENCY", "8"))
+
+# Delay en segundos entre llamadas LLM cuando provider=gemini y free tier.
+# 0 = sin delay adicional (DeepSeek u otro provider con billing).
+_INTER_REQUEST_DELAY = float(os.environ.get("ENRICHMENT_INTER_REQUEST_DELAY", "0"))
+
+# Cuántos errores LLM consecutivos (sin ningún éxito entre medio) antes de abortar el batch.
+_MAX_CONSECUTIVE_ERRORS = int(os.environ.get("ENRICHMENT_MAX_CONSECUTIVE_ERRORS", "20"))
+
+# Loguear progreso cada N reviews procesadas.
+_PROGRESS_EVERY = int(os.environ.get("ENRICHMENT_PROGRESS_EVERY", "100"))
+
+# Tiempo máximo de espera (segundos) en backoff antes de reintentar.
+_MAX_BACKOFF = float(os.environ.get("ENRICHMENT_MAX_BACKOFF", "120"))
+
+
+# ── DB helpers ───────────────────────────────────────────────────────────────
 
 def _load_dotenv(path: str = ".env") -> None:
     if not os.path.exists(path):
@@ -118,7 +154,96 @@ async def fetch_pending_reviews(conn, batch_size: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def process_review(conn, review: dict, pipeline_run_id: str, dry_run: bool = False, use_gemini: bool = True) -> dict:
+# ── LLM call con retry + backoff ─────────────────────────────────────────────
+
+async def _extract_claims_with_retry(
+    text: str,
+    review: dict,
+    use_llm: bool,
+    semaphore: asyncio.Semaphore,
+    consecutive_errors: list[int],   # mutable contador compartido [n]
+) -> list[dict]:
+    """Llama a extract_claims con control de concurrencia y backoff exponencial.
+
+    - Adquiere el semáforo antes de llamar al LLM (respeta ENRICHMENT_CONCURRENCY).
+    - Si hay delay configurado (Gemini free tier), espera tras liberar.
+    - En error transitorio (429, 5xx, timeout): backoff exponencial hasta _MAX_BACKOFF.
+    - Incrementa consecutive_errors[0] en cada fallo; lo resetea en cada éxito.
+    - Si consecutive_errors[0] >= _MAX_CONSECUTIVE_ERRORS lanza RuntimeError
+      para que process_pending_reviews aborte el batch.
+    """
+    # Regex no necesita semáforo — es local y gratuito.
+    from .claim_extractor import extract_claims_regex
+    regex_result = extract_claims_regex(text)
+    n_regex = len(regex_result)
+
+    # Misma lógica de escalado que extract_claims():
+    # - Texto < 120 chars → nunca LLM independientemente de los claims.
+    # - Texto ≥ 120 chars + regex ≥ 3 claims → cobertura suficiente, no escalar.
+    # - Texto ≥ 120 chars + regex 0-2 claims → LLM para complementar.
+    # - use_llm=False → solo regex siempre.
+    if not use_llm or len(text) < 120:
+        return regex_result
+    if n_regex >= 3:
+        return regex_result
+
+    # LLM path — necesita semáforo.
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):
+        async with semaphore:
+            try:
+                result = await extract_claims(text, review, use_gemini=True)
+                consecutive_errors[0] = 0          # éxito → reset contador
+                if _INTER_REQUEST_DELAY > 0:
+                    await asyncio.sleep(_INTER_REQUEST_DELAY)
+                return result
+            except Exception as exc:
+                err_str = str(exc)
+                # Detectar quota agotada (Gemini spending cap) — no reintentar.
+                if "RESOURCE_EXHAUSTED" in err_str and "spending cap" in err_str.lower():
+                    logger.error(
+                        "[enrichment] Quota/spending cap agotado. "
+                        "Abortando batch para no seguir quemando crédito."
+                    )
+                    consecutive_errors[0] = _MAX_CONSECUTIVE_ERRORS
+                    raise RuntimeError("spending_cap_exhausted") from exc
+
+                consecutive_errors[0] += 1
+                if consecutive_errors[0] >= _MAX_CONSECUTIVE_ERRORS:
+                    logger.error(
+                        f"[enrichment] {_MAX_CONSECUTIVE_ERRORS} errores consecutivos. "
+                        "Abortando batch. Revisar conectividad y crédito de la API."
+                    )
+                    raise RuntimeError("max_consecutive_errors_reached") from exc
+
+                if attempt < max_attempts:
+                    wait = min(_MAX_BACKOFF, 2 ** attempt)   # 2s, 4s, 8s
+                    logger.warning(
+                        f"[enrichment] LLM error (intento {attempt}/{max_attempts}), "
+                        f"reintento en {wait:.0f}s: {exc}"
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.warning(
+                        f"[enrichment] LLM fallido tras {max_attempts} intentos, "
+                        f"review skipped: {exc}"
+                    )
+                    return []   # devolver vacío tras agotar intentos (no abortar)
+
+    return []
+
+
+# ── Procesamiento de una review ───────────────────────────────────────────────
+
+async def process_review(
+    conn,
+    review: dict,
+    pipeline_run_id: str,
+    dry_run: bool = False,
+    use_llm: bool = True,
+    semaphore: asyncio.Semaphore | None = None,
+    consecutive_errors: list[int] | None = None,
+) -> dict:
     raw_text = review.get("texto_original") or review.get("texto")
     cleaned = clean_review_full(raw_text)
     if not cleaned.informativo:
@@ -140,7 +265,14 @@ async def process_review(conn, review: dict, pipeline_run_id: str, dry_run: bool
             )
         return {"claims": 0, "observations": 0, "informativo": False}
 
-    claims = await extract_claims(cleaned.texto_limpio, review, use_gemini=use_gemini)
+    if semaphore is not None and consecutive_errors is not None:
+        claims = await _extract_claims_with_retry(
+            cleaned.texto_limpio, review, use_llm, semaphore, consecutive_errors
+        )
+    else:
+        # Fallback sin throttling (tests, dry-run rápido)
+        claims = await extract_claims(cleaned.texto_limpio, review, use_gemini=use_llm)
+
     observations = normalize_claims(
         claims,
         source_confidence=review.get("source_confidence", 1.0),
@@ -178,33 +310,114 @@ async def process_review(conn, review: dict, pipeline_run_id: str, dry_run: bool
     return {"claims": len(claims), "observations": len(observations), "informativo": True}
 
 
-async def process_pending_reviews(pool, batch_size: int = 100, dry_run: bool = False, use_gemini: bool = True) -> dict:
+# ── Batch principal ───────────────────────────────────────────────────────────
+
+async def process_pending_reviews(
+    pool,
+    batch_size: int = 100,
+    dry_run: bool = False,
+    use_llm: bool = True,
+    concurrency: int | None = None,
+) -> dict:
     pipeline_run_id = str(uuid.uuid4())
-    stats = {"reviews": 0, "informative": 0, "claims": 0, "observations": 0, "errors": 0, "pipeline_run_id": pipeline_run_id}
+    stats = {
+        "reviews": 0, "informative": 0, "claims": 0,
+        "observations": 0, "errors": 0,
+        "pipeline_run_id": pipeline_run_id,
+    }
+
+    concurrency = concurrency or _DEFAULT_CONCURRENCY
+    semaphore = asyncio.Semaphore(concurrency)
+    consecutive_errors: list[int] = [0]    # lista mutable para pasar por referencia
+
     async with pool.acquire() as conn:
         pending = await fetch_pending_reviews(conn, batch_size)
-        for review in pending:
-            try:
-                result = await process_review(conn, review, pipeline_run_id, dry_run=dry_run, use_gemini=use_gemini)
-                stats["reviews"] += 1
-                stats["informative"] += int(result["informativo"])
-                stats["claims"] += result["claims"]
-                stats["observations"] += result["observations"]
-            except Exception as exc:
-                stats["errors"] += 1
-                logger.exception(f"[enrichment] Failed review {review.get('id')}: {exc}")
+
+    if not pending:
+        logger.info("[enrichment] No hay reviews pendientes.")
+        return stats
+
+    total = len(pending)
+    logger.info(
+        f"[enrichment] Iniciando batch: {total} reviews | "
+        f"concurrency={concurrency} | inter_delay={_INTER_REQUEST_DELAY}s | "
+        f"provider={os.environ.get('ENRICHMENT_PROVIDER','gemini')} | "
+        f"run={pipeline_run_id[:8]}"
+    )
+    t_start = time.monotonic()
+
+    for i, review in enumerate(pending, 1):
+        try:
+            async with pool.acquire() as conn:
+                result = await process_review(
+                    conn, review, pipeline_run_id,
+                    dry_run=dry_run,
+                    use_llm=use_llm,
+                    semaphore=semaphore,
+                    consecutive_errors=consecutive_errors,
+                )
+            stats["reviews"] += 1
+            stats["informative"] += int(result["informativo"])
+            stats["claims"] += result["claims"]
+            stats["observations"] += result["observations"]
+
+            if i % _PROGRESS_EVERY == 0:
+                elapsed = time.monotonic() - t_start
+                rate = i / elapsed if elapsed > 0 else 0
+                eta = (total - i) / rate if rate > 0 else 0
+                logger.info(
+                    f"[enrichment] {i}/{total} reviews | "
+                    f"{rate:.1f} rev/s | ETA {eta/60:.1f}min | "
+                    f"claims={stats['claims']} obs={stats['observations']} "
+                    f"errors={stats['errors']}"
+                )
+
+        except RuntimeError as exc:
+            # max_consecutive_errors o spending_cap — abortar el batch limpiamente
+            logger.error(f"[enrichment] Batch abortado: {exc} (procesadas {i-1}/{total})")
+            stats["errors"] += 1
+            break
+        except Exception as exc:
+            stats["errors"] += 1
+            logger.exception(f"[enrichment] Error en review {review.get('id')}: {exc}")
+
+    elapsed = time.monotonic() - t_start
+    logger.info(
+        f"[enrichment] Batch completado en {elapsed:.0f}s | "
+        f"reviews={stats['reviews']} informativas={stats['informative']} "
+        f"claims={stats['claims']} obs={stats['observations']} errors={stats['errors']}"
+    )
     return stats
 
 
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+
 async def main_async(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--batch-size", type=int, default=100)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--no-gemini", action="store_true")
+    parser = argparse.ArgumentParser(description="GeoSpots enrichment worker")
+    parser.add_argument("--batch-size", type=int, default=1000,
+                        help="Reviews a procesar por ejecución (default 1000)")
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="Llamadas LLM simultáneas (default: ENRICHMENT_CONCURRENCY env o 8)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Procesa pero no escribe en DB")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="Solo regex, sin llamadas LLM (gratis)")
+    # Alias legacy
+    parser.add_argument("--no-gemini", action="store_true",
+                        help="Alias de --no-llm (compatibilidad)")
     args = parser.parse_args(argv)
+
+    use_llm = not (args.no_llm or args.no_gemini)
+
     pool = await create_pool()
     try:
-        stats = await process_pending_reviews(pool, args.batch_size, args.dry_run, use_gemini=not args.no_gemini)
+        stats = await process_pending_reviews(
+            pool,
+            batch_size=args.batch_size,
+            dry_run=args.dry_run,
+            use_llm=use_llm,
+            concurrency=args.concurrency,
+        )
         logger.info(f"[enrichment] stats={stats}")
     finally:
         await pool.close()

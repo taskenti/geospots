@@ -377,7 +377,7 @@ class PromobilSource(AbstractSource):
         }
         return merge_extra(norm, extract_promobil(raw))
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         import re
         import json
 

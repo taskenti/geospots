@@ -65,6 +65,7 @@ class RunStats:
     tokens_input_total: int = 0
     tokens_output_total: int = 0
     cost_estimated_usd: float = 0.0
+    consecutive_errors: int = 0
     errors: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
@@ -209,8 +210,15 @@ async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
         attempt = 0
         last_exc: Exception | None = None
         while attempt <= max_retries:
+            if stats.consecutive_errors >= 5:
+                logger.warning(f"[orchestrator] Circuit Breaker: pausando 30s por excesivos errores ({stats.consecutive_errors})...")
+                await asyncio.sleep(30)
+                stats.consecutive_errors = 0  # reset tras la pausa
+                
             try:
                 resp = await _call_llm(provider, user_prompt, model)
+                stats.consecutive_errors = 0  # reset on success
+                
                 parsed = parse_enrichment_response(resp.text)
                 async with pool.acquire() as conn:
                     ingest_stats = await ingest_spot_enrichment(
@@ -237,6 +245,7 @@ async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
             except Exception as exc:
                 last_exc = exc
                 attempt += 1
+                stats.consecutive_errors += 1
                 logger.warning(f"[orchestrator] LLM/ingest error spot={spot_id} attempt={attempt}: {exc}")
                 if attempt > max_retries:
                     break

@@ -257,7 +257,7 @@ class CampendiumSource(AbstractSource):
             logger.error(f"[{self.name}] Error normalizing: {e}")
             return None
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Phase 2: Fetch full detail + reviews for each POI via /api/v1/pois/{id}."""
         from db import upsert_review, enriquecer_spot
 

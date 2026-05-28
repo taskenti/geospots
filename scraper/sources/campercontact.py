@@ -162,10 +162,7 @@ class CamperContactSource(AbstractSource):
             "num_plazas": filters.get("maxCamperSpots"),
             "region": ciudad,
             "country_iso": country_iso,
-            "web": (
-                "https://www.campercontact.com/en" + raw.get("permalink", "")
-                if raw.get("permalink") else None
-            ),
+            "web": None,
         }
         return merge_extra(norm, extract_campercontact(raw))
 
@@ -264,7 +261,7 @@ class CamperContactSource(AbstractSource):
             "iluminacion": iluminacion,
             "seguridad": seguridad,
             "num_plazas": poi.get("limits", {}).get("maxCapacity"),
-            "web": web or fallback_web,
+            "web": web,
             "telefono": telefono,
             "email": email,
             "fotos_urls": photos,
@@ -372,7 +369,7 @@ class CamperContactSource(AbstractSource):
         logger.info(f"[{self.name}] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         stats = {
             "nuevos": 0,
             "actualizados": 0,

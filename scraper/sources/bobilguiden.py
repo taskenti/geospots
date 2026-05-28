@@ -339,7 +339,7 @@ class BobilguidenSource(AbstractSource):
         logger.info(f"[bobilguiden] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Bobilguiden NO expone un endpoint público de detalle por spot.
 
         Hallazgos (verificados 2026-05-27):

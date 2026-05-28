@@ -524,7 +524,7 @@ class FurgovwSource(AbstractSource):
         logger.info(f"[furgovw] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Incremental RSS review re-fetch using mapped forum topic IDs."""
         stats = {"reviews_nuevas": 0, "errores": 0, "topics": 0}
         topic_to_spot: dict[int, int] = {}

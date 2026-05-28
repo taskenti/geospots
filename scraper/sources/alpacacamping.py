@@ -297,7 +297,7 @@ class AlpacaCampingSource(AbstractSource):
                 
         return reviews_list
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         from db import upsert_review
         
         stats = {

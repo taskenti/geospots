@@ -613,7 +613,7 @@ class StayFreeSource(AbstractSource):
         logger.info(f"[{self.name}] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         from db import upsert_review
         import httpx
 

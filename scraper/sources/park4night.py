@@ -412,7 +412,7 @@ class Park4NightSource(AbstractSource):
         logger.info(f"[park4night] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         from db import upsert_review
         
         stats = {
@@ -449,6 +449,8 @@ class Park4NightSource(AbstractSource):
         for r in review_jobs:
             await rev_queue.put(dict(r))
             
+        progress_state = [0, len(review_jobs)]
+            
         async def review_worker(client):
             while not rev_queue.empty():
                 try:
@@ -478,9 +480,21 @@ class Park4NightSource(AbstractSource):
                             await conn.execute("""
                                 UPDATE source_records
                                 SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb,
-                                    last_seen = NOW()
-                                WHERE source = 'park4night' AND source_id = $1
-                            """, sid)
+                                    review_count = GREATEST(COALESCE(review_count, 0), $1::int)
+                                WHERE source = 'park4night' AND spot_id = $2
+                            """, len(rev_list), spot_id)
+                            
+                    progress_state[0] += 1
+                    if job_id and progress_state[0] % 20 == 0:
+                        try:
+                            async with pool.acquire() as conn2:
+                                await conn2.execute(
+                                    "UPDATE scraper_jobs SET progress = $1::jsonb WHERE id = $2",
+                                    json.dumps({"processed_spots": progress_state[0], "total_spots": progress_state[1], "stats": stats}), job_id
+                                )
+                        except Exception:
+                            pass
+                            
                 except Exception as e:
                     logger.warning(f"[{self.name}] Error fetching reviews for spot {sid}: {e}")
                     stats["errores"] += 1

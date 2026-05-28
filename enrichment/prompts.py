@@ -519,6 +519,7 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
         f"SPOT id={spot['id']}",
         f'Name: "{(spot.get("canonical_name") or "").strip()}"',
         f"Type: {spot.get('tipo') or 'other'}",
+        f"Region: {spot.get('region') or '?'}",
         f"Country: {spot.get('country_iso') or '?'}",
         f"Coords: {spot.get('lat'):.4f}, {spot.get('lon'):.4f}",
         f"Sources: {', '.join(fuentes) if fuentes else '?'}",

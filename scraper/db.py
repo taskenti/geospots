@@ -86,6 +86,24 @@ async def find_spot_cercano(conn: asyncpg.Connection, lat: float, lon: float,
     return None
 
 
+def _limpiar_web(web: str | None) -> str | None:
+    if not web:
+        return None
+    web_lower = web.lower()
+    EXCLUDED_DOMAINS = [
+        "campercontact.com", "park4night.com", "caramaps.com", "stayfree.app",
+        "campspace.com", "vansite.eu", "searchforsites.co.uk", "alpacacamping.de",
+        "welcometomygarden.org", "campingcar-infos.com", "freecampsites.net",
+        "campernight.com", "bobilguiden.no", "camperstop.com", "campingcarpark.com",
+        "agricamper.it", "roadsurfer.com", "campy.app", "campy.nl", "agricamper.com",
+        "thedyrt.com"
+    ]
+    for domain in EXCLUDED_DOMAINS:
+        if domain in web_lower:
+            return None
+    return web
+
+
 async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
     row = await conn.fetchrow("""
         INSERT INTO spots (
@@ -96,7 +114,12 @@ async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
             master_rating, total_reviews, fuentes,
             descripcion_es, descripcion_en, descripcion_fr, descripcion_de,
             descripcion_it, descripcion_nl,
-            web, telefono, email, fotos_urls
+            web, telefono, email, fotos_urls,
+            piscina, lavanderia, gas_recharge, restaurant, juegos_ninos,
+            mirador, zona_protegida, online_booking, winter_friendly, apto_motos,
+            mtb_friendly, surf_friendly, fishing, climbing, hiking_nearby,
+            amperaje, n_enchufes, max_noches, idiomas_hablados, productos_venta,
+            servicios_extras
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9, $10, $11, $12,
@@ -104,7 +127,12 @@ async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
             $19, $20, $21,
             $22, $23, $24,
             $25, $26, $27, $28, $29, $30,
-            $31, $32, $33, $34::jsonb
+            $31, $32, $33, $34::jsonb,
+            $35, $36, $37, $38, $39,
+            $40, $41, $42, $43, $44,
+            $45, $46, $47, $48, $49,
+            $50, $51, $52, $53::text[], $54::text[],
+            $55::jsonb
         )
         RETURNING id
     """,
@@ -120,8 +148,14 @@ async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:
         data.get("descripcion_es"), data.get("descripcion_en"),
         data.get("descripcion_fr"), data.get("descripcion_de"),
         data.get("descripcion_it"), data.get("descripcion_nl"),
-        data.get("web"), data.get("telefono"), data.get("email"),
-        json.dumps(data.get("fotos_urls", []))
+        _limpiar_web(data.get("web")), data.get("telefono"), data.get("email"),
+        json.dumps(data.get("fotos_urls", [])),
+        data.get("piscina"), data.get("lavanderia"), data.get("gas_recharge"), data.get("restaurant"), data.get("juegos_ninos"),
+        data.get("mirador"), data.get("zona_protegida"), data.get("online_booking"), data.get("winter_friendly"), data.get("apto_motos"),
+        data.get("mtb_friendly"), data.get("surf_friendly"), data.get("fishing"), data.get("climbing"), data.get("hiking_nearby"),
+        data.get("amperaje"), data.get("n_enchufes"), data.get("max_noches"),
+        data.get("idiomas_hablados", []), data.get("productos_venta", []),
+        json.dumps(data.get("servicios_extras", {}))
     )
     return row["id"]
 
@@ -192,6 +226,10 @@ async def enriquecer_spot(conn: asyncpg.Connection, spot_id: int,
         if k in SKIP_ENRIQUECER or v is None:
             continue
         col = k
+        if col == "web":
+            v = _limpiar_web(v)
+            if v is None:
+                continue
         if k == "rating_promedio":
             col = "master_rating"
         elif k == "num_reviews":
@@ -284,7 +322,7 @@ async def upsert_source_record(conn: asyncpg.Connection, spot_id: int,
             raw_data = $4::jsonb,
             normalized_data = COALESCE(source_records.normalized_data, '{}'::jsonb) || $5::jsonb,
             rating = $9,
-            review_count = $10,
+            review_count = COALESCE($10, source_records.review_count),
             checksum = $11,
             last_seen = NOW(),
             stale = FALSE

@@ -237,6 +237,91 @@ Fallback heurístico si Gemini falla: `extraer_intencion_heuristica()` mapea pal
 
 ---
 
+## Convergencia: cómo scraping y enrichment forman la ficha final
+
+Las dos pipelines son independientes pero comparten el mismo `spot_id` como clave. La "ficha" de un spot no existe como tabla propia — es el resultado del JOIN que hace la API en tiempo real sobre datos ya pre-computados.
+
+### Qué aporta cada pipeline
+
+```
+SCRAPING (fuentes externas)                ENRICHMENT (LLM pipeline)
+         │                                          │
+         ▼                                          ▼
+source_records (raw + norm por fuente)     normalized_observations (claims + pesos)
+         │                                          │
+         └─────────────────┬──────────────────────-─┘
+                           ▼
+               spots.id  ←  clave compartida
+```
+
+| Datos factuales (scraping → `spots`) | Datos semánticos (enrichment → `spot_semantic_state`) |
+|---|---|
+| `canonical_name`, `tipo`, `lat/lon` | `quietness_score`, `beauty_score` |
+| `agua_potable`, `ducha`, `electricidad`, `wifi` | `police_risk_score`, `overnight_safe` |
+| `precio_info`, `gratuito` | `safety_score`, `crowd_level_score` |
+| `descripcion_es/fr/de/en` | `signals_data` (JSONB completo con n_obs, confidence) |
+| `fotos_urls`, `web`, `telefono` | `semantic_dsl` ("quiet:+0.9 clean:+0.9 bigveh:-0.3") |
+| `master_rating`, `total_reviews` | `consensus_confidence` (qué tan fiable es el estado) |
+| `fuentes[]` (qué fuentes conocen el spot) | `total_observations`, `last_aggregated_at` |
+
+### La ficha real — ejemplo de producción
+
+El endpoint `GET /spot/{id}` hace tres queries y une el resultado:
+
+```sql
+SELECT * FROM spots WHERE id = $1;                         -- datos factuales
+SELECT * FROM spot_semantic_state WHERE spot_id = $1;      -- estado semántico
+SELECT * FROM reviews WHERE spot_id = $1 ORDER BY fecha DESC LIMIT 20;  -- reviews
+```
+
+Ejemplo real (`spot_id=148518`, Area Camper Bellavista, Granada):
+
+```
+FACTUAL (caramaps + park4night + campercontact):
+  canonical_name: "Area Camper Bellavista"
+  tipo:           area_ac  |  gratuito: false
+  agua_potable: ✅  wc: ✅  ducha: ✅  electricidad: ✅  wifi: ✅
+  master_rating:  4.05  |  total_reviews: 517
+  fotos_urls:     [25 URLs]
+  descripcion_es: "Lugar tranquilo y seguro, parada de tranvía a 500 metros
+                   directo al centro de Granada..."
+  fuentes:        [caramaps, park4night, campercontact]
+
+SEMÁNTICO (calculado de 517 reviews via regex + LLM):
+  quietness_score:   0.862  (37 observaciones, confianza 100%)
+  cleanliness_score: 0.851  (66 observaciones, confianza 100%)
+  beauty_score:      0.900  ( 6 observaciones, confianza  83%)
+  overnight_safe:    true   ( 4 observaciones)
+  large_vehicle:     0.300  ← reviews dicen "difícil para vehículos grandes"
+  semantic_dsl:      "quiet:+0.9 clean:+0.9 beauty:+0.9 overnight:T bigveh:-0.3"
+  consensus:         0.24   ← pocas obs relativas al total de reviews (517)
+
+REVIEWS (últimas 20 de 517):
+  [park4night 2025-03] "Lugar tranquilo, duchas bien..."
+  [caramaps   2025-02] "Muy recomendable, vistas a Sierra Nevada..."
+  ...
+```
+
+### Qué genera el enrichment sobre los datos del scraping
+
+El LLM no "reemplaza" nada del scraping — lo **complementa**:
+
+- El scraping aporta **verdades declarativas** (la ficha oficial del sitio: "tiene ducha", "cuesta €18")
+- El enrichment aporta **verdades observadas** (lo que la gente realmente experimenta: "la ducha estaba fría", "en agosto está lleno", "vino la policía")
+
+Son capas complementarias. Un spot puede tener `electricidad=true` (declarado por la fuente) y `electricity_working=false` (detectado por reviews recientes que dicen "el enchufe no funcionaba"). Esta tensión es información valiosa, no un conflicto a resolver.
+
+### Por qué no hay tabla "ficha"
+
+Los datos pre-computados están en `spots` + `spot_semantic_state`. La API solo hace el JOIN. Esto tiene ventajas:
+- El scraping actualiza `spots` sin tocar `spot_semantic_state`
+- El enrichment actualiza `spot_semantic_state` sin tocar `spots`
+- Ambos pueden correr en paralelo sin lock contention
+- Si el enrichment falla, los datos factuales siguen disponibles
+- Si hay que re-enriquecer (nuevo modelo, nueva versión del prompt), se resetea solo `spot_semantic_state` sin perder nada del scraping
+
+---
+
 ## API (api/main.py)
 
 ### Endpoints

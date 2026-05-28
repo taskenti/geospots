@@ -10,3 +10,4 @@ google-genai>=1.0.0
 # v4 enrichment: dedup multilingual (cross-language semantic similarity)
 # paraphrase-multilingual-MiniLM-L12-v2 model (~250MB, 50+ languages, CPU)
 sentence-transformers>=3.0.0
+langdetect

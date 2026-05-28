@@ -204,7 +204,7 @@ class TheDyrtSource(AbstractSource):
             logger.error(f"[thedyrt] Error normalizing raw data: {e}")
             return None
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         from db import upsert_review
 
         stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}

@@ -608,7 +608,22 @@ INSERT INTO signal_types (id, parent_id, display_name, value_type, decay_class, 
 ('accessible_pmr', NULL, 'Accesible PMR', 'boolean', 'slow', 1825, 'consensus_boolean', 'majority_consensus', 0.6),
 ('water_working', NULL, 'Agua Operativa', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.5),
 ('electricity_working', NULL, 'Electricidad Operativa', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.5),
-('dump_station_working', NULL, 'Vaciado Aguas Operativo', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.5)
+('dump_station_working', NULL, 'Vaciado Aguas Operativo', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.5),
+-- Phase 3 v3 — nuevas señales identificadas de análisis de reviews reales (2026-05)
+('dark_sky', 'beauty', 'Cielo Oscuro / Estrellas', 'boolean', 'permanent', 36500, 'consensus_boolean', 'permanent_override', 1.5),
+('beach_access', 'beauty', 'Acceso a Playa', 'boolean', 'permanent', 36500, 'consensus_boolean', 'permanent_override', 0.8),
+('river_nearby', 'beauty', 'Rio/Arroyo Cercano', 'boolean', 'permanent', 36500, 'consensus_boolean', 'permanent_override', 0.5),
+('hiking_nearby', NULL, 'Senderismo Cercano', 'boolean', 'permanent', 36500, 'consensus_boolean', 'majority_consensus', 0.7),
+('cycling_nearby', NULL, 'Ciclismo Cercano', 'boolean', 'permanent', 36500, 'consensus_boolean', 'majority_consensus', 0.6),
+('height_restriction', NULL, 'Restriccion de Altura (m)', 'numeric', 'permanent', 36500, 'weighted_mean', 'permanent_override', 1.2),
+('shower_working', NULL, 'Duchas Operativas', 'boolean', 'volatile', 60, 'consensus_boolean', 'recent_wins', 1.2),
+('spot_closed', NULL, 'Spot Cerrado', 'boolean', 'volatile', 30, 'consensus_boolean', 'recent_wins', 2.5),
+('youth_trouble', 'safety', 'Problemas con Jovenes', 'numeric', 'volatile', 60, 'weighted_mean', 'recent_wins', 1.5),
+-- Phase 3 v3b — señales para mapeo directo de datos scrapeados
+('campfire_allowed', NULL, 'Hoguera Permitida',           'boolean', 'slow',    730,   'consensus_boolean', 'recent_wins',        0.8),
+('ev_charging',      NULL, 'Carga Vehículo Eléctrico',    'boolean', 'slow',    730,   'consensus_boolean', 'majority_consensus', 0.7),
+('swimming_access',  NULL, 'Acceso a Baño/Piscina',       'boolean', 'permanent', 36500, 'consensus_boolean', 'permanent_override', 0.7),
+('caravan_accepted', NULL, 'Acepta Caravanas Remolcadas', 'boolean', 'slow',    3650,  'consensus_boolean', 'majority_consensus', 0.6)
 ON CONFLICT (id) DO UPDATE SET
     parent_id = EXCLUDED.parent_id,
     display_name = EXCLUDED.display_name,

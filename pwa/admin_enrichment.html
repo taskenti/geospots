@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoSpots — Admin Enrichment V2</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 1.5rem;
+        }
+        a { color: #00d4ff; text-decoration: none; }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .header-left { display: flex; align-items: center; gap: 1rem; }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header-title { color: #555; font-size: 0.9rem; }
+        .header-right { display: flex; align-items: center; gap: 0.75rem; }
+        
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+            margin-right: 1rem;
+            padding-right: 1rem;
+            border-right: 1px solid rgba(255,255,255,0.1);
+        }
+        .nav-link {
+            color: #888;
+            font-size: 0.85rem;
+            font-weight: 500;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .nav-link:hover { color: #fff; background: rgba(255,255,255,0.05); }
+        .nav-link.active { color: #fff; background: rgba(123,47,247,0.2); border: 1px solid rgba(123,47,247,0.4); }
+
+        .btn {
+            background: rgba(0,212,255,0.10);
+            border: 1px solid rgba(0,212,255,0.30);
+            color: #00d4ff;
+            padding: 0.4rem 0.9rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            transition: background 0.15s;
+        }
+        .btn:hover { background: rgba(0,212,255,0.20); }
+        .btn:disabled { opacity: 0.35; cursor: default; }
+        
+        .btn-run {
+            background: rgba(123,47,247,0.15);
+            border: 1px solid rgba(123,47,247,0.40);
+            color: #c4a7ff;
+            padding: 0.25rem 0.65rem;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.74rem;
+            white-space: nowrap;
+            transition: background 0.15s;
+        }
+        .btn-run:hover { background: rgba(123,47,247,0.30); color: #fff; }
+        .btn-run:disabled { opacity: 0.35; cursor: default; }
+
+        .action-group {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            justify-content: flex-end;
+        }
+        .action-group select {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #eee;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.74rem;
+            outline: none;
+        }
+
+        .stats-bar {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+        .stat-chip {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 8px;
+            padding: 0.45rem 0.9rem;
+            font-size: 0.82rem;
+        }
+        .stat-chip span { color: #00d4ff; font-weight: 600; }
+        
+        .continent-group {
+            margin-bottom: 2rem;
+        }
+        .continent-header {
+            font-size: 1rem;
+            color: #fff;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.25rem;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .table-wrap {
+            overflow-x: auto;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.07);
+            margin-bottom: 2rem;
+            background: rgba(255,255,255,0.01);
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+        thead tr {
+            background: rgba(255,255,255,0.04);
+            border-bottom: 1px solid rgba(255,255,255,0.09);
+        }
+        th {
+            padding: 0.6rem 0.8rem;
+            text-align: left;
+            color: #666;
+            font-weight: 500;
+            font-size: 0.74rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            white-space: nowrap;
+        }
+        tbody tr {
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            transition: background 0.1s;
+        }
+        tbody tr:hover { background: rgba(255,255,255,0.03); }
+        td { padding: 0.55rem 0.8rem; vertical-align: middle; }
+        
+        .badge {
+            display: inline-block;
+            font-size: 0.68rem;
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .badge-pending  { background: rgba(245,158,11,0.08); color: #f59e0b; }
+        .badge-running  { background: rgba(0,212,255,0.12); color: #00d4ff; }
+        .badge-succeeded{ background: rgba(34,197,94,0.12); color: #4ade80; }
+        .badge-failed   { background: rgba(239,68,68,0.12);  color: #f87171; }
+        .badge-partial  { background: rgba(245,158,11,0.12); color: #fbbf24; }
+
+        .progress-bar-bg {
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            height: 4px;
+            width: 100%;
+            margin-top: 4px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            background: #00d4ff;
+            height: 100%;
+            transition: width 0.3s;
+        }
+
+        .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.78rem; }
+        .dim  { color: #555; }
+        .muted { color: #888; }
+        .text-right { text-align: right; }
+        
+        #toast-container {
+            position: fixed;
+            top: 1.5rem;
+            right: 1.5rem;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .toast {
+            background: #1a1a24;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-left: 4px solid #00d4ff;
+            border-radius: 6px;
+            padding: 0.75rem 1rem;
+            color: #e0e0e0;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+            transition: opacity 0.3s;
+        }
+        .toast.error { border-left-color: #ef4444; }
+        .toast.success { border-left-color: #22c55e; }
+        
+        .loading { text-align: center; padding: 2rem; color: #444; }
+        .spinner {
+            display: inline-block;
+            width: 18px; height: 18px;
+            border: 2px solid rgba(0,212,255,0.15);
+            border-top-color: #00d4ff;
+            border-radius: 50%;
+            animation: spin 0.75s linear infinite;
+            margin-right: 0.45rem;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-left">
+        <span class="logo">GeoSpots</span>
+        <span class="header-title">/ Admin Enrichment V2</span>
+    </div>
+    <div class="header-right">
+        <div class="nav-links">
+            <a href="admin.html" class="nav-link">🕷️ Scrapers</a>
+            <a href="admin_enrichment.html" class="nav-link active">🧠 Enrichment</a>
+        </div>
+        <button class="btn" id="btn-refresh" onclick="loadAll()">↻ Actualizar</button>
+    </div>
+</div>
+
+<div id="toast-container"></div>
+
+<div class="stats-bar" id="stats-bar">
+    <div class="loading"><span class="spinner"></span> Cargando estado API...</div>
+</div>
+
+<div id="countries-wrap">
+    <div class="loading"><span class="spinner"></span> Cargando países...</div>
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:2rem;margin-bottom:0.5rem">
+    <h3 style="font-size:0.9rem;font-weight:500;color:#888">Historial de Ejecución</h3>
+</div>
+<div class="table-wrap" id="batches-wrap">
+    <div class="loading"><span class="spinner"></span> Cargando historial...</div>
+</div>
+
+<script>
+const API_KEY = 'clave_secreta_inventada_por_ti_123';
+
+const COUNTRY_MAP = {
+    'ES': { name: 'España', continent: 'Europa' },
+    'PT': { name: 'Portugal', continent: 'Europa' },
+    'AD': { name: 'Andorra', continent: 'Europa' },
+    'FR': { name: 'Francia', continent: 'Europa' },
+    'IT': { name: 'Italia', continent: 'Europa' },
+    'DE': { name: 'Alemania', continent: 'Europa' },
+    'GB': { name: 'Reino Unido', continent: 'Europa' },
+    'CH': { name: 'Suiza', continent: 'Europa' },
+    'AT': { name: 'Austria', continent: 'Europa' },
+    'BE': { name: 'Bélgica', continent: 'Europa' },
+    'NL': { name: 'Países Bajos', continent: 'Europa' },
+    'SE': { name: 'Suecia', continent: 'Europa' },
+    'NO': { name: 'Noruega', continent: 'Europa' },
+    'DK': { name: 'Dinamarca', continent: 'Europa' },
+    'FI': { name: 'Finlandia', continent: 'Europa' },
+    'GR': { name: 'Grecia', continent: 'Europa' },
+    'IE': { name: 'Irlanda', continent: 'Europa' },
+    'PL': { name: 'Polonia', continent: 'Europa' },
+    'CZ': { name: 'Chequia', continent: 'Europa' },
+    'HR': { name: 'Croacia', continent: 'Europa' },
+    'SI': { name: 'Eslovenia', continent: 'Europa' },
+    'RO': { name: 'Rumanía', continent: 'Europa' },
+    'BG': { name: 'Bulgaria', continent: 'Europa' },
+    'TR': { name: 'Turquía', continent: 'Europa' },
+    'IS': { name: 'Islandia', continent: 'Europa' },
+    'MA': { name: 'Marruecos', continent: 'África' },
+    'US': { name: 'Estados Unidos', continent: 'América del Norte' },
+    'CA': { name: 'Canadá', continent: 'América del Norte' },
+    'MX': { name: 'México', continent: 'América del Norte' },
+    'AR': { name: 'Argentina', continent: 'América del Sur' },
+    'CL': { name: 'Chile', continent: 'América del Sur' },
+    'CO': { name: 'Colombia', continent: 'América del Sur' },
+    'PE': { name: 'Perú', continent: 'América del Sur' },
+    'BR': { name: 'Brasil', continent: 'América del Sur' },
+    'AU': { name: 'Australia', continent: 'Oceanía' },
+    'NZ': { name: 'Nueva Zelanda', continent: 'Oceanía' },
+    'ZA': { name: 'Sudáfrica', continent: 'África' },
+};
+
+function getCountryInfo(iso) {
+    if (!iso) return { name: 'Desconocido', continent: 'Desconocido' };
+    return COUNTRY_MAP[iso] || { name: iso, continent: 'Otros' };
+}
+
+// Coste estimado por spot (basado en DeepSeek v3 ~1000 tokens in, 500 out = ~$0.0001 per spot)
+const COST_PER_SPOT = 0.0001; 
+
+const H = {
+    get: async (url) => {
+        const r = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+    },
+    post: async (url) => {
+        const r = await fetch(url, { method: 'POST', headers: { 'X-API-Key': API_KEY } });
+        const body = await r.json();
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${body.detail || body.error || 'Error'}`);
+        return body;
+    }
+};
+
+function toast(msg, type='info') {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.textContent = msg;
+    document.getElementById('toast-container').appendChild(el);
+    setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 300);
+    }, 5000);
+}
+
+function fmtNum(n) { return Number(n||0).toLocaleString('es-ES'); }
+
+async function loadAll() {
+    const btn = document.getElementById('btn-refresh');
+    btn.disabled = true;
+    btn.textContent = '↻ Cargando…';
+
+    try {
+        const [countriesData, batchesData] = await Promise.all([
+            H.get('/admin/enrichment/countries'),
+            H.get('/admin/enrichment/batches')
+        ]);
+        
+        renderStats(countriesData);
+        renderCountries(countriesData.countries);
+        renderBatches(batchesData);
+    } catch(e) {
+        toast(`Error: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '↻ Actualizar';
+    }
+}
+
+function renderStats(data) {
+    let totalEligible = 0;
+    let totalReviews = 0;
+    data.countries.forEach(c => {
+        totalEligible += c.eligible_spots || 0;
+        totalReviews += c.eligible_reviews || 0;
+    });
+    
+    document.getElementById('stats-bar').innerHTML = `
+        <div class="stat-chip">Provider <span>${data.provider.toUpperCase()}</span></div>
+        <div class="stat-chip">Modelo <span class="mono">${data.model}</span></div>
+        <div class="stat-chip">Total Spots Candidatos <span>${fmtNum(totalEligible)}</span></div>
+        <div class="stat-chip">Reviews a procesar <span>${fmtNum(totalReviews)}</span></div>
+        <div class="stat-chip">Países Pendientes <span>${data.countries.filter(c => c.eligible_spots > 0).length}</span></div>
+    `;
+}
+
+function renderCountries(countries) {
+    if (!countries || !countries.length) {
+        document.getElementById('countries-wrap').innerHTML = '<div class="loading">No hay datos</div>';
+        return;
+    }
+
+    // Agrupar por continente
+    const byContinent = {};
+    countries.forEach(c => {
+        const info = getCountryInfo(c.country_iso);
+        c.name = info.name;
+        c.continent = info.continent;
+        if (!byContinent[c.continent]) byContinent[c.continent] = [];
+        byContinent[c.continent].push(c);
+    });
+
+    let html = '';
+    
+    // Ordenar continentes
+    const sortedContinents = Object.keys(byContinent).sort((a,b) => {
+        if (a === 'Europa') return -1;
+        if (b === 'Europa') return 1;
+        return a.localeCompare(b);
+    });
+
+    for (let cont of sortedContinents) {
+        let contCountries = byContinent[cont];
+        // Ordenar países por candidatos (descendente)
+        contCountries.sort((a,b) => (b.eligible_spots || 0) - (a.eligible_spots || 0));
+        
+        const rows = contCountries.map(c => {
+            const isReady = c.eligible_spots > 0;
+            const estCost = isReady ? `~€${(c.eligible_spots * COST_PER_SPOT).toFixed(2)}` : '—';
+            const selId = `limit-${c.country_iso}`;
+            
+            const action = isReady 
+                ? `
+                <div class="action-group">
+                    <select id="${selId}">
+                        <option value="100">100 spots</option>
+                        <option value="500">500 spots</option>
+                        <option value="2000">2000 spots</option>
+                        <option value="0">TODOS</option>
+                    </select>
+                    <button class="btn-run" onclick="runEnrichment('${c.country_iso}')">▶ Lanzar V2</button>
+                </div>
+                `
+                : `<button class="btn" disabled>Al día</button>`;
+                
+            return `
+            <tr>
+                <td style="font-weight:600; color:#fff">${c.name} <span class="muted">(${c.country_iso})</span></td>
+                <td class="mono text-right">${fmtNum(c.total_spots)}</td>
+                <td class="mono text-right" style="color: ${isReady ? '#a78bfa' : '#555'}">${fmtNum(c.eligible_spots)}</td>
+                <td class="mono text-right muted">${fmtNum(c.eligible_reviews)}</td>
+                <td class="mono text-right" style="color:#f59e0b">${estCost}</td>
+                <td style="text-align:right">${action}</td>
+            </tr>`;
+        }).join('');
+
+        html += `
+        <div class="continent-group">
+            <h2 class="continent-header">${cont}</h2>
+            <div class="table-wrap" style="margin-bottom:0;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>País</th>
+                            <th class="text-right">Spots Totales</th>
+                            <th class="text-right">Candidatos a V2</th>
+                            <th class="text-right">Reviews de Candidatos</th>
+                            <th class="text-right">Coste Estimado (€)</th>
+                            <th class="text-right" style="width:250px">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        </div>
+        `;
+    }
+
+    document.getElementById('countries-wrap').innerHTML = html;
+}
+
+function renderBatches(batches) {
+    if (!batches || !batches.length) {
+        document.getElementById('batches-wrap').innerHTML = '<div class="loading" style="padding:1rem">No hay ejecuciones recientes.</div>';
+        return;
+    }
+    
+    const rows = batches.map(b => {
+        const cost = b.cost_estimated_usd ? `€${parseFloat(b.cost_estimated_usd).toFixed(4)}` : '—';
+        const d = new Date(b.submitted_at);
+        const dateStr = d.toLocaleDateString('es-ES', {day:'2-digit',month:'2-digit',year:'2-digit'}) + ' ' + d.toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'});
+        
+        let dur = '—';
+        if (b.duration_s != null) {
+            dur = b.duration_s < 60 ? `${b.duration_s}s` : `${Math.floor(b.duration_s/60)}m ${b.duration_s%60}s`;
+        }
+        
+        let progressHtml = '';
+        if (b.state === 'running' && b.n_requested > 0) {
+            const completed = (b.n_succeeded || 0) + (b.n_failed || 0);
+            const pct = Math.min(100, Math.round((completed / b.n_requested) * 100));
+            progressHtml = `
+            <div class="progress-bar-bg">
+                <div class="progress-bar-fill" style="width: ${pct}%"></div>
+            </div>`;
+        }
+
+        return `
+        <tr>
+            <td>
+                <span class="badge badge-${b.state}">${b.state}</span>
+                ${progressHtml}
+            </td>
+            <td class="mono">${b.batch_name.split('-').slice(1,3).join('-') + '...'}</td>
+            <td class="mono muted">v${b.enrichment_version} / ${b.llm_model}</td>
+            <td class="mono text-right">${fmtNum(b.n_requested)}</td>
+            <td class="mono text-right" style="color:#4ade80">${fmtNum(b.n_succeeded)}</td>
+            <td class="mono text-right" style="color:#f87171">${fmtNum(b.n_failed)}</td>
+            <td class="mono text-right" style="color:#f59e0b">${cost}</td>
+            <td class="text-right muted">${dur}</td>
+            <td class="text-right muted">${dateStr}</td>
+            <td class="muted" style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${b.error_msg||''}">${b.error_msg || ''}</td>
+        </tr>`;
+    }).join('');
+
+    document.getElementById('batches-wrap').innerHTML = `
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:120px">Estado</th>
+                    <th>Batch ID</th>
+                    <th>Modelo</th>
+                    <th class="text-right">Req.</th>
+                    <th class="text-right">Ok</th>
+                    <th class="text-right">Fail</th>
+                    <th class="text-right">Coste EUR</th>
+                    <th class="text-right">Duración</th>
+                    <th class="text-right">Fecha</th>
+                    <th>Errores</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+async function runEnrichment(countryIso) {
+    const sel = document.getElementById(`limit-${countryIso}`);
+    const limit = parseInt(sel.value, 10);
+    const limitStr = limit === 0 ? 'TODOS' : limit;
+    
+    const info = getCountryInfo(countryIso);
+    if (!confirm(`¿Lanzar pipeline V2 para ${limitStr} spots en ${info.name} (${countryIso})?`)) return;
+    
+    try {
+        toast(`Lanzando batch para ${info.name}...`);
+        let url = `/admin/enrichment/run/${countryIso}`;
+        if (limit > 0) url += `?limit=${limit}`;
+        await H.post(url);
+        toast(`Batch para ${info.name} lanzado con éxito en background.`, 'success');
+        setTimeout(loadAll, 2000);
+    } catch(e) {
+        toast(`Error: ${e.message}`, 'error');
+    }
+}
+
+// Iniciar al cargar
+document.addEventListener('DOMContentLoaded', loadAll);
+setInterval(loadAll, 10000); // Auto-refresh cada 10 seg para ver progreso real
+</script>
+
+</body>
+</html>

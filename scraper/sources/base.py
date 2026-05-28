@@ -140,7 +140,7 @@ class AbstractSource(ABC):
             ))
         return cells
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Pipeline completo: grid → fetch → normalize → dedup → store."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -233,6 +233,20 @@ class AbstractSource(ABC):
                     f"upd={stats['actualizados']} err={stats['errores']}"
                 )
 
+                if job_id:
+                    try:
+                        async with pool.acquire() as conn:
+                            await conn.execute(
+                                "UPDATE scraper_jobs SET progress = $1::jsonb WHERE id = $2",
+                                json.dumps({
+                                    "processed_cells": min(i+LOTE, len(cells)),
+                                    "total_cells": len(cells),
+                                    "stats": stats
+                                }), job_id
+                            )
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Error actualizando progreso: {e}")
+
         async with pool.acquire() as conn:
             await finish_scraper_log(conn, log_id, stats)
             await update_fuente_config(conn, self.name, stats)
@@ -241,7 +255,7 @@ class AbstractSource(ABC):
         logger.info(f"[{self.name}] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Descarga de comentarios desacoplada para esta fuente."""
         logger.info(f"[{self.name}] Descarga de reviews no implementada de forma desacoplada para esta fuente.")
         return {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}

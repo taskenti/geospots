@@ -340,16 +340,20 @@ def select_reviews_for_prompt(
             from loguru import logger
             logger.debug(f"[spot_packager] dedup: {n_dropped} duplicados eliminados de {len(reviews_list) + n_dropped}")
 
+    from .review_cleaner import clean_review_full
     candidates: list[tuple[float, int, int, dict]] = []
     for r in reviews_list:
         text = _review_text(r)
-        if not text or len(text) < 4:
+        if not text:
+            continue
+        cleaned = clean_review_full(text)
+        if not cleaned.informativo:
             continue
         weight = temporal_weight(r.get("fecha"))
         if weight <= 0:
             continue
         rating = float(r.get("rating") or 0.0)
-        candidates.append((weight, int(rating * 10), len(text), {**r, "texto_limpio": text}))
+        candidates.append((weight, int(rating * 10), len(cleaned.texto_limpio), {**r, "texto_limpio": cleaned.texto_limpio}))
 
     # Orden estable: por peso, luego rating, luego longitud (todos desc).
     candidates.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)

@@ -245,7 +245,7 @@ class FreeCampsitesSource(AbstractSource):
         }
         return res
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Download reviews using the public WordPress JSON API comments endpoint."""
         inicio = datetime.now(timezone.utc)
         stats = {

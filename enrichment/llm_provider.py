@@ -87,6 +87,7 @@ def call_deepseek_sync(
         "model": model,
         "messages": messages,
         "temperature": temperature,
+        "max_tokens": 1500,
         # Modo thinking se controla en deepseek-v4 vía parámetro custom.
         # Si la API rechaza el flag, lo retira el bloque except.
         "thinking": {"type": "enabled" if thinking else "disabled"},
@@ -188,6 +189,7 @@ PRICING = {
     # DeepSeek
     "deepseek-v4-flash":     {"in": 0.14, "out": 0.28, "cache_hit": 0.0028},
     "deepseek-v4-pro":       {"in": 0.435, "out": 0.87, "cache_hit": 0.003625},
+    "deepseek-chat":         {"in": 0.14, "out": 0.28, "cache_hit": 0.0028},
 }
 
 

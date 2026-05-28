@@ -96,20 +96,35 @@ geospots/
 # Levantar stack completo (DB + scraper + enrichment + API)
 docker-compose up -d
 
-# Ejecutar un scraper específico
+# Ejecutar un scraper específico (desde terminal local)
 docker-compose exec scraper python scheduler.py --park4night
 docker-compose exec scraper python scheduler.py --furgovw
 docker-compose exec scraper python scheduler.py --all
 
-# Descargar reviews (separado del scrape de spots)
+# Descargar reviews (separado del scrape de spots, desde terminal local)
 docker-compose exec scraper python scheduler.py --reviews park4night
 docker-compose exec scraper python scheduler.py --reviews campercontact
+
+# Si usas la pestaña "Terminal" de un contenedor dentro de Docker Desktop (dentro de geospots-scraper):
+python scheduler.py --park4night
+python scheduler.py --reviews park4night
+python scheduler.py --<nombre_de_la_fuente>
+python scheduler.py --reviews <nombre_de_la_fuente>
 
 # Ejecutar reconciliación multi-fuente
 docker-compose exec scraper python scheduler.py --reconciliar
 
-# Pipeline de enriquecimiento LLM (Phase 3)
+# Pipeline de enriquecimiento LLM (Phase 3) — reviews → claims → semantic state
 docker-compose exec enrichment python -m enrichment.worker --batch-size 1000
+
+# Pipeline de hechos scrapeados (Phase 3b) — source_records → claims → semantic state
+# Correr ANTES del worker LLM para que las señales de alta confianza estén ya en la DB
+docker-compose exec enrichment python -m jobs.ingest_spot_facts --batch-size 10000
+docker-compose exec enrichment python -m jobs.ingest_spot_facts --country ES  # por país
+docker-compose exec enrichment python -m jobs.ingest_spot_facts --dry-run      # validar sin escribir
+
+# Aplicar migración Phase 3 v5 (nuevas señales) a DB existente
+psql -h localhost -p 25433 -U geospots -d geospots -f db/migration_phase3_v5.sql
 
 # Generar embeddings (Phase 4)
 docker-compose exec enrichment python -m jobs.nightly_embeddings
@@ -265,6 +280,7 @@ FUENTES EXTERNAS (20+ scrapers)
 - **`fuentes[]`** en `spots` es el array de fuentes que conocen el spot — es la fuente de verdad para multi-fuente
 - **Logging**: `loguru` en todo el proyecto. El scheduler loga cada lote de 20 celdas.
 - **Retries**: `tenacity` con exponential backoff en P4N y OSM
+- **Progreso de Tareas**: La firma de la clase base es `async def download_reviews(self, pool, config, job_id: int = None) -> dict:`. Si un scraper sobreescribe este método, debe respetar el `job_id` para evitar errores `TypeError` y, si procesa lotes muy grandes, debería usarlo para inyectar en `scraper_jobs.progress` el número de ítems procesados.
 
 ---
 
@@ -285,46 +301,149 @@ FUENTES EXTERNAS (20+ scrapers)
 ## Contexto para Reanudar Trabajo con IA
 
 **Estado actual de fases:**
-- Phase 0 (infra) ✅ | Phase 1 (data) ~70% ✅ | Phase 2 (canonical) ✅ | Phase 3 (LLM enrichment) ✅ | Phase 4 (vector search) ✅ | Phase 5 (visual) 📋 | Phase 6 (geo) 📋 | Phase 7 (product) 📋
+- Phase 0 (infra) ✅ | Phase 1 (data) ~70% ✅ | Phase 2 (canonical) ✅ | Phase 3 (LLM enrichment) ✅ | Phase 3b (scraped facts) ✅ | Phase 4 (vector search) ✅ | Phase 5 (visual) 📋 | Phase 6 (geo) 📋 | Phase 7 (product) 📋
 
-**Datos en producción (Mayo 2026):** ~125K spots activos, ~500K reviews, 5-6 fuentes integradas, ~338K spots con fotos (no descargadas)
+**Datos en producción (Mayo 2026):** ~125K spots activos, ~5M reviews, 1.08M source records, 20+ fuentes integradas o escritas.
 
-**El pipeline de enriquecimiento** corre como: reviews (llm_processed=FALSE) → worker.py → extract_claims → normalize → update_semantic_state. El embedding batch corre desde jobs/nightly_embeddings.py.
+**Phase 3b — Scraped Facts Pipeline:** `jobs/ingest_spot_facts.py` convierte los campos estructurados de `source_records.normalized_data` (agua_potable, campfire, environment_labels, prohibitions, etc.) en `extracted_claims` + `normalized_observations` sin LLM. Cada source_record aporta 1 claim por señal con `source_confidence = source_credibility.base_score`. ~40 señales mapeadas, extractor_name=`scraped_facts_v1`. Correr una vez tras la primera ingesta de scrapers, antes del worker LLM. Idempotente.
+
+**El pipeline de enriquecimiento** corre como: reviews (llm_processed=FALSE) → worker.py → clean → extract_claims (regex primero, LLM fallback) → normalized_observations → update_semantic_state. El embedding batch corre desde jobs/nightly_embeddings.py.
 
 **La búsqueda semántica** está en `/search/semantic`: Gemini extrae intención → embedding query → ST_DWithin + SQL filters + pgvector ranking → Gemini genera respuesta.
 
+**IMPORTANTE — enrichment container:** NO arrancar `docker-compose up enrichment` sin haber implementado throttling si hay billing activo en Gemini. El contenedor tiene `restart: unless-stopped` y procesa en bucle continuo — puede quemar cuota/presupuesto en minutos. Ver docs/fase-3-llm-enrichment.md § "Lecciones aprendidas". Para el batch inicial usar `ENRICHMENT_PROVIDER=deepseek` (~$38 total para 1.05M llamadas LLM).
+
 ---
 
-## Pipeline LLM — Capa Unificada y Plan por Países
+## Pipeline LLM — Dos modos, una decisión
 
 ### Capa única `llm_provider`
 
-**Todas las llamadas LLM** del proyecto pasan por `enrichment/llm_provider.py` (`call_llm_sync`). El provider activo lo define `ENRICHMENT_PROVIDER` (env). Llamantes confirmados:
+**Todas las llamadas LLM** del proyecto pasan por `enrichment/llm_provider.py` (`call_llm_sync`). El provider activo lo define `ENRICHMENT_PROVIDER` (env). Llamantes:
 - `enrichment/claim_extractor.extract_claims_llm` — extracción de claims desde reviews (worker)
 - `enrichment/orchestrator_v2._call_llm` — enrichment a nivel spot (summary v2)
 - `enrichment/embedding_generator.extraer_intencion` — search intent
 - `enrichment/embedding_generator.generar_respuesta_busqueda` — recomendación en `/search/semantic`
 
-**Regla:** cualquier nueva llamada LLM DEBE usar `call_llm_sync` — nunca importar el SDK de Gemini/DeepSeek directamente. Si el flow necesita system prompt distinto o output libre (no-JSON), pasar `system_prompt=` / `response_format="text"`.
+**Regla:** cualquier nueva llamada LLM DEBE usar `call_llm_sync` — nunca importar el SDK de Gemini/DeepSeek directamente.
 
-### Plan operativo por países
+---
 
-El enrichment de las ~500K reviews se procesa **país por país** en este orden:
-**test → Andorra (smoke) → Portugal → España → Francia → Alemania → Italia → UK → Países Bajos → EEUU → resto del mundo**
+### Los dos pipelines de enrichment: diferencias clave
 
-**No lanzar enrichment hasta que termine la descarga de reviews.** Mientras se descargan reviews, el contenedor `geospots-enrichment` puede quedar parado (`docker-compose stop enrichment`) o correr en seco (sin reviews pendientes). El daemon procesa lo que haya — si no hay reviews `llm_processed=FALSE`, no consume API.
+Hay dos pipelines implementados y funcionales. **No ejecutar los dos sobre el mismo spot** — solapan observaciones en `normalized_observations` y es coste doble.
 
-### Patrón de provider por fase
+#### Pipeline A — `worker.py` (review-level) ← DESCARTADO (Menor ROI)
 
-| Fase | `ENRICHMENT_PROVIDER` | Motivo |
-|---|---|---|
-| Test / Andorra (smoke) | `gemini` | Volumen mínimo, free tier sobra |
-| Bulk inicial por país (PT, ES, FR, DE, IT…) | `deepseek` | Más barato/calidad por volumen alto |
-| Steady-state diario (reviews nuevas) | `gemini` | Free tier 1500 req/día cubre flujo orgánico |
-
-Cambio de provider:
-```bash
-# Editar .env → ENRICHMENT_PROVIDER=deepseek
-docker-compose restart enrichment
 ```
-El cambio NO requiere rebuild — sólo el restart relee env.
+review.texto → clean → regex → [si texto ≥120 chars y <3 claims] LLM v1
+→ extracted_claims → normalized_observations → update_semantic_state (incremental)
+```
+
+| Aspecto | Valor |
+|---|---|
+| Granularidad | 1 llamada LLM por review |
+| Contexto LLM | Solo el texto de una review (~200 chars) |
+| Prompt | ~500 tokens input (v1 extraction, system prompt ligero) |
+| Output | Claims atómicos (señales numéricas/booleanas) |
+| Narrativa | ❌ No genera summary, tags, best_for |
+| Reviews marcadas | `llm_processed = TRUE` por cada review procesada |
+| Señales obtenidas | ~38 señales según cobertura regex + LLM |
+| Reviews pendientes | ~4.5M (205K ya procesadas) |
+| **Coste batch completo** | **~$113 con DeepSeek** (2.8M llamadas, tasa LLM 61.7%) |
+| **Steady-state** | Gemini free tier (≤1500 reviews/día al LLM) |
+
+**Cuándo usar:** siempre. Es el pipeline principal. Genera las señales que alimentan el filtrado de búsqueda (`/search`) y la búsqueda semántica vectorial.
+
+**Enrutamiento (lógica corregida 2026-05-28):**
+- Texto < 120 chars → solo regex, nunca LLM
+- Texto ≥ 120 chars + regex ≥ 3 claims → solo regex (cobertura suficiente)
+- Texto ≥ 120 chars + regex 0-2 claims → LLM para complementar
+
+#### Pipeline B — `orchestrator_v2` (spot-level) ← ACTIVO / APROBADO
+
+```
+spot_metadata + SERVICES + top-35 reviews seleccionadas → LLM v4
+→ claims de alta calidad + summary_en + tags + best_for + recompute_spot_state (full)
+```
+
+| Aspecto | Valor |
+|---|---|
+| Granularidad | 1 llamada LLM por spot |
+| Contexto LLM | Todas las reviews del spot (hasta 35) + metadatos + servicios estructurados |
+| Prompt | ~8000 tokens input (v4 system prompt rico, build_spot_user_prompt) |
+| Output | Claims de calidad superior + narrativa completa en inglés |
+| Narrativa | ✅ Genera `summary_en`, `tags`, `best_for`, `best_season`, `avoid_season` |
+| Reviews marcadas | ❌ No marca `llm_processed` — las reviews son contexto, no el objeto procesado |
+| Detección de cambios | ✅ El LLM ve contradicciones entre reviews antiguas y recientes |
+| Spots candidatos | ~239K (activos con ≥3 reviews) |
+| **Coste batch completo** | **~$134 con DeepSeek V4 Flash** (bug de la auditoría corregido) |
+| **Cuándo activar** | Ya activo. Genera el máximo ROI en relación calidad/precio. |
+
+**Lo que pierdes sin orchestrator_v2:** narrativa (`summary_en`, `tags`, `best_for`), que afecta a la calidad de `/search/semantic`. Los scores de señales (quietness, safety...) los obtiene igual el worker.py.
+
+---
+
+### Números reales del batch (auditoría 2026-05-28)
+
+Fuente: `jobs/audit_llm_volume.py` sobre 4.5M reviews pendientes (muestra n=5000).
+
+| Métrica | Valor |
+|---|---|
+| Reviews pendientes con texto | 4.54M |
+| De ellas con texto ≥ 120 chars | ~3.20M (70.4%) |
+| Tasa de escalado al LLM | 61.7% de las ≥120 chars |
+| **LLM calls estimadas (worker.py)** | **~2.8M** |
+| Tokens medios por llamada (input) | ~517 (system≈400 + texto≈67 + frame≈50) |
+| Distribución texto al LLM | 69% entre 121-300 chars, 26% entre 301-600 chars |
+| Ahorro text_trimmer | ~1% (filler es raro en las reviews que llegan al LLM) |
+
+Señales más detectadas por regex: `quietness` (28.6%), `cleanliness` (18.6%), `lake_nearby` (17.4%), `beauty` (10.1%), `overnight_safe` (4.3%).
+
+Señales sin cobertura regex (solo vía LLM o scraped_facts): `campfire_allowed`, `swimming_access`, `train_noise`, `noise_source`, `accessible_pmr`, `caravan_accepted`, `ev_charging`.
+
+### Coste del batch completo (worker.py)
+
+| Provider | Coste | Notas |
+|---|---|---|
+| **DeepSeek V4 Flash** | **~$113** | Mejor opción — sin rate limits duros |
+| Gemini 2.5 Flash Lite | ~$161 | Requiere billing activo en GCP |
+| Gemini 2.5 Flash | ~$484 | No recomendado para bulk |
+
+### Plan operativo por países (worker.py)
+
+Procesar **país por país** en este orden:
+**Andorra (smoke test) → Portugal → España → Francia → Alemania → Italia → UK → EEUU → resto**
+
+```bash
+# Smoke test (Andorra — ~200 reviews, gratis con free tier)
+docker-compose exec enrichment python -m enrichment.worker --batch-size 500 --country AD
+
+# Batch real país a país
+docker-compose exec enrichment python -m enrichment.worker --batch-size 10000 --country ES
+docker-compose exec enrichment python -m enrichment.worker --batch-size 10000 --country FR
+# etc.
+
+# O sin filtro (deja que el worker priorice por temperatura/fecha)
+docker-compose exec enrichment python -m enrichment.worker --batch-size 50000
+```
+
+**Throttling implementado** en worker.py:
+- `ENRICHMENT_CONCURRENCY` (default 8): semáforo de llamadas LLM simultáneas
+- `ENRICHMENT_INTER_REQUEST_DELAY` (default 0): delay adicional por llamada (Gemini free tier: pon 4.3)
+- Backoff exponencial en 429/5xx (2s → 4s → 8s, máx `ENRICHMENT_MAX_BACKOFF`)
+- Abort automático si `ENRICHMENT_MAX_CONSECUTIVE_ERRORS` (default 20) fallos seguidos
+
+```bash
+# Configuración para Gemini free tier (15 RPM)
+ENRICHMENT_PROVIDER=gemini
+ENRICHMENT_CONCURRENCY=1
+ENRICHMENT_INTER_REQUEST_DELAY=4.3
+
+# Configuración para DeepSeek bulk
+ENRICHMENT_PROVIDER=deepseek
+ENRICHMENT_CONCURRENCY=8
+ENRICHMENT_INTER_REQUEST_DELAY=0
+```
+
+**No lanzar enrichment hasta que termine la descarga de reviews** de la fuente principal del país. El worker procesa en continuo — si no hay pendientes, no consume API.

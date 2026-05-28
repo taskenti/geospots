@@ -459,7 +459,7 @@ class IOverlanderSource(AbstractSource):
     # Requiere: IOV_EMAIL y IOV_PASSWORD en entorno/.env
     # ─────────────────────────────────────────────────────────────────
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Descarga check-ins de iOverlander como reviews mediante sesión autenticada.
 
         Prerrequisitos:

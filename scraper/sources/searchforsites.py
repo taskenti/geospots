@@ -443,7 +443,7 @@ class SearchForSitesSource(AbstractSource):
         logger.info(f"[SFS] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         import httpx
         stats = {
             "nuevos": 0,

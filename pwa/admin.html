@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GeoSpots — Admin Scrapers</title>
+    <script src="https://unpkg.com/cronstrue@latest/dist/cronstrue-i18n.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -37,7 +38,88 @@
         .header-title { color: #555; font-size: 0.9rem; }
         .header-right { display: flex; align-items: center; gap: 0.75rem; }
         #last-refresh { font-size: 0.78rem; color: #444; }
-        #poll-indicator { font-size: 0.75rem; color: #f59e0b; display: none; }
+        #poll-indicator { font-size: 0.75rem; color: #f59e0b; }
+        
+        /* Nav links */
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+            margin-right: 1rem;
+            padding-right: 1rem;
+            border-right: 1px solid rgba(255,255,255,0.1);
+        }
+        .nav-link {
+            color: #888;
+            font-size: 0.85rem;
+            font-weight: 500;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .nav-link:hover { color: #fff; background: rgba(255,255,255,0.05); }
+        .nav-link.active { color: #fff; background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3); }
+
+        #auto-refresh-sel {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #888;
+            border-radius: 5px;
+            padding: 0.3rem 0.5rem;
+            font-size: 0.78rem;
+            cursor: pointer;
+        }
+        /* ── Cron edit inline ── */
+        .cron-edit-wrap { display:flex; align-items:center; gap:0.4rem; }
+        .cron-input {
+            background: rgba(0,212,255,0.06);
+            border: 1px solid rgba(0,212,255,0.25);
+            color: #ccc;
+            border-radius: 4px;
+            padding: 0.2rem 0.45rem;
+            font-size: 0.73rem;
+            font-family: monospace;
+            width: 130px;
+        }
+        .btn-cron-save {
+            background: rgba(0,212,255,0.10);
+            border: 1px solid rgba(0,212,255,0.3);
+            color: #00d4ff;
+            border-radius: 4px;
+            padding: 0.2rem 0.5rem;
+            font-size: 0.72rem;
+            cursor: pointer;
+        }
+        .btn-cron-save:hover { background: rgba(0,212,255,0.20); }
+        .btn-cron-edit {
+            background: none;
+            border: none;
+            color: #444;
+            cursor: pointer;
+            font-size: 0.8rem;
+            padding: 0 0.2rem;
+            transition: color 0.15s;
+        }
+        .btn-cron-edit:hover { color: #00d4ff; }
+        /* ── Detalle expandible en historial ── */
+        .hist-detail-row td {
+            padding: 0;
+            background: #0a0a10;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .hist-detail-inner {
+            padding: 0.6rem 1rem;
+            font-size: 0.74rem;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            color: #999;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 200px;
+            overflow-y: auto;
+            border-left: 3px solid rgba(239,68,68,0.4);
+            margin: 0.3rem 0.5rem;
+        }
+        .hist-table tr.clickable { cursor: pointer; }
+        .hist-table tr.clickable:hover td { background: rgba(255,255,255,0.02); }
 
         /* ── Buttons ── */
         .btn {
@@ -293,9 +375,18 @@
         <span class="header-title">/ Admin Scrapers</span>
     </div>
     <div class="header-right">
+        <div class="nav-links">
+            <a href="admin.html" class="nav-link active">🕷️ Scrapers</a>
+            <a href="admin_enrichment.html" class="nav-link">🧠 Enrichment</a>
+        </div>
         <span id="worker-status" title="Estado del scraper daemon"></span>
-        <span id="poll-indicator">⟳ Actualizando automáticamente…</span>
+        <span id="poll-indicator" style="display:none">⟳ Actualizando…</span>
         <span id="last-refresh"></span>
+        <select id="auto-refresh-sel" title="Intervalo de refresco automático" onchange="onAutoRefreshChange()">
+            <option value="0">Auto-refresh: Off</option>
+            <option value="600">Auto-refresh: 10 min</option>
+            <option value="1800" selected>Auto-refresh: 30 min</option>
+        </select>
         <button class="btn" onclick="cleanupZombies()" title="Marca como zombie cualquier job 'running' colgado >Nh">🧹 Limpiar zombies</button>
         <button class="btn" id="btn-refresh" onclick="loadAll()">↻ Actualizar</button>
     </div>
@@ -304,6 +395,7 @@
 <div id="toast-container"></div>
 
 <div class="stats-bar" id="stats-bar"></div>
+<div id="active-jobs-banner" style="margin-bottom: 1.5rem; background: rgba(0,212,255,0.05); border: 1px solid rgba(0,212,255,0.2); padding: 0.8rem 1rem; border-radius: 8px; font-size: 0.85rem; display: none;"></div>
 <div class="table-wrap" id="main-wrap">
     <div class="loading"><span class="spinner"></span> Cargando fuentes…</div>
 </div>
@@ -323,14 +415,36 @@
 const API_KEY = 'clave_secreta_inventada_por_ti_123';
 
 const H = {
-    get: async (url) => {
-        const r = await fetch(url, { headers: { 'X-API-Key': API_KEY } });
-        if (!r.ok) throw new Error(`GET ${url} → HTTP ${r.status}`);
-        return r.json();
+    get: async (url, timeoutMs = 15000) => {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+            const r = await fetch(url, { headers: { 'X-API-Key': API_KEY }, signal: ctrl.signal });
+            if (!r.ok) throw new Error(`GET ${url} → HTTP ${r.status}`);
+            return r.json();
+        } catch(e) {
+            if (e.name === 'AbortError') throw new Error(`Timeout (${timeoutMs/1000}s): ${url}`);
+            throw e;
+        } finally {
+            clearTimeout(tid);
+        }
     },
     post: async (url) => {
         console.log('[admin] POST', url);
         const r = await fetch(url, { method: 'POST', headers: { 'X-API-Key': API_KEY } });
+        const body = await r.text();
+        let parsed;
+        try { parsed = JSON.parse(body); } catch { parsed = { _raw: body }; }
+        console.log('[admin] ←', r.status, parsed);
+        if (!r.ok) {
+            const msg = parsed.detail || parsed.error || parsed._raw || `HTTP ${r.status}`;
+            throw new Error(`${r.status} — ${msg}`);
+        }
+        return parsed;
+    },
+    del: async (url) => {
+        console.log('[admin] DELETE', url);
+        const r = await fetch(url, { method: 'DELETE', headers: { 'X-API-Key': API_KEY } });
         const body = await r.text();
         let parsed;
         try { parsed = JSON.parse(body); } catch { parsed = { _raw: body }; }
@@ -391,18 +505,30 @@ let allData = [];
 const expanded = new Set();
 const detailCache = {};
 let pollTimer = null;
+let autoRefreshInterval = 1800; // segundos; 0 = off
 
-function hasPendingJobs() {
-    // Auto-refresh si hay jobs en la cola O algún scraper en running (incluso
-    // si fue lanzado por CLI fuera del panel).
-    return allData.some(d =>
-        (d.active_job_types && d.active_job_types.length > 0) ||
-        d.ultimo_estado === 'running'
-    );
+function onAutoRefreshChange() {
+    autoRefreshInterval = parseInt(document.getElementById('auto-refresh-sel').value, 10);
+    clearTimeout(pollTimer);
+    schedulePoll();
+}
+
+function schedulePoll() {
+    clearTimeout(pollTimer);
+    const indicator = document.getElementById('poll-indicator');
+    if (autoRefreshInterval > 0) {
+        indicator.style.display = 'inline';
+        const mins = Math.round(autoRefreshInterval / 60);
+        indicator.textContent = `⟳ Auto en ${mins}min`;
+        pollTimer = setTimeout(loadAll, autoRefreshInterval * 1000);
+    } else {
+        indicator.style.display = 'none';
+    }
 }
 
 async function refreshWorkerStatus() {
     const el = document.getElementById('worker-status');
+    const banner = document.getElementById('active-jobs-banner');
     try {
         const w = await H.get('/admin/worker/status');
         if (w.alive) {
@@ -413,18 +539,73 @@ async function refreshWorkerStatus() {
         } else {
             el.innerHTML = `<span style="color:#f87171">● Worker no iniciado</span> <span class="dim" style="font-size:0.72rem">(reinicia el contenedor scraper)</span>`;
         }
+
+        if (w.jobs && w.jobs.length > 0) {
+            let html = '<div style="font-weight: 600; color: #00d4ff; margin-bottom: 0.5rem;">⚙️ Scrapers en ejecución o en cola:</div>';
+            w.jobs.forEach(j => {
+                const color = j.status === 'running' ? '#4ade80' : '#f59e0b';
+                const statusTxt = j.status === 'running' ? 'Ejecutando' : 'En cola';
+                let startTxt = '';
+                if (j.status === 'running' && j.started_at) {
+                    const elapsedMin = Math.floor((new Date() - new Date(j.started_at)) / 60000);
+                    startTxt = `(hace ${elapsedMin} min)`;
+                }
+                let progTxt = '';
+                if (j.progress) {
+                    try {
+                        const p = (typeof j.progress === 'string') ? JSON.parse(j.progress) : j.progress;
+                        if (p.total_cells) {
+                            const pct = Math.round((p.processed_cells / p.total_cells) * 100);
+                            progTxt = `<span style="color:#00d4ff; font-size:0.75rem; margin-left:0.5rem">| Progreso: ${pct}% (${p.processed_cells}/${p.total_cells} celdas)</span>`;
+                        } else if (p.total_spots) {
+                            const pct = Math.round((p.processed_spots / p.total_spots) * 100);
+                            progTxt = `<span style="color:#a78bfa; font-size:0.75rem; margin-left:0.5rem">| Progreso: ${pct}% (${p.processed_spots}/${p.total_spots} spots)</span>`;
+                        }
+                    } catch(e) {}
+                }
+                let controlsHtml = '';
+                if (j.status === 'pending') {
+                    controlsHtml = `
+                        <button onclick="prioritizeJob(${j.id})" title="Priorizar al principio de la cola" style="background:transparent; border:none; cursor:pointer; font-size:0.8rem; margin-left:10px;">⬆️</button>
+                        <button onclick="cancelJob(${j.id})" title="Cancelar job" style="background:transparent; border:none; cursor:pointer; font-size:0.8rem; margin-left:5px;">❌</button>
+                    `;
+                }
+
+                html += `<div style="margin-top:0.3rem">
+                    <span style="color:${color}; font-weight:600; width:80px; display:inline-block">${statusTxt}</span>
+                    <span style="color:#fff">${esc(j.source)}</span> <span style="color:#999; font-size:0.75rem">[${esc(j.job_type)}]</span>
+                    <span style="color:#777; font-size:0.75rem; margin-left:0.5rem">${startTxt}</span>
+                    ${progTxt}
+                    ${controlsHtml}
+                </div>`;
+            });
+            banner.innerHTML = html;
+            banner.style.display = 'block';
+        } else {
+            banner.style.display = 'none';
+        }
     } catch(e) {
         el.innerHTML = '<span class="dim">worker?</span>';
+        if(banner) banner.style.display = 'none';
     }
 }
 
-function schedulePoll() {
-    clearTimeout(pollTimer);
-    if (hasPendingJobs()) {
-        document.getElementById('poll-indicator').style.display = 'inline';
-        pollTimer = setTimeout(loadAll, 20000); // refresca en 20s si hay jobs activos
-    } else {
-        document.getElementById('poll-indicator').style.display = 'none';
+async function cancelJob(id) {
+    if (!confirm("¿Seguro que quieres cancelar este scraper en cola?")) return;
+    try {
+        const res = await H.del(`/admin/jobs/${id}`);
+        loadAll();
+    } catch(e) {
+        alert("Error al cancelar: " + e.message);
+    }
+}
+
+async function prioritizeJob(id) {
+    try {
+        const res = await H.post(`/admin/jobs/${id}/prioritize`, {});
+        loadAll();
+    } catch(e) {
+        alert("Error al priorizar: " + e.message);
     }
 }
 
@@ -435,16 +616,19 @@ async function loadAll() {
     btn.disabled = true;
     btn.textContent = '↻ Cargando…';
 
+    // Worker status y activity no bloquean la tabla principal
+    refreshWorkerStatus();
+    refreshActivityFeed();
+
     try {
         allData = await H.get('/admin/scrapers');
+        expanded.forEach(nombre => delete detailCache[nombre]);
         renderStats(allData);
         renderTable(allData);
-        refreshWorkerStatus();    // status del daemon en cabecera
-        refreshActivityFeed();    // feed cronológico al pie
         document.getElementById('last-refresh').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
         schedulePoll();
     } catch(e) {
-        document.getElementById('main-wrap').innerHTML = `<div class="error-msg">Error: ${esc(e.message)}</div>`;
+        document.getElementById('main-wrap').innerHTML = `<div class="error-msg">Error cargando scrapers: ${esc(e.message)}</div>`;
     } finally {
         btn.disabled = false;
         btn.textContent = '↻ Actualizar';
@@ -491,10 +675,22 @@ function renderTable(data) {
                 : `<button class="btn-run reviews" onclick="clickRun(event,'${esc(d.nombre)}','reviews',${i})">▶ Reviews</button>`
             : '';
 
-        // Cron
-        const cronTxt = d.cron_schedule
-            ? `<span class="muted mono" style="font-size:0.72rem">${esc(d.cron_schedule)}</span>`
-            : `<span class="dim" title="Sin programar — configurar en fuentes_config.cron_schedule">—</span>`;
+        // Cron con botón de edición inline
+        let cronHuman = '';
+        if (d.cron_schedule && typeof cronstrue !== 'undefined') {
+            try {
+                cronHuman = cronstrue.toString(d.cron_schedule, { locale: 'es', use24HourTimeFormat: true });
+            } catch (e) {
+                cronHuman = 'Formato cron inválido';
+            }
+        }
+        const cronDisplay = d.cron_schedule
+            ? `<span class="muted mono" style="font-size:0.72rem; display:block;" title="${esc(d.cron_schedule)}">${esc(cronHuman)} <span style="color:#666">(${esc(d.cron_schedule)})</span></span>`
+            : `<span class="dim">—</span>`;
+        const cronTxt = `<div class="cron-edit-wrap" id="cron-wrap-${i}">
+            ${cronDisplay}
+            <button class="btn-cron-edit" title="Editar Cron" onclick="event.stopPropagation();showCronEdit(${i},'${esc(d.nombre)}','${esc(d.cron_schedule||'')}')">✎</button>
+        </div>`;
 
         return `
         <tr onclick="toggleRow('${esc(d.nombre)}')" class="${isExp?'expanded':''}" id="row-${i}">
@@ -659,11 +855,16 @@ function renderDetail(d, history, samples) {
         </div>`;
     };
 
-    // Historial
-    const histRows = history.map(h => {
+    // Historial (filas clickables para expandir detalle)
+    const histRows = history.map((h, hi) => {
         const isRev = h.fuente && h.fuente.endsWith('_reviews');
         const errStyle = (h.errores||0)>0 ? 'color:#f87171' : '';
-        return `<tr>
+        const hasDetail = h.detalle && Object.keys(h.detalle).length > 0;
+        const detailId = `hist-detail-${d.nombre}-${hi}`.replace(/[^a-zA-Z0-9-]/g,'_');
+        const detailStr = hasDetail ? JSON.stringify(h.detalle, null, 2) : null;
+        const mainRow = `<tr class="${hasDetail?'clickable':''}" onclick="${hasDetail?`toggleHistDetail('${detailId}')`:''}"
+            title="${hasDetail?'Clic para ver detalle del error':''}"
+        >
             <td>${fmtDate(h.iniciado_en)}</td>
             <td>${isRev?'<span class="badge badge-reviews">reviews</span>':'<span class="badge badge-ok">spots</span>'}</td>
             <td>${statusBadge(h.estado)}</td>
@@ -671,8 +872,14 @@ function renderDetail(d, history, samples) {
             <td class="mono">${fmtNum(h.spots_nuevos,'0')}</td>
             <td class="mono">${fmtNum(h.spots_actualizados,'0')}</td>
             <td class="mono">${fmtNum(h.reviews_nuevas,'0')}</td>
-            <td class="mono" style="${errStyle}">${fmtNum(h.errores,'0')}</td>
+            <td class="mono" style="${errStyle}">${fmtNum(h.errores,'0')}${hasDetail?' 🔍':''}</td>
         </tr>`;
+        const detailRow = hasDetail
+            ? `<tr class="hist-detail-row" id="${detailId}" style="display:none">
+                <td colspan="8"><div class="hist-detail-inner">${esc(detailStr)}</div></td>
+              </tr>`
+            : '';
+        return mainRow + detailRow;
     }).join('');
 
     const histCard = `
@@ -711,6 +918,40 @@ function renderDetail(d, history, samples) {
          + runCard(lr, 'Última ejecución — Spots')
          + (lrr ? runCard(lrr, 'Última ejecución — Reviews') : '')
          + histCard + samplesCard;
+}
+
+// ─── toggle historial detalle ─────────────────────────────────────────
+function toggleHistDetail(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
+}
+
+// ─── edición de cron inline ────────────────────────────────────────────
+function showCronEdit(rowIdx, nombre, currentCron) {
+    const wrap = document.getElementById(`cron-wrap-${rowIdx}`);
+    if (!wrap) return;
+    wrap.innerHTML = `
+        <input class="cron-input" id="cron-input-${rowIdx}" value="${esc(currentCron)}" placeholder="0 3 * * *" onclick="event.stopPropagation()">
+        <button class="btn-cron-save" onclick="event.stopPropagation();saveCron(${rowIdx},'${esc(nombre)}')">✓</button>
+        <button class="btn-cron-save" style="background:none;border-color:rgba(255,255,255,0.1);color:#555"
+            onclick="event.stopPropagation();renderTable(allData)">✕</button>
+    `;
+    document.getElementById(`cron-input-${rowIdx}`).focus();
+}
+
+async function saveCron(rowIdx, nombre) {
+    const input = document.getElementById(`cron-input-${rowIdx}`);
+    if (!input) return;
+    const val = input.value.trim() || 'none';
+    try {
+        await H.post(`/admin/scrapers/${encodeURIComponent(nombre)}/cron?cron_expr=${encodeURIComponent(val)}`);
+        const d = allData.find(x => x.nombre === nombre);
+        if (d) d.cron_schedule = val === 'none' ? null : val;
+        toast('✓ Cron actualizado', `${nombre} → ${val === 'none' ? 'sin programar' : val}`, 'ok', 4000);
+        renderTable(allData);
+    } catch(e) {
+        toast('✗ Error al guardar cron', e.message, 'err', 7000);
+    }
 }
 
 // ─── lanzar job ────────────────────────────────────────────────────────
@@ -776,10 +1017,12 @@ async function refreshActivityFeed() {
                 </tr></thead>
                 <tbody>${rows.map(r => {
                     const isRev = r.fuente && r.fuente.endsWith('_reviews');
-                    const baseSrc = isRev ? r.fuente.replace(/_reviews$/, '') : r.fuente;
+                    const baseSrc = r.fuente ? (isRev ? r.fuente.replace(/_reviews$/, '') : r.fuente) : 'unknown';
                     const isRunning = r.estado === 'running';
                     const errStyle = (r.errores||0)>0 ? 'color:#f87171' : '';
-                    return `<tr style="cursor:default" onclick="event.stopPropagation()">
+                    const hasDetail = r.detalle && Object.keys(r.detalle).length > 0;
+                    const actDetailId = `act-detail-${r.id}`;
+                    return `<tr style="cursor:${hasDetail?'pointer':'default'}" onclick="${hasDetail?`toggleHistDetail('${actDetailId}')`:''};event.stopPropagation()">
                         <td class="mono dim">${r.id}</td>
                         <td>
                             <span style="font-weight:500">${esc(baseSrc)}</span>
@@ -792,11 +1035,12 @@ async function refreshActivityFeed() {
                         <td class="mono">${fmtNum(r.spots_nuevos,'0')}</td>
                         <td class="mono">${fmtNum(r.spots_actualizados,'0')}</td>
                         <td class="mono">${fmtNum(r.reviews_nuevas,'0')}</td>
-                        <td class="mono" style="${errStyle}">${fmtNum(r.errores,'0')}</td>
+                        <td class="mono" style="${errStyle}">${fmtNum(r.errores,'0')}${hasDetail?' 🔍':''}</td>
                         <td>${isRunning
                             ? `<button class="btn-run" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.3);color:#f87171" onclick="event.stopPropagation();forceZombie('${esc(baseSrc)}')">⊘ Zombie</button>`
                             : ''}</td>
-                    </tr>`;
+                    </tr>
+                    ${hasDetail ? `<tr class="hist-detail-row" id="${actDetailId}" style="display:none"><td colspan="11"><div class="hist-detail-inner">${esc(JSON.stringify(r.detalle,null,2))}</div></td></tr>` : ''}`;
                 }).join('')}</tbody>
             </table>`;
         document.getElementById('activity-wrap').innerHTML = html;
@@ -859,6 +1103,7 @@ async function cleanupFuentesHuerfanas(nombre) {
 
 // ─── boot ──────────────────────────────────────────────────────────────
 loadAll();
+schedulePoll();
 </script>
 </body>
 </html>

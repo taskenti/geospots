@@ -268,7 +268,7 @@ class CaramapsSource(AbstractSource):
         }
         return merge_extra(norm, extract_caramaps(raw))
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         from db import upsert_review
         import httpx
 

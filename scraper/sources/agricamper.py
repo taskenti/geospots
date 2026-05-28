@@ -235,6 +235,6 @@ class AgricamperSource(AbstractSource):
         logger.info(f"[agricamper] Completado en {dur:.0f}s | {stats}")
         return stats
 
-    async def download_reviews(self, pool, config) -> dict:
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         # Agricamper no tiene comentarios públicos
         return {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}
