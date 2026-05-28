@@ -127,30 +127,47 @@ async def _insert_observation(conn, claim_id: int, review: dict, obs) -> int:
     )
 
 
-async def fetch_pending_reviews(conn, batch_size: int) -> list[dict]:
-    rows = await conn.fetch(
-        """
-        SELECT r.id, r.texto, r.texto_original, r.source, r.spot_id, r.fecha,
-               COALESCE(sc.review_quality, 1.0) AS source_confidence,
-               COALESCE(st.temperature, 'cold') AS temperature
-        FROM reviews r
-        LEFT JOIN source_credibility sc ON sc.source = r.source
-        LEFT JOIN spot_temperature st ON st.id = r.spot_id
-        WHERE COALESCE(r.llm_processed, FALSE) = FALSE
-          AND COALESCE(r.texto, r.texto_original) IS NOT NULL
-          AND length(COALESCE(r.texto, r.texto_original)) > 3
-        ORDER BY
-          CASE COALESCE(st.temperature, 'cold')
-            WHEN 'hot' THEN 0
-            WHEN 'warm' THEN 1
-            ELSE 2
-          END,
-          r.fecha DESC NULLS LAST,
-          r.id DESC
-        LIMIT $1
-        """,
-        batch_size,
-    )
+async def fetch_pending_reviews(conn, batch_size: int,
+                                countries: list[str] | None = None) -> list[dict]:
+    """Selecciona reviews pendientes con `r.llm_processed = FALSE`.
+
+    Pre-Sprint 4 (T1.4/smoke Andorra) — `countries` filtra por ISO-2 vía
+    JOIN a `spots.country_iso`. None = sin filtro (comportamiento legacy).
+    Los ISO se comparan en minúsculas (tal como se almacenan en `spots`).
+    """
+    if countries:
+        normalized = [c.lower() for c in countries]
+        country_join = "JOIN spots s ON s.id = r.spot_id"
+        country_filter = "AND s.country_iso = ANY($2)"
+        params: list = [batch_size, normalized]
+    else:
+        country_join = ""
+        country_filter = ""
+        params = [batch_size]
+
+    sql = f"""
+    SELECT r.id, r.texto, r.texto_original, r.source, r.spot_id, r.fecha,
+           COALESCE(sc.review_quality, 1.0) AS source_confidence,
+           COALESCE(st.temperature, 'cold') AS temperature
+    FROM reviews r
+    {country_join}
+    LEFT JOIN source_credibility sc ON sc.source = r.source
+    LEFT JOIN spot_temperature st ON st.id = r.spot_id
+    WHERE COALESCE(r.llm_processed, FALSE) = FALSE
+      AND COALESCE(r.texto, r.texto_original) IS NOT NULL
+      AND length(COALESCE(r.texto, r.texto_original)) > 3
+      {country_filter}
+    ORDER BY
+      CASE COALESCE(st.temperature, 'cold')
+        WHEN 'hot' THEN 0
+        WHEN 'warm' THEN 1
+        ELSE 2
+      END,
+      r.fecha DESC NULLS LAST,
+      r.id DESC
+    LIMIT $1
+    """
+    rows = await conn.fetch(sql, *params)
     return [dict(r) for r in rows]
 
 
@@ -317,6 +334,7 @@ async def process_pending_reviews(
     dry_run: bool = False,
     use_llm: bool = True,
     concurrency: int | None = None,
+    countries: list[str] | None = None,
 ) -> dict:
     pipeline_run_id = str(uuid.uuid4())
     stats = {
@@ -330,7 +348,7 @@ async def process_pending_reviews(
     consecutive_errors: list[int] = [0]    # lista mutable para pasar por referencia
 
     async with pool.acquire() as conn:
-        pending = await fetch_pending_reviews(conn, batch_size)
+        pending = await fetch_pending_reviews(conn, batch_size, countries=countries)
 
     if not pending:
         logger.info("[enrichment] No hay reviews pendientes.")
@@ -404,9 +422,18 @@ async def main_async(argv: list[str] | None = None) -> int:
     # Alias legacy
     parser.add_argument("--no-gemini", action="store_true",
                         help="Alias de --no-llm (compatibilidad)")
+    parser.add_argument(
+        "--country", type=str, default=None,
+        help="ISO-2 code(s), coma-separados (ej. AD o ES,PT). "
+             "Filtra reviews por spots.country_iso. Pre-Sprint 4 (smoke Andorra).",
+    )
     args = parser.parse_args(argv)
 
     use_llm = not (args.no_llm or args.no_gemini)
+
+    countries: list[str] | None = None
+    if args.country:
+        countries = [c.strip().upper() for c in args.country.split(",") if c.strip()]
 
     pool = await create_pool()
     try:
@@ -416,6 +443,7 @@ async def main_async(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             use_llm=use_llm,
             concurrency=args.concurrency,
+            countries=countries,
         )
         logger.info(f"[enrichment] stats={stats}")
     finally:

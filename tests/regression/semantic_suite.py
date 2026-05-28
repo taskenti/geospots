@@ -207,8 +207,13 @@ def chronology_not_inverted(state: dict) -> CheckResult:
     has_construction = any(t in s for t in construction_terms)
     if not has_construction:
         return True  # No menciona obras, no aplica
-    # Sospecha de inversión: año viejo descrito como reciente
-    suspicious = ("recent" in s and "2024" in s) or ("recent" in s and "2025" in s and "now" not in s)
+    # Sospecha de inversión: año viejo descrito como reciente.
+    # Se excluye el caso donde 2026 también aparece (LLM reconoce un año más reciente)
+    # — eso indica cronología correcta (2025 = pasado, 2026 = reciente).
+    suspicious = (
+        ("recent" in s and "2024" in s and "2025" not in s and "2026" not in s)
+        or ("recent" in s and "2025" in s and "2026" not in s and "now" not in s)
+    )
     if suspicious:
         return f"summary podría invertir cronología: {s[:200]}"
     return True
@@ -575,7 +580,7 @@ CASES: list[Case] = [
         description="Spot donde reviews históricas y recientes divergen (cambio de régimen).",
         spot_id=None,  # TODO
         locator_hint=(
-            "Spots con quietness_score histórico vs últimas 5 reviews ≠. "
+            "Spots con quietness_score histórico vs últimas 5 reviews distinto. "
             "Requiere query post-T2.5. Por ahora identificar manualmente."
         ),
         requires_tasks=("T2.5",),

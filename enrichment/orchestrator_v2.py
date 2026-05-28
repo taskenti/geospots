@@ -77,6 +77,7 @@ async def select_candidates(
     countries: list[str] | None = None,
     limit: int = 1000,
     enrichment_version: int = ENRICHMENT_VERSION,
+    force_spot_ids: list[int] | None = None,
 ) -> list[int]:
     """Selecciona spot_ids candidatos a enrichment v2.
 
@@ -88,7 +89,23 @@ async def select_candidates(
       5. nunca enriched + ≥3 reviews
 
     `countries`: lista de ISO codes para filtrar (None = sin filtro).
+
+    T1.7 — `force_spot_ids`: si se pasa, IGNORA los demás filtros y devuelve
+    exactamente esos IDs (validando que existen y están activos). Útil para
+    re-procesar spots concretos tras un cambio de prompt sin bumpear
+    ENRICHMENT_VERSION global. Limitado a `limit`.
     """
+    if force_spot_ids:
+        rows = await conn.fetch(
+            """
+            SELECT s.id AS spot_id FROM spots s
+            WHERE s.id = ANY($1::BIGINT[]) AND s.activo = TRUE
+            ORDER BY array_position($1::BIGINT[], s.id)
+            LIMIT $2
+            """,
+            force_spot_ids, limit,
+        )
+        return [r["spot_id"] for r in rows]
     if countries:
         # spots.country_iso se almacena en minúsculas (trigger de clasificación)
         normalized = [c.lower() for c in countries]
@@ -181,6 +198,41 @@ async def _call_llm(provider: str, user_prompt: str, model: str):
     return await asyncio.to_thread(call_gemini_sync, user_prompt, model=model)
 
 
+async def _record_llm_metric(
+    conn, *, provider: str, model: str, spot_id: int | None,
+    country: str | None, usage: dict, latency_ms: int | None,
+    pipeline_run_id: str | None,
+) -> None:
+    """T1.8 — persiste una fila en `llm_call_metrics`.
+
+    No crítico: si la tabla no existe (migración no aplicada) o falla por otro
+    motivo, sólo loguea — no rompe el flujo del enrichment.
+    """
+    from .prompts import ENRICHMENT_VERSION, PROMPT_VERSION
+
+    prompt_t = int(usage.get("prompt_token_count", 0))
+    cached_t = int(usage.get("cached_content_token_count", 0))
+    completion_t = int(usage.get("candidates_token_count", 0))
+    ratio = (cached_t / prompt_t) if prompt_t > 0 else 0.0
+    try:
+        await conn.execute(
+            """
+            INSERT INTO llm_call_metrics (
+                provider, model, spot_id, country,
+                prompt_tokens, cached_tokens, completion_tokens,
+                latency_ms, cache_hit_ratio,
+                enrichment_version, prompt_version, pipeline_run_id
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            """,
+            provider, model, spot_id, country,
+            prompt_t, cached_t, completion_t,
+            latency_ms, round(ratio, 4),
+            ENRICHMENT_VERSION, PROMPT_VERSION, pipeline_run_id,
+        )
+    except Exception as exc:
+        logger.warning(f"[orchestrator] llm_call_metrics insert falló (no crítico): {exc}")
+
+
 async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
                             pipeline_run_id: str, semaphore: asyncio.Semaphore,
                             stats: RunStats, max_retries: int = 2) -> None:
@@ -216,15 +268,27 @@ async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
                 stats.consecutive_errors = 0  # reset tras la pausa
                 
             try:
+                t0 = time.time()
                 resp = await _call_llm(provider, user_prompt, model)
+                latency_ms = int((time.time() - t0) * 1000)
                 stats.consecutive_errors = 0  # reset on success
-                
+
                 parsed = parse_enrichment_response(resp.text)
                 async with pool.acquire() as conn:
                     ingest_stats = await ingest_spot_enrichment(
                         conn, spot_id, parsed,
                         provider=resp.provider,
                         llm_model=resp.model,
+                        pipeline_run_id=pipeline_run_id,
+                    )
+                    # T1.8 — métrica per-call. País viene del spot row ya fetchado arriba.
+                    await _record_llm_metric(
+                        conn,
+                        provider=resp.provider, model=resp.model,
+                        spot_id=spot_id,
+                        country=(spot.get("country_iso") or "").upper() or None,
+                        usage=resp.usage,
+                        latency_ms=latency_ms,
                         pipeline_run_id=pipeline_run_id,
                     )
                 cost = estimate_cost(resp.model, resp.usage)
@@ -264,10 +328,15 @@ async def run_enrichment(
     provider: str | None = None,
     model: str | None = None,
     dry_run: bool = False,
+    force_spot_ids: list[int] | None = None,
 ) -> RunStats:
     """Punto de entrada del orquestador.
 
     Devuelve `RunStats` con métricas acumuladas.
+
+    T1.7 — `force_spot_ids`: si se pasa, IGNORA `countries` y los filtros de
+    `select_candidates` (versión/stale/reviews). Útil para reprocesar spots
+    específicos sin tocar `ENRICHMENT_VERSION` global.
     """
     provider = provider or get_provider_name()
     model = model or get_active_model()
@@ -275,11 +344,17 @@ async def run_enrichment(
     stats = RunStats(pipeline_run_id=pipeline_run_id)
 
     async with pool.acquire() as conn:
-        spot_ids = await select_candidates(conn, countries=countries, limit=limit)
+        spot_ids = await select_candidates(
+            conn,
+            countries=countries,
+            limit=limit,
+            force_spot_ids=force_spot_ids,
+        )
     stats.spots_requested = len(spot_ids)
+    forced_tag = f" forced={force_spot_ids}" if force_spot_ids else ""
     logger.info(
         f"[orchestrator] run={pipeline_run_id} provider={provider} model={model} "
-        f"countries={countries} concurrency={concurrency} candidates={len(spot_ids)}"
+        f"countries={countries} concurrency={concurrency} candidates={len(spot_ids)}{forced_tag}"
     )
 
     if not spot_ids:

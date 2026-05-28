@@ -156,25 +156,45 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
             f"(registrados en unknown_tags)"
         )
 
+    # T1.6 — semantic_fingerprint. Necesita los canonical_tags + active_alert_types
+    # post-recompute. Leemos active_alert_types fresco (puede traer datos de un
+    # batch previo si esta no es la primera ingesta del spot).
+    active_alerts_row = await conn.fetchrow(
+        "SELECT active_alert_types FROM spot_semantic_state WHERE spot_id = $1",
+        spot_id,
+    )
+    active_alert_types = list(active_alerts_row["active_alert_types"] or []) if active_alerts_row else []
+    from .embedding_generator import compute_fingerprint as _compute_fp
+    semantic_fingerprint = _compute_fp({
+        "spot_id": spot_id,
+        "tags": canonical_tags,
+        "active_alert_types": active_alert_types,
+        "summary_en": parsed.summary or parsed.summary_en,
+        "best_for": parsed.best_for or [],
+        "best_season": parsed.best_season or "",
+        "avoid_season": parsed.avoid_season or "",
+    })
+
     # v4: parsed.summary es un único string en inglés. Lo escribimos en summary_en.
     # summary_es se deja NULL (deprecated — el cliente API traducirá si necesita).
     # parsed.summary_es es un property que devuelve None (compat shim del parser v4).
     await conn.execute(
         """
         UPDATE spot_semantic_state SET
-            summary_es          = $2,
-            summary_en          = $3,
-            tags                = $4,
-            best_for            = $5,
-            best_season         = $6,
-            avoid_season        = $7,
-            noise_sources       = $8,
-            parking_capacity    = $9,
-            last_observation_at = $10,
-            enrichment_version  = $11,
-            llm_model           = $12,
-            stale               = FALSE,
-            updated_at          = NOW()
+            summary_es           = $2,
+            summary_en           = $3,
+            tags                 = $4,
+            best_for             = $5,
+            best_season          = $6,
+            avoid_season         = $7,
+            noise_sources        = $8,
+            parking_capacity     = $9,
+            last_observation_at  = $10,
+            enrichment_version   = $11,
+            llm_model            = $12,
+            semantic_fingerprint = $13,
+            stale                = FALSE,
+            updated_at           = NOW()
         WHERE spot_id = $1
         """,
         spot_id,
@@ -189,6 +209,7 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
         last_obs_at,
         enrichment_version,
         llm_model,
+        semantic_fingerprint,
     )
 
 

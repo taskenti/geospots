@@ -730,15 +730,33 @@ A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly
 - **Una sola migración `db/migration_phase3_v6.sql`** cubre T1.4+T1.4b+T1.4c+T1.5+T1.6+T1.8+T2.7: `spot_alerts`, columnas de `spots`, columnas de `spot_semantic_state`, `spot_geo.source`, `canonical_tags`, `unknown_tags`, `llm_call_metrics`, `semantic_fingerprint`, trigger stale.
 
 ### Sprint 3 — Invalidación + idempotencia + observabilidad (1 día)
-- T1.6 semantic_fingerprint + nightly_embeddings ampliado
-  - Actualizar `fetch_embedding_candidates` para usar `semantic_fingerprint` en vez de `sss.updated_at > se.created_at`
-- T1.7 Idempotencia worker (mayormente ya implementada — añadir `--force-spot-ids` + documentar bump de versión)
-- T1.8 Logging de cache hit ratio per-call + insertar en `llm_call_metrics`
+- ✅ T1.6 semantic_fingerprint + nightly_embeddings ampliado
+  - Migración `db/migration_phase3_v6c.sql` aplicada: `spot_semantic_state.semantic_fingerprint TEXT` + `spot_embeddings.built_from_fingerprint TEXT` (+ 2 índices parciales).
+  - `enrichment/embedding_generator.compute_fingerprint(state_row)` — SHA1[:16] sobre `spot_id|tags|active_alert_types|summary|best_for|best_season|avoid_season|schema_version` (sin scores continuos — D3 del plan). Verificado: orden de tags irrelevante, distinto sin alerts, distinto por spot_id.
+  - `EMBEDDING_SCHEMA_VERSION = "v1"` — bumpar cuando cambie `construir_texto_para_embedding` o el modelo de embeddings (invalida TODO el corpus).
+  - `fetch_embedding_candidates` reescrita: `stale_only=True` ahora compara `se.built_from_fingerprint != sss.semantic_fingerprint` (con guard para NULL durante migración).
+  - `generar_embeddings_batch` y `regenerar_embeddings_stale` persisten `built_from_fingerprint`.
+  - `ingest_v2._update_narrative_and_materialized` calcula y persiste `semantic_fingerprint` en cada UPDATE.
+- ✅ T1.7 Idempotencia worker
+  - `orchestrator_v2.select_candidates` y `run_enrichment` aceptan `force_spot_ids: list[int]` — bypass de filtros (versión, stale, reviews) para reprocesar spots concretos sin bumpear `ENRICHMENT_VERSION` global.
+  - `jobs/nightly_enrichment_v2.py`: nuevo flag `--force-spot-ids 85057,12345`.
+  - Convención documentada: cualquier cambio al SYSTEM_PROMPT que altere el schema de output bumpa `ENRICHMENT_VERSION`; cambios de few-shot/formato que no afecten output solo bumpan `PROMPT_VERSION`.
+  - Smoke: `select_candidates(force_spot_ids=[85057, 99999999])` → `[85057]` (filtra el id inexistente).
+- ✅ T1.8 Logging cache hit ratio + llm_call_metrics
+  - Migración v6c añade tabla `llm_call_metrics(ts, provider, model, spot_id, country, prompt_tokens, cached_tokens, completion_tokens, latency_ms, cache_hit_ratio, enrichment_version, prompt_version, pipeline_run_id, extra)` + 3 índices.
+  - `llm_provider.call_deepseek_sync`: log per-call `[deepseek.usage] model=… prompt=… cached=… completion=… cache_hit_ratio=…`.
+  - `orchestrator_v2._record_llm_metric` (nuevo helper): tras cada respuesta exitosa del LLM, INSERT en `llm_call_metrics` con `pipeline_run_id`, latency_ms medido vía `time.time()`, country del spot row. Fallo no crítico — solo warning, no rompe el flujo.
+
+**Migración Sprint 3:** `db/migration_phase3_v6c.sql` aplicada. Cubre T1.6 + T1.8 + T2.7 en un solo BEGIN/COMMIT.
 
 ### Pre-Sprint 4 — Prerequisitos del smoke (0.5 día extra)
-- Añadir flag `--country` a `worker.py` (JOIN a `spots.country_iso`) — **bloqueante para el smoke**
-- Añadir flag `--force-spot-ids` a `orchestrator_v2` — útil para re-run de casos específicos sin bumpear versión global
-- Bumpar `ENRICHMENT_VERSION` de 4 → 5 en `prompts.py` si los cambios de Sprint 1-3 alteran el output del LLM (obligatorio si T1.1/T1.2 cambian el schema)
+- ✅ Flag `--country` en `worker.py`
+  - `fetch_pending_reviews(conn, batch_size, countries=None)` ahora JOIN a `spots` y filtra `s.country_iso = ANY($2)` (lowercase, tal como se almacena).
+  - `process_pending_reviews(..., countries=None)` propaga.
+  - CLI `--country AD` o `--country ES,PT` (coma-separados).
+  - Smoke: `python -m enrichment.worker --dry-run --no-llm --batch-size 0 --country AD` parsea OK.
+- ✅ Flag `--force-spot-ids` en `orchestrator_v2` (incluido en T1.7).
+- ✅ `ENRICHMENT_VERSION` bumpeado a 6 (Sprint 2). El smoke debe correr `orchestrator_v2 --force-spot-ids 85057` para re-enriquecer Grau Roig con prompt v6 y validar los 3 FAIL pendientes de regression suite (alert_construction_active, active_alert_has_construction, chronology_ok).
 
 ### Sprint 4 — Smoke Andorra (0.5 día)
 - Ejecutar smoke con todos los acceptance criteria
@@ -753,7 +771,10 @@ A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly
 - T2.4 Job mensual unknown_tags
 - T2.5 Detección de cambio de régimen con guardas
 - T2.6 `spot_relations`
-- T2.7 Flag `stale` para re-agregación selectiva
+- ✅ T2.7 Flag `stale` para re-agregación selectiva (adelantado a Sprint 3 — costaba 1 trigger SQL aprovechando la migración v6c).
+  - Función `mark_spot_stale_on_new_obs()` + trigger `trg_stale_on_observation AFTER INSERT ON normalized_observations` aplicados.
+  - Lógica: marca `stale=TRUE` cuando `NEW.observed_at > COALESCE(last_aggregated_at, '1970-01-01')`. Idempotente (guard `AND stale = FALSE`).
+  - Smoke OK: poner `stale=FALSE`, insertar observación con `observed_at = NOW()` → `stale=TRUE` automáticamente. Reduce el coste del aggregator nightly de 125K a ~2.5K spots/run.
 
 ---
 

@@ -135,6 +135,16 @@ def call_deepseek_sync(
             (usage_raw.get("prompt_cache_hit_tokens") or 0)
         ),
     }
+    # T1.8 — log per-call cache_hit_ratio. La persistencia en `llm_call_metrics`
+    # vive en el caller (orchestrator_v2._process_one_spot) — solo allí sabemos
+    # spot_id/country/pipeline_run_id.
+    prompt_t = usage["prompt_token_count"]
+    cached_t = usage["cached_content_token_count"]
+    ratio = (cached_t / prompt_t) if prompt_t > 0 else 0.0
+    logger.info(
+        f"[deepseek.usage] model={model} prompt={prompt_t} cached={cached_t} "
+        f"completion={usage['candidates_token_count']} cache_hit_ratio={ratio:.3f}"
+    )
     return LLMResponse(text=text, usage=usage, provider="deepseek", model=model)
 
 

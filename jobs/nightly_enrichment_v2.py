@@ -58,7 +58,20 @@ async def main_async(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider", choices=("gemini", "deepseek"), default=None)
     parser.add_argument("--model", default=None, help="Modelo específico (override env)")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force-spot-ids", type=str, default=None,
+        help="Coma-separados. Reprocesa esos spots ignorando filtros (versión, stale, reviews). "
+             "Útil tras cambio de prompt sin bumpear ENRICHMENT_VERSION global (T1.7).",
+    )
     args = parser.parse_args(argv)
+
+    force_spot_ids = None
+    if args.force_spot_ids:
+        try:
+            force_spot_ids = [int(x.strip()) for x in args.force_spot_ids.split(",") if x.strip()]
+        except ValueError as e:
+            logger.error(f"--force-spot-ids inválido: {e}")
+            return 1
 
     countries = _resolve_countries(args)
     label = f"countries={countries}" if countries else "ALL"
@@ -76,6 +89,7 @@ async def main_async(argv: list[str] | None = None) -> int:
             provider=args.provider,
             model=args.model,
             dry_run=args.dry_run,
+            force_spot_ids=force_spot_ids,
         )
     finally:
         await pool.close()

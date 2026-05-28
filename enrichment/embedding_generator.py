@@ -126,6 +126,53 @@ def _score_from_signal(signals_data: dict, signal: str) -> Any:
     return item
 
 
+# T1.6 — schema version: bumpar SOLO cuando cambie construir_texto_para_embedding
+# o cuando cambie el modelo de embeddings. Cualquier cambio aquí invalida TODOS
+# los fingerprints y dispara reembedding en la próxima ejecución del cron.
+EMBEDDING_SCHEMA_VERSION = "v1"
+
+
+def compute_fingerprint(state_row: dict, *, schema_version: str = EMBEDDING_SCHEMA_VERSION) -> str:
+    """T1.6: SHA1[:16] de los componentes relevantes para el embedding.
+
+    Componentes incluidos en el hash (ordenados deterministas):
+      spot_id, canonical_tags, active_alert_types, summary_en (o summary),
+      best_for, best_season, avoid_season, schema_version.
+
+    NO se incluyen scores continuos (quietness_score, beauty_score, etc.) ni
+    `signals_data` — pequeños movimientos numéricos no deben invalidar el embedding
+    (D3 del plan). Solo cambios en tags canónicos o estado operativo dispara
+    re-embedding.
+
+    Aceptamos dict simulando `state_row`. Si `spot_id` no está, se omite del
+    payload (el fingerprint pierde unicidad pero sigue siendo estable).
+    """
+    import hashlib
+
+    spot_id = state_row.get("spot_id") or state_row.get("id") or ""
+    tags = sorted(state_row.get("tags") or [])
+    alerts = sorted(state_row.get("active_alert_types") or [])
+    summary = (
+        state_row.get("summary_en") or state_row.get("summary")
+        or state_row.get("summary_es") or ""
+    )
+    best_for = sorted(state_row.get("best_for") or [])
+    best_season = state_row.get("best_season") or ""
+    avoid_season = state_row.get("avoid_season") or ""
+
+    payload = "|".join([
+        f"spot:{spot_id}",
+        f"tags:{tags}",
+        f"alerts:{alerts}",
+        f"summary:{summary}",
+        f"best_for:{best_for}",
+        f"best_season:{best_season}",
+        f"avoid_season:{avoid_season}",
+        f"schema:{schema_version}",
+    ])
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def construir_texto_para_embedding(spot: dict, state: dict) -> str:
     partes: list[str] = []
     name = spot.get("canonical_name") or spot.get("name") or "Spot sin nombre"
@@ -255,7 +302,20 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 async def fetch_embedding_candidates(conn, batch_size: int, stale_only: bool = False) -> list[dict]:
-    stale_clause = "AND se.spot_id IS NOT NULL AND sss.updated_at > se.created_at" if stale_only else "AND se.spot_id IS NULL"
+    # T1.6: semantic_fingerprint reemplaza el comparador `updated_at > created_at`.
+    #   - stale_only=False → spots sin embedding (se.spot_id IS NULL).
+    #   - stale_only=True  → spots cuyo fingerprint actual != el que generó su embedding.
+    # Mientras no haya migrado todo el corpus a v6 (semantic_fingerprint NULL en
+    # muchas filas), tratamos NULL como "drift" para forzar re-embedding una vez.
+    if stale_only:
+        stale_clause = (
+            "AND se.spot_id IS NOT NULL "
+            "AND (se.built_from_fingerprint IS NULL "
+            "     OR sss.semantic_fingerprint IS NULL "
+            "     OR se.built_from_fingerprint <> sss.semantic_fingerprint)"
+        )
+    else:
+        stale_clause = "AND se.spot_id IS NULL"
     rows = await conn.fetch(
         f"""
         SELECT s.id, s.canonical_name, s.tipo, s.region, s.country_iso,
@@ -265,7 +325,8 @@ async def fetch_embedding_candidates(conn, batch_size: int, stale_only: bool = F
                sss.beauty_score, sss.crowd_level_score, sss.overnight_safe,
                sss.stealth_score, sss.signals_data,
                sss.summary_es, sss.summary_en, sss.tags, sss.best_for,
-               sss.best_season, sss.semantic_dsl
+               sss.best_season, sss.semantic_dsl,
+               sss.active_alert_types, sss.semantic_fingerprint
         FROM spots s
         JOIN spot_semantic_state sss ON sss.spot_id = s.id
         LEFT JOIN spot_embeddings se ON se.spot_id = s.id
@@ -287,24 +348,32 @@ async def generar_embeddings_batch(pool, batch_size: int = 100) -> dict:
         return {"processed": 0, "model": EMBEDDING_MODEL}
 
     texts = [construir_texto_para_embedding(spot, spot) for spot in spots]
+    # T1.6: snapshot del fingerprint del estado actual — se persiste con el embedding.
+    fingerprints = [
+        spot.get("semantic_fingerprint") or compute_fingerprint(spot)
+        for spot in spots
+    ]
     embeddings = await embed_texts(texts)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for spot, values, text in zip(spots, embeddings, texts):
+            for spot, values, text, fp in zip(spots, embeddings, texts, fingerprints):
                 await conn.execute(
                     """
-                    INSERT INTO spot_embeddings (spot_id, embedding, texto_fuente, model, created_at)
-                    VALUES ($1, $2::vector, $3, $4, NOW())
+                    INSERT INTO spot_embeddings
+                        (spot_id, embedding, texto_fuente, model, built_from_fingerprint, created_at)
+                    VALUES ($1, $2::vector, $3, $4, $5, NOW())
                     ON CONFLICT (spot_id) DO UPDATE SET
-                        embedding = EXCLUDED.embedding,
-                        texto_fuente = EXCLUDED.texto_fuente,
-                        model = EXCLUDED.model,
-                        created_at = NOW()
+                        embedding              = EXCLUDED.embedding,
+                        texto_fuente           = EXCLUDED.texto_fuente,
+                        model                  = EXCLUDED.model,
+                        built_from_fingerprint = EXCLUDED.built_from_fingerprint,
+                        created_at             = NOW()
                     """,
                     spot["id"],
                     vector_literal(values),
                     text,
                     EMBEDDING_MODEL,
+                    fp,
                 )
     return {"processed": len(spots), "model": EMBEDDING_MODEL}
 
@@ -315,23 +384,29 @@ async def regenerar_embeddings_stale(pool, batch_size: int = 100) -> dict:
     if not stale:
         return {"processed": 0, "model": EMBEDDING_MODEL}
     texts = [construir_texto_para_embedding(spot, spot) for spot in stale]
+    fingerprints = [
+        spot.get("semantic_fingerprint") or compute_fingerprint(spot)
+        for spot in stale
+    ]
     embeddings = await embed_texts(texts)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for spot, values, text in zip(stale, embeddings, texts):
+            for spot, values, text, fp in zip(stale, embeddings, texts, fingerprints):
                 await conn.execute(
                     """
                     UPDATE spot_embeddings
-                    SET embedding = $2::vector,
-                        texto_fuente = $3,
-                        model = $4,
-                        created_at = NOW()
+                    SET embedding              = $2::vector,
+                        texto_fuente           = $3,
+                        model                  = $4,
+                        built_from_fingerprint = $5,
+                        created_at             = NOW()
                     WHERE spot_id = $1
                     """,
                     spot["id"],
                     vector_literal(values),
                     text,
                     EMBEDDING_MODEL,
+                    fp,
                 )
     return {"processed": len(stale), "model": EMBEDDING_MODEL}
 
