@@ -50,6 +50,10 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "ruidoso", "noisy", "bruyant", "loud", "noise all night",
         "couldn't sleep", "no pudimos dormir", "no dejaron dormir",
         "pas dormi", "laut", "sehr laut", "ruido toda la noche",
+        # BUG-28: negación alemana/separada (la de prefijo "unruhig" ya la pilla
+        # el límite de palabra; aquí capturamos formas explícitas).
+        "unruhig", "nicht ruhig", "sehr unruhig", "not quiet",
+        "pas calme", "pas tranquille", "no tranquilo",
     )),
     ("noise", "0.8", 0.84, (
         "ruido", "noise", "loud", "bruit", "laerm", "lärm", "geraeusch",
@@ -105,8 +109,9 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
     )),
     ("safety", "0.2", 0.82, (
         "inseguro", "unsafe", "dangerous", "peligroso",
-        "no me senti seguro", "didn't feel safe", "sketchy", "sospechoso",
-        "poco seguro", "gefährlich",
+        "no me senti seguro", "no me sentí seguro", "no me siento seguro",
+        "didn't feel safe", "did not feel safe", "sketchy", "sospechoso",
+        "poco seguro", "gefährlich", "no nos sentimos seguros",
     )),
     ("youth_trouble", "0.8", 0.85, (
         "local youths", "joyriders", "drug dealer", "antisocial",
@@ -142,6 +147,9 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "c'est sale", "mugre", "mugriento", "cochino", "asqueroso", "filthy",
         "lots of rubbish", "lleno de basura", "mucha basura",
         "schmutzig", "dreckig", "dégoûtant",
+        # BUG-29: "clean" negado (137 FP). Capturamos la forma negativa explícita.
+        "not clean", "not very clean", "nicht sauber", "pas propre",
+        "no estaba limpio", "no muy limpio", "poco limpio",
     )),
     # ── VIEWS: SEA / MOUNTAIN / LAKE ─────────────────────────────────────────────
     ("sea_view", "true", 0.88, (
@@ -274,6 +282,10 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "camping verboten", "no camping", "no se puede acampar",
         "moved on at night", "toldos cerrados", "prohibido acampar",
         "nicht übernachten", "nacht verboten",
+        # BUG-04/29: "dormir/overnight" en contexto prohibitivo (446 FP).
+        "prohibido dormir", "no dormir", "no se puede dormir",
+        "not allowed to sleep", "interdit de dormir", "schlafen verboten",
+        "no se permite pernoctar", "no se permite dormir",
     )),
     # ── SPOT CLOSED ──────────────────────────────────────────────────────────────
     ("spot_closed", "true", 0.88, (
@@ -443,6 +455,50 @@ NEEDLE_EXCLUSIONS: dict[str, tuple[str, ...]] = {
 }
 
 
+# ── Negación separada (Sprint 2 / BUG-04,15,28,29) ───────────────────────────
+# Las negaciones por PREFIJO (unruhig, unsafe, unsicher) ya las resuelve el
+# límite de palabra de Sprint 1. Aquí cubrimos la negación SEPARADA por tokens:
+#   "no hay agua", "nicht ruhig", "prohibido dormir", "not clean", "ne...pas".
+# Si un needle AFIRMATIVO va precedido (en la misma cláusula, ventana corta) por
+# un token de negación, se suprime ese match. Los needles que YA contienen un
+# token de negación (p.ej. "no hay agua", "prohibido pernoctar") se saltan el
+# chequeo y disparan normalmente — son la polaridad negativa correcta.
+_NEGATION_TOKENS = frozenset({
+    # ES
+    "no", "nunca", "sin", "jamás", "jamas", "tampoco",
+    "prohibido", "prohibida", "prohibidos", "prohibidas",
+    # EN
+    "not", "never", "without", "cannot", "cant",
+    # DE
+    "nicht", "kein", "keine", "nie", "ohne", "verboten", "untersagt",
+    # FR
+    "pas", "sans", "aucun", "aucune", "non", "interdit", "interdite",
+})
+_TOKEN_RE = re.compile(r"[\wáéíóúüñàèìòùçâêîôûäöëï']+")
+# La negación no cruza puntuación de cláusula (evita "no noise, very quiet" →
+# negar quiet). La coma incluida: separa cláusulas suficientes.
+_CLAUSE_PUNCT = ".!?;:\n,"
+
+
+def _tokens_have_negation(tokens: list[str]) -> bool:
+    return any(t in _NEGATION_TOKENS or t.endswith("n't") for t in tokens)
+
+
+def _needle_has_negation_token(needle: str) -> bool:
+    return _tokens_have_negation(_TOKEN_RE.findall(needle))
+
+
+def _is_negated(text: str, start: int, window_tokens: int = 3) -> bool:
+    """¿El match en `start` está negado por un token previo en su cláusula?"""
+    pre = text[:start]
+    last_punct = -1
+    for p in _CLAUSE_PUNCT:
+        last_punct = max(last_punct, pre.rfind(p))
+    clause = pre[last_punct + 1:]
+    tail = _TOKEN_RE.findall(clause)[-window_tokens:]
+    return _tokens_have_negation(tail)
+
+
 def _is_wordlike(needle: str) -> bool:
     return bool(_WORDLIKE_RE.match(needle))
 
@@ -460,9 +516,20 @@ def _needle_matches(needle: str, lowered: str) -> bool:
     for ex in NEEDLE_EXCLUSIONS.get(needle, ()):  # blanquea contextos excluidos
         if ex in work:
             work = work.replace(ex, " ")
+    # Si el needle ya es negativo de por sí, no aplicar chequeo de negación.
+    skip_neg = _needle_has_negation_token(needle)
     if _is_wordlike(needle):
-        return _word_pattern(needle).search(work) is not None
-    return needle in work
+        for m in _word_pattern(needle).finditer(work):
+            if skip_neg or not _is_negated(work, m.start()):
+                return True
+        return False
+    # substring (needles con dígitos/símbolos)
+    idx = work.find(needle)
+    while idx != -1:
+        if skip_neg or not _is_negated(work, idx):
+            return True
+        idx = work.find(needle, idx + 1)
+    return False
 
 
 def _excerpt(text: str, needle: str, window: int = 80) -> str:
