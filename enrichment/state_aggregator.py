@@ -43,7 +43,41 @@ def _json_object(value) -> dict:
     return dict(value)
 
 
+# ── Recency boost (T2.3 — Tier 2 hardening) ──────────────────────────────────
+# Además del decay por half-life, las observaciones MUY recientes reciben un
+# empujón extra para que un cambio de régimen reciente (p.ej. obras nuevas) pese
+# más rápido que lo que el half-life solo permitiría. Ventana corta (60d) y
+# decae a 1.0 (sin boost) para observaciones antiguas.
+#   recency_boost(Δt) = 1 + α · exp(-Δt / window)     # α=0.5, window=60d
+RECENCY_BOOST_ALPHA = 0.5
+RECENCY_BOOST_WINDOW_DAYS = 60.0
+
+
+def recency_boost(age_days: float) -> float:
+    """Factor multiplicativo >=1 que premia observaciones recientes (T2.3).
+
+    age 0d   -> 1.5   (α=0.5)
+    age 60d  -> ~1.18
+    age 180d -> ~1.02
+    age ≫    -> 1.0
+    """
+    age = max(0.0, age_days)
+    return 1.0 + RECENCY_BOOST_ALPHA * math.exp(-age / RECENCY_BOOST_WINDOW_DAYS)
+
+
+def _age_days(observed_at: datetime, now: datetime) -> float:
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - observed_at).total_seconds() / 86400.0)
+
+
 def decayed_weight(weight: float, observed_at: datetime, half_life_days: int, now: datetime | None = None) -> float:
+    """Decay por half-life puro: weight · 0.5^(Δt/half_life). Sin recency boost.
+
+    Se mantiene como función separada (algunos call-sites/tests quieren el decay
+    puro). El peso final usado por el agregador es `observation_weight_at`, que
+    añade el recency boost encima de esto.
+    """
     now = now or datetime.now(timezone.utc)
     if observed_at.tzinfo is None:
         observed_at = observed_at.replace(tzinfo=timezone.utc)
@@ -51,6 +85,20 @@ def decayed_weight(weight: float, observed_at: datetime, half_life_days: int, no
     if half_life_days <= 0:
         return weight
     return float(weight) * math.pow(0.5, age_days / half_life_days)
+
+
+def observation_weight_at(weight: float, observed_at: datetime, half_life_days: int,
+                          now: datetime | None = None) -> float:
+    """Peso final de una observación (T2.3): decay half-life × recency boost.
+
+    Espejo de la fórmula del plan:
+        w_final = base_weight · 2^(-Δt/half_life) · recency_boost(Δt)
+    (`base_weight` ya viene como source_confidence·extraction_confidence·… desde
+    `normalized_observations.observation_weight`).
+    """
+    now = now or datetime.now(timezone.utc)
+    decayed = decayed_weight(weight, observed_at, half_life_days, now)
+    return decayed * recency_boost(_age_days(observed_at, now))
 
 
 def semantic_distance(a: dict | None, b: dict | None, signal_types: dict[str, SignalType] | None = None) -> float:
@@ -89,7 +137,7 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
         support = 0.0
         for row in obs_rows:
             observed_at = row["observed_at"]
-            weight = decayed_weight(float(row["observation_weight"]), observed_at, stype.half_life_days)
+            weight = observation_weight_at(float(row["observation_weight"]), observed_at, stype.half_life_days)
             if weight <= 0:
                 continue
             support += weight
@@ -138,6 +186,25 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
         "consensus_confidence": consensus,
         **materialized,
     }
+
+
+def needs_recompute(signal_half_lives: Iterable[int], days_since_last_aggregate: float) -> bool:
+    """Gate de reprocesamiento condicionado (T2.3).
+
+    El cron de decay-refresh solo debería re-agregar un spot si el decay/recency
+    han cambiado de forma material desde el último agregado. Eso ocurre cuando
+    AL MENOS UNA señal presente tiene un half-life menor que el tiempo
+    transcurrido — las señales muy persistentes (beauty HL=36500d) no cambian
+    en una semana, así que reprocesarlas es trabajo desperdiciado.
+
+    Devuelve True si `min(half_lives) < days_since_last_aggregate`.
+    Sin señales o spot recién agregado (elapsed≈0) → False (lo maneja el path
+    incremental/`stale`, no este cron de refresco por tiempo).
+    """
+    hls = [h for h in signal_half_lives if h and h > 0]
+    if not hls or days_since_last_aggregate <= 0:
+        return False
+    return min(hls) < days_since_last_aggregate
 
 
 async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0.15) -> dict:
@@ -263,7 +330,7 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
     signals_data = dict(previous_signals)
     old_entry = dict(signals_data.get(signal, {}))
     old_support = float(old_entry.get("weight_support", 0.0) or 0.0)
-    obs_weight = decayed_weight(
+    obs_weight = observation_weight_at(
         observation.observation_weight,
         observation.observed_at,
         stype.half_life_days,

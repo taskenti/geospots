@@ -161,3 +161,33 @@ usando los locator hints incluidos en cada caso.
 - **Nota de integración:** la API (`api/main.py`) aún no rankea por alertas; los
   helpers son el *enabler* para cuando se wire ranking en `/search`. `active_alert_types`
   sigue incluyendo active+decaying (ambos resolved=FALSE) — correcto.
+
+### T2.3 — Half-life por señal + recency boost + reproceso condicionado ✅ (2026-05-28)
+
+- **Half-life por señal YA EXISTÍA**: `SignalType.half_life_days` (más granular que
+  el dict `SIGNAL_HALF_LIFE_DAYS` que proponía el plan) y `decayed_weight` ya aplicaba
+  `0.5^(Δt/half_life)`. La parte estructural de T2.3 estaba hecha.
+- **Net-new — recency boost** (`enrichment/state_aggregator.py`):
+  - `recency_boost(Δt) = 1 + α·exp(-Δt/window)`, α=0.5, window=60d (constantes
+    `RECENCY_BOOST_ALPHA`/`RECENCY_BOOST_WINDOW_DAYS`). t=0 → 1.5; t=60 → ~1.18; t≫ → 1.0.
+  - `observation_weight_at(weight, observed_at, hl, now)` = `decayed_weight × recency_boost`,
+    espejo exacto de la fórmula del plan `w_final = base · 2^(-Δt/hl) · recency_boost`.
+  - `decayed_weight` se mantiene como decay puro (sin boost) para call-sites/tests
+    que lo quieran aislado.
+  - **Ambos caminos de agregación** ahora usan `observation_weight_at`: el batch
+    (`aggregate_observations`) y el incremental (`update_semantic_state`) —
+    coherencia de entry paths (corolario del patrón de actuación).
+- **Net-new — reproceso condicionado** (`needs_recompute` + `jobs/full_recompute.py --conditional`):
+  - `needs_recompute(half_lives, elapsed_days)` → True si `min(half_lives) < elapsed`.
+    Las señales persistentes (beauty HL=36500) no cambian en una semana → skip.
+  - `full_recompute --conditional` recomputa SIEMPRE spots `stale` o sin estado previo;
+    si no, aplica el gate. Verificado: spot 85057 recién agregado y no-stale → skipped=1.
+- **Decisión documentada:** `v2_materializer._decayed_weight` (noise_sources/parking_capacity,
+  señales TEXT con estrategia presence-threshold / recent_wins) **NO** recibe recency boost.
+  La fórmula del plan aplica a scores numéricos/booleanos (weighted_mean/consensus); meter
+  boost en un umbral de presencia movería el corte sin beneficio. `recent_wins` ya prioriza
+  lo reciente por diseño.
+- **Verificación live:** recompute de spot 85057 → `weight_support` 10.35→13.69,
+  `beauty_score` 0.601→0.630 (obs recientes pesan más, esperado), `quietness` estable.
+- **Test:** `tests/test_signal_half_life.py` — boost en t=0/t=window/t≫, decay a 1 HL = 0.5,
+  `observation_weight_at` = decay×boost, gate condicional (volátil/persistente/vacío/elapsed=0).
