@@ -68,10 +68,18 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
     )),
     # ── POLICE / SECURITY ────────────────────────────────────────────────────────
     ("police_risk", "0.85", 0.9, (
-        "policia", "police", "multa", "fine", "verboten", "expuls", "evicted",
+        # BUG-02: "fine" (adjetivo inglés "todo bien") generaba 89.9% FP.
+        # Sustituido por formas inequívocas de "multa".
+        "policia", "police", "multa", "fined", "got a fine", "got fined",
+        "we were fined", "parking fine", "police fine", "received a fine",
+        "verboten", "expuls", "evicted",
         "kicked out", "nos echaron", "nos multaron", "cops", "guardia civil",
         "gendarm", "carabinieri", "moved on", "asked us to leave",
-        "told to leave", "nos pidieron que", "no pernoctar", "prohibido",
+        "told to leave", "nos pidieron que", "no pernoctar",
+        # BUG: "prohibido" suelto capturaba "prohibido bañarse/fumar/hacer fuego"
+        # (restricciones no policiales). Acotado a estacionamiento/pernocta.
+        "prohibido aparcar", "prohibido estacionar", "estacionamiento prohibido",
+        "parking prohibido", "prohibido pernoctar",
         "towed", "grua", "busse", "amende",
     )),
     ("police_risk", "0.1", 0.85, (
@@ -87,7 +95,11 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "all stolen", "everything stolen", "vole", "volado",
     )),
     ("safety", "0.85", 0.82, (
-        "seguro", "safe", "security", "sicher", "sentimos seguros",
+        # BUG-20: "security" suelto (241 hits) marcaba seguro incluso en
+        # "no security"/"poor security". Sustituido por formas positivas.
+        # "seguro"/"safe" ahora van word-bound → ya no matchean inseguro/unsafe.
+        "seguro", "safe", "good security", "well secured", "vigilado",
+        "sicher", "sentimos seguros",
         "nos sentimos seguros", "felt safe", "safe place", "lugar seguro",
         "bien sécurisé", "sicher gefühlt",
     )),
@@ -100,7 +112,8 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "local youths", "joyriders", "drug dealer", "antisocial",
         "mendigando", "begging", "yobs", "chavs", "junkies",
         "pandilla", "grupo de jovenes", "jóvenes molestando",
-        "molestos", "borrachos molestando", "aggressive",
+        # BUG-19: "molestos" suelto capturaba "charcos/mosquitos molestos".
+        "jóvenes molestos", "grupos molestos", "borrachos molestando", "aggressive",
         "agresivo", "nos amenazaron", "threatening",
     )),
     # ── BEAUTY / VIEWS ────────────────────────────────────────────────────────────
@@ -123,8 +136,10 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "aseos limpios", "clean toilets", "clean bathrooms",
     )),
     ("cleanliness", "0.15", 0.82, (
-        "sucio", "dirty", "trash", "basura", "garbage", "sale",
-        "mugre", "mugriento", "cochino", "asqueroso", "filthy",
+        # BUG-13: "sale" (FR sucio) chocaba con EN "on sale" y ES "sale" (3ª pers.).
+        # Sustituido por formas francesas inequívocas.
+        "sucio", "dirty", "trash", "basura", "garbage", "très sale", "sale partout",
+        "c'est sale", "mugre", "mugriento", "cochino", "asqueroso", "filthy",
         "lots of rubbish", "lleno de basura", "mucha basura",
         "schmutzig", "dreckig", "dégoûtant",
     )),
@@ -285,15 +300,17 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
     )),
     # ── WIND ─────────────────────────────────────────────────────────────────────
     ("wind_exposure", "0.85", 0.78, (
+        # BUG-14: "sheltered from wind"/"abrigado del viento" estaban AQUÍ (alta
+        # exposición) por error → INVERSIÓN de polaridad. Movidos a 0.1.
         "windy", "mucho viento", "ventoso", "exposed to wind",
         "very windy", "couldn't sleep wind", "viento intenso",
         "strong wind", "wind all night", "viento toda la noche",
-        "sheltered from wind", "abrigado del viento",
         "wind battered", "viento racheado", "gusts",
     )),
     ("wind_exposure", "0.1", 0.76, (
         "sheltered", "abrigado", "abrigo del viento", "no wind",
         "sin viento", "protected from wind",
+        "sheltered from wind", "abrigado del viento", "resguardado del viento",
     )),
     # ── CELL COVERAGE ────────────────────────────────────────────────────────────
     ("cell_coverage", "0.9", 0.80, (
@@ -402,6 +419,52 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
 ]
 
 
+# ── Matching robusto (Sprint 1 / BUG-01,02,05,13,18,19,20) ───────────────────
+# El matcher antiguo (`needle in lowered`) provocaba FP masivos por substring:
+#   "lac" en place/black/emplacement (BUG-01, 84.8% FP), "safe" en "unsafe"
+#   (BUG-05), "seguro" en "inseguro", "lleno" en "relleno" (BUG-18), etc.
+# Solución: para needles puramente alfabéticas exigimos límites de palabra (\b).
+# Las needles con dígitos/símbolos (>7m, 4g, 2.5m, 7m fine) usan substring porque
+# \b no se comporta bien en sus bordes no alfabéticos.
+# `à-öø-ÿ` cubre el rango Latin-1 (á é í ó ú ü ñ ç à è ...); el texto ya viene
+# en minúsculas.
+_WORDLIKE_RE = re.compile(r"^[a-zà-öø-ÿ' \-]+$")
+_WORD_PATTERN_CACHE: dict[str, re.Pattern] = {}
+
+# Exclusiones de contexto: si tras blanquear estas frases el needle ya no aparece,
+# no se cuenta como match. Resuelve FP de polisemia que el límite de palabra no
+# cubre (BUG-18: "lleno de basura/baches" no es masificación de campers).
+NEEDLE_EXCLUSIONS: dict[str, tuple[str, ...]] = {
+    "lleno": (
+        "lleno de basura", "lleno de baches", "lleno de barro",
+        "lleno de piedras", "lleno de hojas", "lleno de mierda",
+        "lleno de cristales", "lleno de excrementos",
+    ),
+}
+
+
+def _is_wordlike(needle: str) -> bool:
+    return bool(_WORDLIKE_RE.match(needle))
+
+
+def _word_pattern(needle: str) -> re.Pattern:
+    pat = _WORD_PATTERN_CACHE.get(needle)
+    if pat is None:
+        pat = re.compile(r"\b" + re.escape(needle) + r"\b")
+        _WORD_PATTERN_CACHE[needle] = pat
+    return pat
+
+
+def _needle_matches(needle: str, lowered: str) -> bool:
+    work = lowered
+    for ex in NEEDLE_EXCLUSIONS.get(needle, ()):  # blanquea contextos excluidos
+        if ex in work:
+            work = work.replace(ex, " ")
+    if _is_wordlike(needle):
+        return _word_pattern(needle).search(work) is not None
+    return needle in work
+
+
 def _excerpt(text: str, needle: str, window: int = 80) -> str:
     pos = text.lower().find(needle.lower())
     if pos < 0:
@@ -417,7 +480,7 @@ def extract_claims_regex(text: str) -> list[dict]:
     seen: set[tuple[str, str]] = set()
     for signal, value, confidence, needles in PATTERNS:
         for needle in needles:
-            if needle in lowered:
+            if _needle_matches(needle, lowered):
                 key = (signal, value)
                 if key in seen:
                     continue
