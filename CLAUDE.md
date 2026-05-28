@@ -298,6 +298,32 @@ FUENTES EXTERNAS (20+ scrapers)
 
 ---
 
+## Datos regenerables vs. inmutables
+
+Regla operativa del pipeline (Phase 3 hardening). Mantener esta distinción para que cualquier refactor o reproceso pueda rehacerse sin perder información cruda.
+
+**Inmutables — nunca borrar, sobreescribir ni mutar:**
+- `source_records.raw_data` — JSON crudo tal cual lo devolvió cada fuente. Es la fuente de verdad para rehacer todo lo demás.
+- `reviews.texto` y `reviews.texto_original` — textos originales (multi-idioma).
+- `extracted_claims` cuando `review_id IS NOT NULL` — son evidencia atómica anclada a un fragmento concreto de texto.
+
+**Regenerables desde inmutables (se pueden borrar y rehacer sin pérdida):**
+- `normalized_observations` — proyección numérica/booleana de los claims con peso y decay.
+- `spot_semantic_state` (incluyendo `summary_en`, `tags`, `best_for`, `signals_data`, `quietness_score`, etc.).
+- `spot_embeddings` — derivables del estado semántico vía `text-embedding-004`.
+- `spot_alerts` cuando `resolved=TRUE` por decay automático (no manual).
+- `spot_semantic_snapshots` — historial de cambios, derivable rebobinando observations.
+- `texto_limpio`, `texto_dsl`, `idioma` en reviews — derivables del texto original.
+
+**Reglas concretas:**
+1. Cualquier cambio que requiera borrar y rehacer regenerables (bumpear `ENRICHMENT_VERSION`, recomputar embeddings, etc.) debe poder ejecutarse sin tocar inmutables.
+2. Si un cambio propuesto rompe esta distinción (ej. "necesitamos sobreescribir raw_data para X"), rechazarlo y buscar otra forma.
+3. `extracted_claims` con `review_id IS NULL` que vengan de `scraped_facts_v1` son inmutables (anclados a `source_records`). Los que vengan de un LLM mal disciplinado se borran y rehacen.
+
+Esta sección es referencia del plan `docs/fase-3-hardening-pre-batch.md` (Principio operativo #1).
+
+---
+
 ## Contexto para Reanudar Trabajo con IA
 
 **Estado actual de fases:**

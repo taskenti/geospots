@@ -297,19 +297,23 @@ ALTER TABLE spots ADD COLUMN authorization_status TEXT;
 
 El schema del LLM debe devolver estos 3 campos como top-level (no enterrados en summary). El LLM **solo los emite si tiene evidencia**; si la columna queda `NULL` significa "no determinado", no "false".
 
-**D8 (atributos geofísicos):** mismo schema del LLM emite `elevation_m`, `terrain_surface`, `slope_grade`. Pero **escriben en `spot_geo`, no en `spots`.** Si `spot_geo` no tiene fila para el spot, crearla. Esto consolida Phase 6 sin esperar a su sprint dedicado.
+**D8 (atributos geofísicos):** mismo schema del LLM emite `elevation_m`, `terrain_type`, `slope_degrees`. Pero **escriben en `spot_geo`, no en `spots`.** Si `spot_geo` no tiene fila para el spot, crearla. Esto consolida Phase 6 sin esperar a su sprint dedicado.
 
 ```sql
--- spot_geo ya existe (Phase 6). Asegurar columnas:
-ALTER TABLE spot_geo ADD COLUMN IF NOT EXISTS elevation_m INT;
-ALTER TABLE spot_geo ADD COLUMN IF NOT EXISTS terrain_surface TEXT;
-ALTER TABLE spot_geo ADD COLUMN IF NOT EXISTS slope_grade TEXT;
+-- spot_geo YA EXISTE con estas columnas (verificado en schema.sql):
+--   elevation_m REAL, slope_degrees REAL, terrain_type TEXT
+-- Solo añadir la columna de fuente si no existe:
 ALTER TABLE spot_geo ADD COLUMN IF NOT EXISTS source TEXT;  -- 'llm_v4' | 'dem' | 'osm'
 ```
 
+**Alineación de nombres LLM→DB** (nombres reales del schema, no inventados):
+- `elevation_m` → `spot_geo.elevation_m`
+- `terrain_type` → `spot_geo.terrain_type` (texto libre: "grass", "gravel", "asphalt", "mixed")
+- `slope_degrees` → `spot_geo.slope_degrees` (entero estimado: 0=plano, >15=empinado)
+
 **Criterio de aceptación:**
 - Andorra Campers tras procesamiento tiene `spot_function='shop_workshop'`, `is_overnight_viable=false`.
-- Grau Roig tiene `authorization_status='sign_authorized'` y `spot_geo.elevation_m=2110`.
+- Grau Roig tiene `authorization_status='sign_authorized'` y `spot_geo.elevation_m ≈ 2110`.
 
 ### T1.4c — `signal_flux` + `active_alert_types` en `spot_semantic_state`
 
@@ -404,24 +408,22 @@ LIMIT batch_size;
 
 **Archivo:** `enrichment/worker.py` + `enrichment/orchestrator_v2.py`
 
-Verificar que el filtro WHERE del worker incluye `enrichment_version < CURRENT_VERSION` para que un kill -9 a mitad de batch no reprocese spots ya completados.
+**Estado real (verificado en T0.1):** la idempotencia ya está implementada en ambos pipelines:
+- `orchestrator_v2.select_candidates` filtra por `COALESCE(sss.enrichment_version, 0) < $1` — los spots ya procesados con la versión actual no se reprocesen.
+- `worker.py.fetch_pending_reviews` filtra por `r.llm_processed = FALSE` — las reviews ya procesadas no se re-ejecutan.
+- Kill -9 a mitad de `process_review` deja la review sin `llm_processed=TRUE` porque la transacción hace rollback → se reprocesa limpia en el siguiente run.
 
-Para orchestrator_v2:
-```sql
-WHERE NOT EXISTS (
-  SELECT 1 FROM spot_semantic_state s
-  WHERE s.spot_id = spots.id
-    AND s.enrichment_version >= 4
-)
-```
-
-Para worker.py: `WHERE reviews.llm_processed = FALSE`.
+**Lo que sí hay que hacer:**
+1. Documentar que cualquier cambio al system prompt o schema del LLM debe incrementar `ENRICHMENT_VERSION` en `prompts.py` (actualmente = 4). Esto es lo único que fuerza re-enrichment de spots ya procesados.
+2. Añadir flag `--force-spot-ids <id,id,...>` a `orchestrator_v2` para poder forzar re-run de spots específicos sin tocar `enrichment_version` global (útil para validar el smoke de Andorra sin contaminar el resto).
 
 **Criterio de aceptación:** kill -9 al worker después de procesar 50 spots en Andorra, reiniciar, verificar que los 50 no se reprocesan (medido por `llm_calls_total` en logs).
 
 ### T1.8 — Observabilidad: cache hit rate por llamada
 
-**Archivo:** `enrichment/llm_provider.py`
+**Archivo:** `enrichment/llm_provider.py` + `enrichment/orchestrator_v2.py`
+
+**Estado real (verificado en T0.1):** `call_deepseek_sync` ya extrae `prompt_cache_hit_tokens` y lo normaliza en `usage["cached_content_token_count"]`. `orchestrator_v2` lo acumula en `stats.tokens_input_total` pero **no loguea ratio per-call ni persiste por spot**. Sin estos dos pasos, T1.1 es ciego.
 
 Sin observabilidad, T1.1 es ciego. DeepSeek devuelve `usage.prompt_cache_hit_tokens` y `usage.prompt_tokens` en cada respuesta. Loggear en cada llamada:
 
@@ -607,15 +609,32 @@ CREATE TABLE spot_relations (
 
 LLM emite `cross_references[]` en su output cuando una review menciona otro lugar ("River shopping center nearby", "parking del telesilla"). Postprocesado resuelve a `spot_id` vía búsqueda geográfica + similitud de nombre antes de insertar.
 
-### T2.7 — Flag `stale` para re-agregación selectiva
+### T2.7 — Trigger `stale` para re-agregación selectiva
+
+**Estado real (verificado en T0.1):** `spot_semantic_state.stale BOOLEAN DEFAULT FALSE` y `last_aggregated_at TIMESTAMPTZ` **ya existen en el schema** (schema.sql). `orchestrator_v2.select_candidates` ya respeta `stale=TRUE` como criterio de prioridad. `state_aggregator` ya pone `stale=FALSE` tras recompute.
+
+**Lo que falta:** el **trigger** que marca `stale=TRUE` cuando llega una observación nueva volátil. Sin él, las columnas existen pero nadie las activa.
 
 ```sql
-ALTER TABLE spot_semantic_state ADD COLUMN stale BOOLEAN DEFAULT FALSE;
-ALTER TABLE spot_semantic_state ADD COLUMN last_aggregated_at TIMESTAMPTZ;
-CREATE INDEX idx_state_stale ON spot_semantic_state (stale) WHERE stale = TRUE;
+-- Función trigger (en migration_phase3_v6.sql):
+CREATE OR REPLACE FUNCTION mark_spot_stale_on_new_obs()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE spot_semantic_state
+  SET stale = TRUE
+  WHERE spot_id = NEW.spot_id
+    AND stale = FALSE
+    AND NEW.observed_at > COALESCE(last_aggregated_at, '1970-01-01'::timestamptz);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_stale_on_observation
+AFTER INSERT ON normalized_observations
+FOR EACH ROW EXECUTE FUNCTION mark_spot_stale_on_new_obs();
 ```
 
-Cuando una observación nueva con `signal_type` volátil entra con `observed_at > last_aggregated_at` del spot → marcar `stale=TRUE`. Cron nocturno recomputa solo `WHERE stale=TRUE`. A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly de 125K a ~2.5K spots por ejecución.
+A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly de 125K a ~2.5K spots por ejecución.
 
 ---
 
@@ -644,6 +663,9 @@ Cuando una observación nueva con `signal_type` volátil entra con `observed_at 
 | Evidence vectors ahora | Arquitecto | Tier 3, no antes. Resolver problema real antes de generalizar |
 | `spot_operational_state` simple | Plan v1 | Sustituido por `spot_alerts` (más rico, multi-tipo, multi-fila por spot) |
 | `state_version` entero | Plan v1 | Sustituido por `semantic_fingerprint` (hash sobre input real del embedder) |
+| Crear columnas `stale` y `last_aggregated_at` | Plan v1 | **Ya existen en schema.sql** (verificado T0.1). T2.7 solo añade el trigger de marcado. |
+| Crear columna `enrichment_version` en `spot_semantic_state` | Plan v1 | **Ya existe** + index. Solo documentar convención de bump cuando cambia el prompt. |
+| Renombrar `terrain_surface`/`slope_grade` en spot_geo | Plan v1 | **Nombres reales en schema**: `terrain_type` y `slope_degrees`. Plan actualizado. |
 
 ---
 
@@ -656,19 +678,28 @@ Cuando una observación nueva con `signal_type` volátil entra con `observed_at 
 
 ### Sprint 1 — Prompt + redundancia (1.5 días)
 - T1.1 Prompt tail-loading + few-shot estables
+  - Incluye: subir `max_tokens` de 1500 → 2500 en `call_deepseek_sync` (riesgo parse truncado en spots `very_rich`)
 - T1.2 STATIC_CONTEXT vs REVIEW_EVIDENCE
 - T1.3 CURRENT_DATE + age
 
 ### Sprint 2 — Estado operacional + clasificación funcional (2 días)
 - T1.4 `spot_alerts` + resolver determinista
 - T1.4b `spot_function` + `is_overnight_viable` + `authorization_status` + `spot_geo` (D8)
+  - Nombres DB reales: `terrain_type` (no `terrain_surface`), `slope_degrees` (no `slope_grade`)
 - T1.4c `signal_flux` + `active_alert_types` en `spot_semantic_state`
 - T1.5 Canonicalizador + unknown_tags
+- **Una sola migración `db/migration_phase3_v6.sql`** cubre T1.4+T1.4b+T1.4c+T1.5+T1.6+T1.8+T2.7: `spot_alerts`, columnas de `spots`, columnas de `spot_semantic_state`, `spot_geo.source`, `canonical_tags`, `unknown_tags`, `llm_call_metrics`, `semantic_fingerprint`, trigger stale.
 
 ### Sprint 3 — Invalidación + idempotencia + observabilidad (1 día)
 - T1.6 semantic_fingerprint + nightly_embeddings ampliado
-- T1.7 Verificar idempotencia worker
-- T1.8 Logging de cache hit ratio + tabla `llm_call_metrics`
+  - Actualizar `fetch_embedding_candidates` para usar `semantic_fingerprint` en vez de `sss.updated_at > se.created_at`
+- T1.7 Idempotencia worker (mayormente ya implementada — añadir `--force-spot-ids` + documentar bump de versión)
+- T1.8 Logging de cache hit ratio per-call + insertar en `llm_call_metrics`
+
+### Pre-Sprint 4 — Prerequisitos del smoke (0.5 día extra)
+- Añadir flag `--country` a `worker.py` (JOIN a `spots.country_iso`) — **bloqueante para el smoke**
+- Añadir flag `--force-spot-ids` a `orchestrator_v2` — útil para re-run de casos específicos sin bumpear versión global
+- Bumpar `ENRICHMENT_VERSION` de 4 → 5 en `prompts.py` si los cambios de Sprint 1-3 alteran el output del LLM (obligatorio si T1.1/T1.2 cambian el schema)
 
 ### Sprint 4 — Smoke Andorra (0.5 día)
 - Ejecutar smoke con todos los acceptance criteria
