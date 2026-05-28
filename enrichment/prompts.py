@@ -108,6 +108,11 @@ C. If a review explicitly contradicts a STATIC_CONTEXT fact (e.g. STATIC says
    No "services", no "description", no null.
 3. Weight recent reviews more. If old and recent reviews contradict,
    prefer recent and mention the change in the summary.
+   Each <REVIEW_EVIDENCE> line is prefixed with `[age: Xd ago]` measured
+   against CURRENT_DATE (declared at the top of SPOT DATA). Lower X = more
+   recent. NEVER assume order-in-list implies chronology — use the age tag.
+   Reviews older than ~730d describe possibly outdated conditions; reviews
+   under ~180d are current evidence.
 4. Negation, sarcasm and irony matter: "not very quiet" != "quiet".
 5. Numeric scores in 0.0-1.0; booleans only with clear evidence.
 6. If a signal has no support, OMIT it (do not emit null).
@@ -320,7 +325,7 @@ Hard rules:
 # T1.2 (v5): reescritos al nuevo schema review_claims[] + contradicted_static_facts[].
 # Mantener el bloque BYTE-ESTABLE entre llamadas — cualquier cambio rompe el prefix cache.
 
-PROMPT_VERSION = "v5-static-review-split-1"   # T1.2: STATIC_CONTEXT vs REVIEW_EVIDENCE split + nuevo schema output.
+PROMPT_VERSION = "v5-current-date-1"   # T1.3: + CURRENT_DATE en SPOT DATA y [age: Xd ago] por review.
 
 FEW_SHOT_EXAMPLES_V5 = """
 
@@ -671,8 +676,34 @@ def _build_servicios_block(spot: dict) -> list[str]:
     return out
 
 
+def _age_days(fecha) -> int | None:
+    """Días entre `fecha` y ahora (UTC). None si la fecha es inválida o falta.
+
+    Acepta `date`, `datetime` (naive o tz-aware), str ISO o None.
+    Fechas en el futuro se devuelven como 0 (la review es "muy reciente").
+    """
+    from datetime import date as _date, datetime as _dt, timezone as _tz
+    if fecha is None:
+        return None
+    if isinstance(fecha, _dt):
+        dt = fecha if fecha.tzinfo else fecha.replace(tzinfo=_tz.utc)
+    elif isinstance(fecha, _date):
+        dt = _dt(fecha.year, fecha.month, fecha.day, tzinfo=_tz.utc)
+    elif isinstance(fecha, str):
+        try:
+            dt = _dt.fromisoformat(fecha.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_tz.utc)
+        except ValueError:
+            return None
+    else:
+        return None
+    delta = (_dt.now(_tz.utc) - dt).days
+    return max(0, delta)
+
+
 def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
-    """User prompt for spot-level enrichment v4.
+    """User prompt for spot-level enrichment v4/v5.
 
     `spot` must include: id, canonical_name, tipo, country_iso, lat, lon, fuentes,
     descripcion_es/en/fr/de/it/nl/pt (optional), and the v3 service fields
@@ -680,16 +711,24 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
     `reviews` already ordered and trimmed by spot_packager.select_reviews_for_prompt.
     v4: header labels in English; review texts and descriptions stay in their
     original language (the LLM understands all EU languages).
+    v5 (T1.2): SERVICES wrapped in <STATIC_CONTEXT>, reviews in <REVIEW_EVIDENCE>.
+    v5 (T1.3): CURRENT_DATE inyectado en SPOT DATA; cada review prefijada con
+    [age: Xd ago] para que el LLM razone cronológicamente sin invertir tiempo.
     """
+    from datetime import datetime as _dt, timezone as _tz
+
     fuentes = spot.get("fuentes") or []
     if isinstance(fuentes, str):
         fuentes = [fuentes]
 
-    # T1.1: marcadores explícitos === SPOT DATA === / === END === para preparar
-    # la separación STATIC_CONTEXT vs REVIEW_EVIDENCE de T1.2 (Sprint 1).
-    # T1.3 (Sprint 1) inyectará aquí CURRENT_DATE: YYYY-MM-DD y [age: Xd ago] por review.
+    # T1.3: CURRENT_DATE como anchor temporal. Va PRIMERO del bloque SPOT DATA
+    # para que el LLM lo lea antes de cualquier review y use ages relativas.
+    # No rompe el prefix cache porque ya estamos en el sufijo volátil.
+    current_date_str = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+
     lines = [
         "=== SPOT DATA (volatile per-spot) ===",
+        f"CURRENT_DATE: {current_date_str}",
         f"SPOT id={spot['id']}",
         f'Name: "{(spot.get("canonical_name") or "").strip()}"',
         f"Type: {spot.get('tipo') or 'other'}",
@@ -715,16 +754,21 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
 
     # T1.2: bloque envuelto en <REVIEW_EVIDENCE>. Cada claim de la respuesta
     # debe citar un review_id que aparezca DENTRO de este bloque.
+    # T1.3: cada línea de review incluye `[age: Xd ago]` calculado contra
+    # CURRENT_DATE. Hace explícita la cronología y evita que el LLM trate
+    # "2026-04" como reciente solo porque aparece después de "2025-07".
     if reviews:
         lines.append("<REVIEW_EVIDENCE>")
         lines.append(f"REVIEWS (n={len(reviews)}, ordered by temporal relevance):")
         for r in reviews:
             fecha = r.get("fecha")
             fecha_str = fecha.strftime("%Y-%m") if hasattr(fecha, "strftime") else (str(fecha)[:7] if fecha else "?")
+            age_d = _age_days(fecha)
+            age_str = f"[age: {age_d}d ago]" if age_d is not None else "[age: ?]"
             stars = ("★" * int(r["rating"])) if r.get("rating") else ""
             source = r.get("source") or "?"
             texto = (r.get("texto_limpio") or r.get("texto") or r.get("texto_original") or "").strip().replace("\n", " ")
-            lines.append(f"[review_id={r['id']}] [{fecha_str}] [{source}] {stars} {texto}")
+            lines.append(f"[review_id={r['id']}] {age_str} [{fecha_str}] [{source}] {stars} {texto}")
         lines.append("</REVIEW_EVIDENCE>")
     else:
         lines.append("<REVIEW_EVIDENCE>")

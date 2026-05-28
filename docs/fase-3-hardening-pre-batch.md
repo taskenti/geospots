@@ -690,7 +690,13 @@ A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly
   - `build_spot_user_prompt` wrap reviews en `<REVIEW_EVIDENCE>…</REVIEW_EVIDENCE>`
   - `gemini_response_parser.parse_enrichment_response`: parsea v5 schema, **rechaza** `review_claims` con `review_id NULL`, también rechaza `contradicted_static_facts` sin review_id. Fallback legacy v4 mantenido para transición.
   - `ingest_v2.py` sin cambios (ya tolera review_id NULL → NOW() — solo relevante para legacy fallback).
-- T1.3 CURRENT_DATE + age  ← **SIGUIENTE**
+- ✅ T1.3 CURRENT_DATE + age
+  - `build_spot_user_prompt`: `CURRENT_DATE: YYYY-MM-DD` (UTC) inyectado primero en SPOT DATA.
+  - Helper `_age_days(fecha)` tolera `date`/`datetime` naive o tz-aware/str ISO/None. Futuro → 0.
+  - Cada review prefijada con `[age: Xd ago]` (o `[age: ?]` si la fecha falta).
+  - SYSTEM_PROMPT regla 3 ampliada: explica el prefijo, prohíbe asumir orden=cronología, da umbrales (<180d current, >730d outdated).
+  - `PROMPT_VERSION` → `"v5-current-date-1"`. `ENRICHMENT_VERSION` sigue en 5 (sin schema change).
+  - SYSTEM_PROMPT_V2 sha256[:16] = `a445610126345b35`, 17814 bytes.
 
 ### Sprint 2 — Estado operacional + clasificación funcional (2 días)
 - T1.4 `spot_alerts` + resolver determinista
