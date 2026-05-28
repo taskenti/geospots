@@ -76,7 +76,7 @@ async def _do_run(conn, spot_id: int | None) -> dict:
             spot_id,
         )
         stats = {"scanned": 0, "decayed": 0, "resolved": 0,
-                 "skipped_permanent": 0, "errors": 0}
+                 "skipped_permanent": 0, "decaying": 0, "errors": 0}
         for r in rows:
             dec = await apply_decay(conn, dict(r), current_ts=current_ts)
             stats["scanned"] += 1
@@ -86,6 +86,8 @@ async def _do_run(conn, spot_id: int | None) -> dict:
                 stats["decayed"] += 1
             if dec.resolved:
                 stats["resolved"] += 1
+            elif dec.lifecycle_state == "decaying":
+                stats["decaying"] += 1
         if stats["resolved"] > 0:
             await refresh_active_alert_types(conn, spot_id)
         logger.info(f"[decay] spot={spot_id} → {stats}")

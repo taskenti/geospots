@@ -137,3 +137,27 @@ usando los locator hints incluidos en cada caso.
   `normalize_claims` ignoran la clave extra (leen sólo campos concretos vía `.get`).
 - **Test:** `tests/test_multilingual_lexicon.py` — 173 entradas, pesos suman 1,
   acento-insensible, polaridad wild_camping, mutación selectiva. Todos pasan.
+
+### T2.2 — Estados intermedios del lifecycle ✅ (2026-05-28)
+
+- El lifecycle pasó de binario (`active`/`likely_resolved`) a **tres estados**,
+  con `decaying` entre medias:
+  - `active` — no-resuelta, `confidence >= 0.50`. Peso ranking 1.0.
+  - `decaying` — no-resuelta, `confidence < 0.50` (incluye conf<0.30 que aún no
+    cumple la guarda temporal de 180d). Peso 0.5.
+  - `likely_resolved` — `resolved=TRUE`. Peso 0.0.
+- **Estado DERIVADO, no columna almacenada** (regenerable desde confidence+resolved,
+  nunca desincronizado del decay). Umbral nuevo `DECAYING_CONFIDENCE_THRESHOLD=0.50`
+  (> `RESOLVE_CONFIDENCE_THRESHOLD=0.30` para que exista banda intermedia real).
+- **Python:** `enrichment/state_resolver.py` — `lifecycle_state()`,
+  `lifecycle_rank_weight()`, constantes `LIFECYCLE_*` + `LIFECYCLE_RANK_WEIGHT`.
+  `DecayDecision.lifecycle_state` añadido; `decay_all_active`/`nightly_alert_decay`
+  cuentan ahora `decaying` en stats y lo loguean.
+- **SQL espejo:** `db/migration_phase3_v6d.sql` — `alert_lifecycle_state(conf, resolved)`
+  + `alert_rank_weight(state)` (IMMUTABLE). Aplicada y verificada: 41 alertas de
+  Andorra = todas `active` (sin decay aún). Mantener Python y SQL sincronizados.
+- **Test:** `tests/test_state_lifecycle.py` — fronteras (0.50 inclusivo a active),
+  conf<0.30 no-resuelta = decaying (no resolved), resolved manda, orden de pesos.
+- **Nota de integración:** la API (`api/main.py`) aún no rankea por alertas; los
+  helpers son el *enabler* para cuando se wire ranking en `/search`. `active_alert_types`
+  sigue incluyendo active+decaying (ambos resolved=FALSE) — correcto.

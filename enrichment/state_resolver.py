@@ -36,6 +36,54 @@ RESOLVE_CONFIDENCE_THRESHOLD = 0.30   # marcar resolved si confidence cae aquí
 RESOLVE_MIN_DAYS_FROM_START = 180     # …Y han pasado ≥180d desde valid_from
 PERMANENT_PREFIXES = ("permanent_", "permanently_")
 
+# ── Estados intermedios del lifecycle (T2.2 — Tier 2 hardening) ───────
+# El lifecycle pasó de binario (active/likely_resolved) a tres estados:
+#   active          — alerta fresca y creíble; pesa al 100% en ranking.
+#   decaying        — confidence cayó bajo el umbral pero aún NO resuelta
+#                     (sigue resolved=FALSE). La evidencia se está enfriando;
+#                     pesa parcialmente. Cubre dos casos: (a) confidence ya
+#                     <0.30 pero sin cumplir la guarda temporal de 180d, y
+#                     (b) confidence entre 0.30 y el umbral de decaying.
+#   likely_resolved — resolved=TRUE (por decay+guarda o manual); no pesa.
+#
+# El estado es DERIVADO (función pura de confidence+resolved), no una columna
+# almacenada: así se mantiene regenerable y nunca queda desincronizado del
+# decay. El ranking pondera distinto cada estado vía LIFECYCLE_RANK_WEIGHT.
+LIFECYCLE_ACTIVE = "active"
+LIFECYCLE_DECAYING = "decaying"
+LIFECYCLE_RESOLVED = "likely_resolved"
+
+# Umbral por debajo del cual una alerta no-resuelta se considera `decaying`.
+# Debe ser > RESOLVE_CONFIDENCE_THRESHOLD para que exista una banda intermedia
+# real entre "fresca" y "a punto de resolverse".
+DECAYING_CONFIDENCE_THRESHOLD = 0.50
+
+# Peso de cada estado en el ranking de búsqueda / penalización de spots.
+# active pesa entero, decaying a la mitad, resuelta no pesa.
+LIFECYCLE_RANK_WEIGHT: dict[str, float] = {
+    LIFECYCLE_ACTIVE: 1.0,
+    LIFECYCLE_DECAYING: 0.5,
+    LIFECYCLE_RESOLVED: 0.0,
+}
+
+
+def lifecycle_state(confidence: float, resolved: bool) -> str:
+    """Deriva el estado del lifecycle a partir de confidence + resolved.
+
+    Pura, sin I/O. Espejo exacto de la función SQL `alert_lifecycle_state`
+    (migration_phase3_v6c.sql) — mantener ambas sincronizadas.
+    """
+    if resolved:
+        return LIFECYCLE_RESOLVED
+    if confidence < DECAYING_CONFIDENCE_THRESHOLD:
+        return LIFECYCLE_DECAYING
+    return LIFECYCLE_ACTIVE
+
+
+def lifecycle_rank_weight(state: str) -> float:
+    """Peso de ranking [0,1] para un estado del lifecycle. Estado desconocido → 0."""
+    return LIFECYCLE_RANK_WEIGHT.get(state, 0.0)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # 1. Parser de valid_from
@@ -227,6 +275,7 @@ class DecayDecision:
     months_elapsed: float
     resolved: bool  # True si se acaba de marcar resolved
     skipped_permanent: bool = False
+    lifecycle_state: str = LIFECYCLE_ACTIVE  # estado tras aplicar el decay (T2.2)
 
 
 async def apply_decay(conn, alert_row: dict, current_ts: datetime | None = None) -> DecayDecision:
@@ -253,6 +302,7 @@ async def apply_decay(conn, alert_row: dict, current_ts: datetime | None = None)
             alert_id=alert_id, spot_id=spot_id, alert_type=alert_type,
             old_confidence=old_conf, new_confidence=old_conf,
             months_elapsed=0.0, resolved=False, skipped_permanent=True,
+            lifecycle_state=lifecycle_state(old_conf, resolved=False),
         )
 
     new_conf, months = compute_decayed_confidence(
@@ -298,6 +348,7 @@ async def apply_decay(conn, alert_row: dict, current_ts: datetime | None = None)
         alert_id=alert_id, spot_id=spot_id, alert_type=alert_type,
         old_confidence=old_conf, new_confidence=new_conf,
         months_elapsed=months, resolved=should_resolve,
+        lifecycle_state=lifecycle_state(new_conf, resolved=should_resolve),
     )
 
 
@@ -313,7 +364,7 @@ async def decay_all_active(conn, *, current_ts: datetime | None = None,
         current_ts = datetime.now(timezone.utc)
     stats = {
         "scanned": 0, "decayed": 0, "resolved": 0,
-        "skipped_permanent": 0, "errors": 0,
+        "skipped_permanent": 0, "decaying": 0, "errors": 0,
     }
     spots_to_refresh: set[int] = set()
     last_id = 0
@@ -342,6 +393,8 @@ async def decay_all_active(conn, *, current_ts: datetime | None = None,
                 if dec.resolved:
                     stats["resolved"] += 1
                     spots_to_refresh.add(dec.spot_id)
+                elif dec.lifecycle_state == LIFECYCLE_DECAYING:
+                    stats["decaying"] += 1
             except Exception as e:
                 stats["errors"] += 1
                 logger.exception(f"[state_resolver] decay error en alert id={r['id']}: {e}")
@@ -358,6 +411,7 @@ async def decay_all_active(conn, *, current_ts: datetime | None = None,
     logger.info(
         f"[state_resolver] decay batch done: scanned={stats['scanned']} "
         f"decayed={stats['decayed']} resolved={stats['resolved']} "
-        f"perm_skipped={stats['skipped_permanent']} errors={stats['errors']}"
+        f"decaying={stats['decaying']} perm_skipped={stats['skipped_permanent']} "
+        f"errors={stats['errors']}"
     )
     return stats
