@@ -113,3 +113,27 @@ docker-compose exec enrichment python -m enrichment.worker --batch-size 50000 --
 
 Antes de PT: rellenar `spot_id` en los 18 casos TODO de `tests/regression/semantic_suite.py`
 usando los locator hints incluidos en cada caso.
+
+---
+
+## 7. Tier 2 — Progreso post-batch
+
+### T2.1 — Léxico multilingüe ponderado ✅ (2026-05-28)
+
+- **Nuevo:** `enrichment/multilingual_lexicon.py` — funciones puras, sin I/O.
+  - 173 entradas, 5 conceptos D5 (`construction`, `closure`, `noise_source`,
+    `police_pressure`, `wild_camping`) × 6 idiomas (EN/ES/FR/NL/DE/IT).
+  - Mapeo a señales reales: construction+closure → `spot_closed=true`;
+    noise_source → `noise=0.8`; police_pressure → `police_risk=0.85`;
+    wild_camping → `wild_camping_legal=true/false` (polaridad explícita).
+  - Matching acento-insensible (NFKD + strip diacríticos). `bouwput`=0.95,
+    `Baustelle`=0.92, `chantier`=0.90.
+  - Blend D6: `0.7*llm_score + 0.3*lexical_prior`, recortado a [0,1].
+- **Integración** en `claim_extractor.extract_claims` (un solo punto, al final, para
+  evitar doble aplicación no idempotente) **y** en el path regex-only de
+  `worker._extract_claims_with_retry` (que no pasa por `extract_claims`).
+- Solo re-pondera `confidence` de claims existentes; no inventa señales. Anota
+  `lexicon_blended=True` para trazabilidad. El insert a `extracted_claims` y
+  `normalize_claims` ignoran la clave extra (leen sólo campos concretos vía `.get`).
+- **Test:** `tests/test_multilingual_lexicon.py` — 173 entradas, pesos suman 1,
+  acento-insensible, polaridad wild_camping, mutación selectiva. Todos pasan.

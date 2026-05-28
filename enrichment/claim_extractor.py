@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from .llm_provider import call_llm_sync, get_active_model, get_provider_name
+from .multilingual_lexicon import apply_lexicon_blend
 from .prompts import build_extraction_prompt
 from .text_trimmer import trim_for_llm
 
@@ -489,18 +490,18 @@ async def extract_claims(text: str, review: dict | None = None, use_gemini: bool
     n_regex = len(regex_claims)
 
     if not use_gemini:
-        return regex_claims
+        return _blend_lexicon(text, regex_claims)
     # Texto demasiado corto: nunca al LLM independientemente de los claims.
     if len(text) < 120:
-        return regex_claims
+        return _blend_lexicon(text, regex_claims)
     # Cobertura suficiente con regex solo.
     if n_regex >= 3:
-        return regex_claims
+        return _blend_lexicon(text, regex_claims)
 
     # Texto sustancial (≥120 chars) con 0-2 claims regex: escalar al LLM.
     llm_claims = await extract_claims_llm(text)
     if not llm_claims:
-        return regex_claims
+        return _blend_lexicon(text, regex_claims)
 
     # Merge: LLM complementa al regex; no duplicar (signal, value) ya encontrado.
     seen = {(c["signal"], c["value"]) for c in regex_claims}
@@ -510,4 +511,13 @@ async def extract_claims(text: str, review: dict | None = None, use_gemini: bool
         if key not in seen:
             merged.append(c)
             seen.add(key)
-    return merged
+    return _blend_lexicon(text, merged)
+
+
+def _blend_lexicon(text: str, claims: list[dict]) -> list[dict]:
+    """Aplica el blend léxico multilingüe (T2.1/D6) UNA sola vez sobre el
+    resultado final de extract_claims. Reponderar dos veces no es idempotente
+    (0.3*prior + 0.7*x), por eso se aplica solo aquí, nunca dentro de
+    extract_claims_regex/llm.
+    """
+    return apply_lexicon_blend(text, claims)

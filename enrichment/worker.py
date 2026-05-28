@@ -191,6 +191,7 @@ async def _extract_claims_with_retry(
     """
     # Regex no necesita semáforo — es local y gratuito.
     from .claim_extractor import extract_claims_regex
+    from .multilingual_lexicon import apply_lexicon_blend
     regex_result = extract_claims_regex(text)
     n_regex = len(regex_result)
 
@@ -199,10 +200,12 @@ async def _extract_claims_with_retry(
     # - Texto ≥ 120 chars + regex ≥ 3 claims → cobertura suficiente, no escalar.
     # - Texto ≥ 120 chars + regex 0-2 claims → LLM para complementar.
     # - use_llm=False → solo regex siempre.
+    # En los paths regex-only aplicamos el blend léxico aquí (extract_claims no
+    # se invoca en estas ramas, así que sería el único punto sin reponderar).
     if not use_llm or len(text) < 120:
-        return regex_result
+        return apply_lexicon_blend(text, regex_result)
     if n_regex >= 3:
-        return regex_result
+        return apply_lexicon_blend(text, regex_result)
 
     # LLM path — necesita semáforo.
     max_attempts = 4

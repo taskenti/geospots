@@ -269,6 +269,13 @@ FUENTES EXTERNAS (20+ scrapers)
 
 ---
 
+## Patrón de actuación (instrucción permanente del usuario)
+
+- **Si por el camino encuentras fallos, los reparas. Esto siempre.** Mientras implementas una tarea, si detectas un bug, una inconsistencia o algo roto en el código que tocas o que está adyacente, arréglalo en el momento (o, si es ajeno al scope y arriesgado, déjalo anotado/escalado) — no lo ignores ni lo dejes "para luego". Esta es una regla de actuación por defecto, no una excepción.
+- Corolario: al integrar algo nuevo, revisar que todos los caminos de entrada queden coherentes (ej. T2.1: el blend léxico se aplica tanto en `claim_extractor.extract_claims` como en el path regex-only de `worker._extract_claims_with_retry`).
+
+---
+
 ## Convenciones de Código
 
 - **Async everywhere**: todas las funciones de DB son `async def` con `asyncpg`
