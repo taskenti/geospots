@@ -288,7 +288,10 @@ async def test_ingest_handles_empty_claims(conn, fixture_spot):
     parsed = ValidatedEnrichment(
         claims=[],
         summary="Just summary, no claims.",
-        tags=["test"],
+        # T1.5: solo los tags canónicos se persisten en spot_semantic_state.tags;
+        # los que no mapean van a unknown_tags. Usamos uno canónico real ("beach")
+        # para que la aserción sobre tags sea significativa.
+        tags=["beach"],
         best_for=[],
         best_season=None,
         avoid_season=None,
@@ -306,7 +309,7 @@ async def test_ingest_handles_empty_claims(conn, fixture_spot):
     # v4: summary_es queda NULL, summary_en lleva el contenido inglés.
     assert row["summary_es"] is None
     assert row["summary_en"] == "Just summary, no claims."
-    assert "test" in row["tags"]
+    assert row["tags"] and "beach" in row["tags"]
 
 
 @pytest.mark.asyncio

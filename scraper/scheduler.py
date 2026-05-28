@@ -46,6 +46,7 @@ SOURCES = {
     "campy": "sources.campy:CampySource",
     "bobilguiden": "sources.bobilguiden:BobilguidenSource",
     "google_maps": "sources.google_maps:GoogleMapsSource",
+    "google_maps_api": "sources.google_maps_api:GoogleMapsAPISource",
 }
 
 

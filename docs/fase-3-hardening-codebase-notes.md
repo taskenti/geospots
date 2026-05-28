@@ -248,3 +248,45 @@ usando los locator hints incluidos en cada caso.
 - **Test:** `tests/test_regime_change.py` — caso Grau Roig (0.2→0.85), guarda n bajo,
   guarda separación (drift continuo cruzando 180d), guarda delta pequeño, señal boolean
   (0→1), `compute_signal_flux` salta señales TEXT.
+
+### T2.6 — `spot_relations` (relaciones spot↔spot) ✅ (2026-05-28)
+
+- **Tabla nueva** (`db/migration_phase3_v7.sql`, aplicada en vivo): `spot_relations`
+  dirigida `(spot_id, related_spot_id, relation_type)` PK, con `distance_m`,
+  `bidirectional`, `confidence(3,2)`, `source`, timestamps. CHECK `no_self`
+  (spot≠related). Índices: `related_spot_id` (lookup inverso), `relation_type`.
+  Vocab relation_type: alternative_overnight | service_provider_for |
+  parking_for_visit | same_complex | walking_distance.
+- **Parser** (`gemini_response_parser.py`): nuevo `ValidatedCrossRef` + campo
+  `ValidatedEnrichment.cross_references`. `_parse_cross_references` valida
+  `mentioned_name` (acepta alias `name`) + `relation_type` contra `RELATION_TYPE_VOCAB`;
+  `review_id` opcional; items inválidos → error no fatal, descartados.
+- **Resolver** (`enrichment/relation_resolver.py`):
+  - `resolve_cross_reference(conn, origin, name, max_distance_m=5000, min_similarity=0.30)`
+    — candidatos por `ST_DWithin` (índice GIST geog) rankeados por `similarity(canonical_name, name)`
+    (índice GIN pg_trgm); acepta el mejor ≥ umbral o None (**no fuerza match** —
+    mejor 0 relaciones que una falsa).
+  - `ingest_cross_references(conn, origin, parsed)` — resuelve e UPSERT-ea cada
+    referencia; `confidence = similitud` (GREATEST en conflicto). `same_complex` y
+    `walking_distance` son simétricas → inserta también la inversa con `bidirectional=TRUE`.
+- **Wiring**: paso 7 en `ingest_spot_enrichment` (`ingest_v2.py`), `IngestStats.relations_upserted`
+  + en el log line. Fuera de la transacción del recompute no, va dentro como los demás pasos.
+- **Prompt v7** (`prompts.py`): sección CROSS REFERENCES + bloque en OUTPUT FORMAT +
+  hard rule (no self-ref, vocab) + few-shot 1 enseña una relación real (marina,
+  walking_distance) y los otros dos llevan `cross_references: []`. **Bump de versión**
+  (regla de versionado): `ENRICHMENT_VERSION` 6→7 (schema cambió) y
+  `PROMPT_VERSION` → `v7-cross-references-1` (invalida cache DeepSeek). Coste de
+  re-enrichment trivial: pre-batch, solo smoke tests procesados.
+- **Bug reparado (patrón de actuación):** `tests/test_ingest_v2.py::test_ingest_handles_empty_claims`
+  estaba stale — usaba `tags=["test"]` y asertaba `"test" in row["tags"]`, pero desde
+  T1.5 los tags no canónicos se filtran a `unknown_tags` y la columna queda NULL
+  (`canonical_tags or None`) → `TypeError`. Corregido a un tag canónico real (`beach`)
+  + guarda `row["tags"] and ...`. El comportamiento de producción (filtrar no-canónicos)
+  es correcto; la aserción era la obsoleta.
+- **Verificación live:** spot 4434 "Camping Valira" → mención "Camping" resuelta a
+  spot 650044 a 60m (sim=1.0); nombre basura → None; relación simétrica insertó ambas
+  direcciones con bidirectional=TRUE. Transacción rollbackeada (sin datos de test
+  persistidos). 43/43 tests de parser/ingest/orchestrator en verde.
+- **Test:** `tests/test_cross_references.py` — parse válido, guarda de vocab, sin
+  mentioned_name, campo ausente→[], alias `name`. (La resolución geo+trgm se valida
+  en vivo, requiere DB.)

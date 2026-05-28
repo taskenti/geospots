@@ -1,17 +1,46 @@
 """Batch worker for pending review enrichment.
 
-Throttling para DeepSeek V4 Flash (provider por defecto para bulk):
-- ENRICHMENT_CONCURRENCY (env, default 8): llamadas LLM concurrentes.
-  DeepSeek no tiene RPM/RPD duros, pero limitar concurrencia controla costes
-  y evita saturar la pool de conexiones.
-- Backoff exponencial en errores transitorios (429, 5xx, timeout).
-- Parada automática si MAX_CONSECUTIVE_LLM_ERRORS fallos seguidos
-  (señal de que la API no está disponible o el crédito se agotó).
+═══════════════════════════════════════════════════════════════════════════
+SEGURIDAD DE GASTO LLM — Defensa en profundidad (revisión 2026-05-29)
+═══════════════════════════════════════════════════════════════════════════
+
+Tras el incidente de bucle de restart que quemó ~€2 en presupuesto de prueba,
+se aplican 5 capas independientes. Para que se gaste dinero, las 5 deben
+fallar simultáneamente.
+
+  1. DOCKER       docker-compose.yml: enrichment service usa `sleep infinity`
+                  y `restart: no`. El contenedor NUNCA arranca el worker
+                  por sí solo.
+
+  2. CLI DEFAULT  --enable-llm está OFF por defecto. Sin el flag, el worker
+                  procesa solo con regex (coste 0). Reemplaza al modelo
+                  legacy de "LLM on por defecto + --no-llm para apagar".
+
+  3. SCOPE GATE   Cuando --enable-llm está ON, es obligatorio pasar
+                  --country XX o el flag explícito --allow-global. Esto
+                  evita que un run accidental procese los 4.5M reviews
+                  pendientes de todo el mundo.
+
+  4. HARD CAP     Cuando --enable-llm está ON, es obligatorio pasar
+                  --max-llm-calls N. Si el contador llega a N el batch
+                  aborta con RuntimeError("llm_call_cap_reached").
+                  No hay default — debes elegirlo conscientemente.
+
+  5. ERROR ABORT  ENRICHMENT_MAX_CONSECUTIVE_ERRORS (default 20). Si la
+                  API empieza a fallar (créditos agotados, 429, etc.) el
+                  batch corta automáticamente.
+
+Run típico tras estos cambios:
+  docker-compose exec enrichment python -m enrichment.worker \
+      --country AD --enable-llm --max-llm-calls 200 --batch-size 200
+
+Throttling adicional para DeepSeek V4 Flash (provider por defecto para bulk):
+- ENRICHMENT_CONCURRENCY (env, default 8).
+- Backoff exponencial en 429/5xx/timeout (2s → 4s → 8s, máx _MAX_BACKOFF).
 - Progreso logueado cada PROGRESS_EVERY reviews.
 
 Para Gemini free tier (ENRICHMENT_PROVIDER=gemini, sin billing):
-  Poner ENRICHMENT_CONCURRENCY=1 y añadir delay manual:
-  ENRICHMENT_INTER_REQUEST_DELAY=4.3  (→ 14 RPM, bajo el límite de 15)
+  ENRICHMENT_CONCURRENCY=1 + ENRICHMENT_INTER_REQUEST_DELAY=4.3 → 14 RPM.
 """
 
 from __future__ import annotations
@@ -179,6 +208,7 @@ async def _extract_claims_with_retry(
     use_llm: bool,
     semaphore: asyncio.Semaphore,
     consecutive_errors: list[int],   # mutable contador compartido [n]
+    llm_calls: list[int] | None = None,   # mutable [hechas, cap]; None = sin cap
 ) -> list[dict]:
     """Llama a extract_claims con control de concurrencia y backoff exponencial.
 
@@ -208,6 +238,20 @@ async def _extract_claims_with_retry(
         return apply_lexicon_blend(text, regex_result)
 
     # LLM path — necesita semáforo.
+    # CAPA 4: hard cap de llamadas LLM por batch.
+    # Si llm_calls está configurado, comprobamos ANTES de gastar el semáforo.
+    # Esto evita que llamadas en cola tras el cap se cuelen.
+    if llm_calls is not None:
+        done, cap = llm_calls[0], llm_calls[1]
+        if done >= cap:
+            logger.error(
+                f"[enrichment] Hard cap alcanzado: {done}/{cap} llamadas LLM. "
+                "Abortando batch (CAPA 4)."
+            )
+            raise RuntimeError("llm_call_cap_reached")
+        llm_calls[0] = done + 1   # incremento optimista — fallos no se descuentan,
+                                  # de forma que retries cuentan contra el cap.
+
     max_attempts = 4
     for attempt in range(1, max_attempts + 1):
         async with semaphore:
@@ -262,6 +306,7 @@ async def process_review(
     use_llm: bool = True,
     semaphore: asyncio.Semaphore | None = None,
     consecutive_errors: list[int] | None = None,
+    llm_calls: list[int] | None = None,
 ) -> dict:
     raw_text = review.get("texto_original") or review.get("texto")
     cleaned = clean_review_full(raw_text)
@@ -286,7 +331,8 @@ async def process_review(
 
     if semaphore is not None and consecutive_errors is not None:
         claims = await _extract_claims_with_retry(
-            cleaned.texto_limpio, review, use_llm, semaphore, consecutive_errors
+            cleaned.texto_limpio, review, use_llm, semaphore,
+            consecutive_errors, llm_calls=llm_calls,
         )
     else:
         # Fallback sin throttling (tests, dry-run rápido)
@@ -338,17 +384,22 @@ async def process_pending_reviews(
     use_llm: bool = True,
     concurrency: int | None = None,
     countries: list[str] | None = None,
+    max_llm_calls: int | None = None,
 ) -> dict:
     pipeline_run_id = str(uuid.uuid4())
     stats = {
         "reviews": 0, "informative": 0, "claims": 0,
         "observations": 0, "errors": 0,
         "pipeline_run_id": pipeline_run_id,
+        "llm_calls_used": 0,
+        "llm_calls_cap": max_llm_calls,
     }
 
     concurrency = concurrency or _DEFAULT_CONCURRENCY
     semaphore = asyncio.Semaphore(concurrency)
     consecutive_errors: list[int] = [0]    # lista mutable para pasar por referencia
+    # CAPA 4: contador compartido [hechas, cap]. None si no hay cap (LLM apagado).
+    llm_calls: list[int] | None = [0, max_llm_calls] if (use_llm and max_llm_calls) else None
 
     async with pool.acquire() as conn:
         pending = await fetch_pending_reviews(conn, batch_size, countries=countries)
@@ -375,6 +426,7 @@ async def process_pending_reviews(
                     use_llm=use_llm,
                     semaphore=semaphore,
                     consecutive_errors=consecutive_errors,
+                    llm_calls=llm_calls,
                 )
             stats["reviews"] += 1
             stats["informative"] += int(result["informativo"])
@@ -402,10 +454,17 @@ async def process_pending_reviews(
             logger.exception(f"[enrichment] Error en review {review.get('id')}: {exc}")
 
     elapsed = time.monotonic() - t_start
+    if llm_calls is not None:
+        stats["llm_calls_used"] = llm_calls[0]
+    cap_str = (
+        f" llm_calls={stats['llm_calls_used']}/{max_llm_calls}"
+        if max_llm_calls is not None else ""
+    )
     logger.info(
         f"[enrichment] Batch completado en {elapsed:.0f}s | "
         f"reviews={stats['reviews']} informativas={stats['informative']} "
-        f"claims={stats['claims']} obs={stats['observations']} errors={stats['errors']}"
+        f"claims={stats['claims']} obs={stats['observations']} "
+        f"errors={stats['errors']}{cap_str}"
     )
     return stats
 
@@ -413,30 +472,85 @@ async def process_pending_reviews(
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 
 async def main_async(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="GeoSpots enrichment worker")
-    parser.add_argument("--batch-size", type=int, default=1000,
-                        help="Reviews a procesar por ejecución (default 1000)")
+    parser = argparse.ArgumentParser(
+        description="GeoSpots enrichment worker",
+        epilog=(
+            "SAFETY: --enable-llm está OFF por defecto. Cuando se activa, "
+            "exige --country (o --allow-global) y --max-llm-calls. "
+            "Sin esos flags el worker sólo procesa regex (coste 0)."
+        ),
+    )
+    parser.add_argument("--batch-size", type=int, default=200,
+                        help="Reviews a procesar por ejecución (default 200, antes 1000 — "
+                             "reducido tras el incidente de gasto de 2026-05-28)")
     parser.add_argument("--concurrency", type=int, default=None,
                         help="Llamadas LLM simultáneas (default: ENRICHMENT_CONCURRENCY env o 8)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Procesa pero no escribe en DB")
+    # CAPA 2: LLM apagado por defecto. Hay que pedirlo explícitamente.
+    parser.add_argument("--enable-llm", action="store_true",
+                        help="CAPA 2: Activa llamadas LLM (default OFF). "
+                             "Exige --max-llm-calls y --country/--allow-global.")
+    # Flags legacy mantenidos como no-op para no romper scripts antiguos.
     parser.add_argument("--no-llm", action="store_true",
-                        help="Solo regex, sin llamadas LLM (gratis)")
-    # Alias legacy
+                        help="(LEGACY no-op: LLM ya está OFF por defecto)")
     parser.add_argument("--no-gemini", action="store_true",
-                        help="Alias de --no-llm (compatibilidad)")
+                        help="(LEGACY no-op: alias de --no-llm)")
     parser.add_argument(
         "--country", type=str, default=None,
         help="ISO-2 code(s), coma-separados (ej. AD o ES,PT). "
-             "Filtra reviews por spots.country_iso. Pre-Sprint 4 (smoke Andorra).",
+             "Filtra reviews por spots.country_iso. REQUIRED con --enable-llm "
+             "salvo que pases --allow-global.",
+    )
+    parser.add_argument(
+        "--allow-global", action="store_true",
+        help="CAPA 3: Permite procesar TODOS los países sin --country. "
+             "Sólo se acepta combinado con --enable-llm y --max-llm-calls. "
+             "Usar con extremo cuidado.",
+    )
+    parser.add_argument(
+        "--max-llm-calls", type=int, default=None,
+        help="CAPA 4: Tope estricto de llamadas LLM por batch. REQUIRED con --enable-llm. "
+             "Cuando se alcanza, el batch aborta. Empieza bajo (50–200) y sube cuando "
+             "confíes en el comportamiento.",
     )
     args = parser.parse_args(argv)
 
-    use_llm = not (args.no_llm or args.no_gemini)
+    # ─── Capas 2/3/4: validación dura ANTES de tocar la DB ───
+    use_llm = bool(args.enable_llm)
 
     countries: list[str] | None = None
     if args.country:
         countries = [c.strip().upper() for c in args.country.split(",") if c.strip()]
+
+    if use_llm:
+        if not countries and not args.allow_global:
+            logger.error(
+                "[enrichment] SAFETY ABORT (CAPA 3): --enable-llm requiere --country XX "
+                "o el flag explícito --allow-global. Saliendo sin tocar la DB."
+            )
+            return 2
+        if args.max_llm_calls is None or args.max_llm_calls <= 0:
+            logger.error(
+                "[enrichment] SAFETY ABORT (CAPA 4): --enable-llm requiere "
+                "--max-llm-calls N (entero > 0). Saliendo sin tocar la DB."
+            )
+            return 2
+
+    # Banner visible — para que cualquier run quede registrado con sus parámetros.
+    scope = (",".join(countries) if countries else ("GLOBAL" if args.allow_global else "n/a"))
+    logger.info(
+        "[enrichment] ┌─ Safety summary ─────────────────────────────"
+    )
+    logger.info(f"[enrichment] │ LLM enabled       : {use_llm}")
+    logger.info(f"[enrichment] │ Scope             : {scope}")
+    logger.info(f"[enrichment] │ Batch size        : {args.batch_size}")
+    logger.info(f"[enrichment] │ Max LLM calls     : {args.max_llm_calls if use_llm else 'n/a (LLM off)'}")
+    logger.info(f"[enrichment] │ Dry run           : {args.dry_run}")
+    logger.info(f"[enrichment] │ Provider          : {os.environ.get('ENRICHMENT_PROVIDER','gemini')}")
+    logger.info(
+        "[enrichment] └──────────────────────────────────────────────"
+    )
 
     pool = await create_pool()
     try:
@@ -447,6 +561,7 @@ async def main_async(argv: list[str] | None = None) -> int:
             use_llm=use_llm,
             concurrency=args.concurrency,
             countries=countries,
+            max_llm_calls=args.max_llm_calls if use_llm else None,
         )
         logger.info(f"[enrichment] stats={stats}")
     finally:

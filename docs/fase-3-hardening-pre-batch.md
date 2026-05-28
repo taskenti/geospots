@@ -1,6 +1,6 @@
 # Phase 3 — Hardening pre-batch LLM (239K spots)
 
-**Estado:** Plan aprobado, pendiente de ejecución.
+**Estado:** Tier 0 + Tier 1 + Tier 2 completados (2026-05-28). Pendiente: Sprint 4 (smoke Andorra) → Sprint 5+ (batch país a país) → Tier 3 (post-batch, condicional).
 **Origen:** Auditoría multi-revisor del pipeline `orchestrator_v2` + `worker.py` con caso de estudio Spot 85057 (Grau Roig, Andorra).
 **Objetivo:** Endurecer el pipeline de enrichment LLM antes del batch masivo (~$272 input + ~$130 output con DeepSeek tras optimizaciones).
 **No es una fase nueva.** Es trabajo de hardening sobre Phase 3 existente, previo a habilitar `--all`.
@@ -764,13 +764,13 @@ A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly
 ### Sprint 5+ — Roll-out país a país
 - Portugal → España → Francia → Alemania → Italia → UK → US → resto.
 
-### Backlog Tier 2 (sin fecha hasta que el batch corra limpio)
-- T2.1 Léxico multilingüe ponderado (D5/D6)
-- T2.2 Estados intermedios del lifecycle (`decaying`)
-- T2.3 Half-life por señal en signal_registry
-- T2.4 Job mensual unknown_tags
-- T2.5 Detección de cambio de régimen con guardas
-- T2.6 `spot_relations`
+### Backlog Tier 2 — COMPLETADO (2026-05-28)
+- ✅ T2.1 Léxico multilingüe ponderado — `enrichment/multilingual_lexicon.py` + integración en `claim_extractor.py` + `worker.py` (ambos paths). 5 señales × 6 idiomas, blend 0.3/0.7 léxico/LLM. Migración `db/migration_phase3_v6d.sql`.
+- ✅ T2.2 Estados intermedios del lifecycle — `lifecycle_state()` + `lifecycle_rank_weight()` en `state_resolver.py`. SQL mirror en `migration_phase3_v6d.sql`. `DecayDecision.lifecycle_state` campo añadido. Stats `decaying` en `nightly_alert_decay.py` y `full_recompute.py`.
+- ✅ T2.3 Half-life por señal + recency boost + reproceso condicionado — `observation_weight_at()` = `decayed_weight × recency_boost` (α=0.5, window=60d) en `state_aggregator.py`. `needs_recompute()` gate. `full_recompute.py --conditional`.
+- ✅ T2.4 Job mensual unknown_tags — `jobs/review_unknown_tags.py` mejorado con stats header + columna *suggested canonical* (difflib fuzzy). `suggest_canonical()` + `unknown_tags_stats()` en `tag_canonicalizer.py`. Flag `--out` para archivado. Bug de credenciales DSN reparado en 2 jobs.
+- ✅ T2.5 Detección de cambio de régimen con guardas — `detect_regime_change()` + `compute_signal_flux()` en `state_aggregator.py`. Materializado en `spot_semantic_state.signal_flux` (full recompute only). Bug pseudocódigo plan corregido (separación `min(recent)−max(hist)`, no al revés).
+- ✅ T2.6 `spot_relations` — `db/migration_phase3_v7.sql` (aplicada). `enrichment/relation_resolver.py` (resolve geo+trgm + ingest). Parser `ValidatedCrossRef` + `cross_references` en `ValidatedEnrichment`. Paso 7 en `ingest_spot_enrichment`. Prompt v7 con sección CROSS REFERENCES + few-shot teaching. `ENRICHMENT_VERSION` 6→7. Test stale `test_ingest_v2` reparado (tag "test"→"beach").
 - ✅ T2.7 Flag `stale` para re-agregación selectiva (adelantado a Sprint 3 — costaba 1 trigger SQL aprovechando la migración v6c).
   - Función `mark_spot_stale_on_new_obs()` + trigger `trg_stale_on_observation AFTER INSERT ON normalized_observations` aplicados.
   - Lógica: marca `stale=TRUE` cuando `NEW.observed_at > COALESCE(last_aggregated_at, '1970-01-01')`. Idempotente (guard `AND stale = FALSE`).

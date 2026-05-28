@@ -66,6 +66,7 @@ class RunStats:
     tokens_output_total: int = 0
     cost_estimated_usd: float = 0.0
     consecutive_errors: int = 0
+    abort: bool = False  # Sprint 0: hard-stop global (spending cap o tope USD alcanzado)
     errors: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
@@ -235,9 +236,24 @@ async def _record_llm_metric(
 
 async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
                             pipeline_run_id: str, semaphore: asyncio.Semaphore,
-                            stats: RunStats, max_retries: int = 2) -> None:
-    """Procesa un spot. Errores se acumulan en `stats`, no se propagan."""
+                            stats: RunStats, max_retries: int = 2,
+                            max_cost_usd: float | None = None) -> None:
+    """Procesa un spot. Errores se acumulan en `stats`, no se propagan.
+
+    Sprint 0 (BUG-21): hard-stop de presupuesto. Si ya se alcanzó el tope USD o
+    se activó `stats.abort` (p.ej. spending cap del proveedor), el spot se drena
+    barato (spots_skipped++) sin llamar al LLM. Como asyncio es mono-hilo, el
+    chequeo de `cost_estimated_usd` es atómico respecto a otras corrutinas.
+    """
+    # Guard de presupuesto ANTES de tocar la DB o el LLM.
+    if stats.abort or (max_cost_usd is not None and stats.cost_estimated_usd >= max_cost_usd):
+        stats.spots_skipped += 1
+        return
     async with semaphore:
+        # Re-chequear tras adquirir el semáforo: el tope pudo cruzarse mientras esperábamos.
+        if stats.abort or (max_cost_usd is not None and stats.cost_estimated_usd >= max_cost_usd):
+            stats.spots_skipped += 1
+            return
         async with pool.acquire() as conn:
             try:
                 spot = await fetch_spot_for_enrichment(conn, spot_id)
@@ -308,6 +324,17 @@ async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
                 await asyncio.sleep(min(2 ** attempt, 10))
             except Exception as exc:
                 last_exc = exc
+                # Sprint 0 (BUG-21): spending cap / cuota agotada del proveedor →
+                # hard-stop GLOBAL, no reintentar. Marca stats.abort para que el
+                # resto de corrutinas se drenen sin gastar.
+                msg = str(exc).lower()
+                if ("resource_exhausted" in msg or "spending cap" in msg
+                        or "quota" in msg or "insufficient balance" in msg):
+                    stats.abort = True
+                    stats.errors.append(f"spot={spot_id} ABORT (spending/quota): {exc}")
+                    logger.error(f"[orchestrator] SPENDING CAP / QUOTA spot={spot_id}: {exc} — abortando run")
+                    stats.spots_failed += 1
+                    return
                 attempt += 1
                 stats.consecutive_errors += 1
                 logger.warning(f"[orchestrator] LLM/ingest error spot={spot_id} attempt={attempt}: {exc}")
@@ -329,6 +356,7 @@ async def run_enrichment(
     model: str | None = None,
     dry_run: bool = False,
     force_spot_ids: list[int] | None = None,
+    max_cost_usd: float | None = None,
 ) -> RunStats:
     """Punto de entrada del orquestador.
 
@@ -354,7 +382,8 @@ async def run_enrichment(
     forced_tag = f" forced={force_spot_ids}" if force_spot_ids else ""
     logger.info(
         f"[orchestrator] run={pipeline_run_id} provider={provider} model={model} "
-        f"countries={countries} concurrency={concurrency} candidates={len(spot_ids)}{forced_tag}"
+        f"countries={countries} concurrency={concurrency} candidates={len(spot_ids)} "
+        f"max_cost_usd={max_cost_usd if max_cost_usd is not None else 'NONE'}{forced_tag}"
     )
 
     if not spot_ids:
@@ -380,6 +409,7 @@ async def run_enrichment(
             provider=provider, model=model,
             pipeline_run_id=pipeline_run_id,
             semaphore=sem, stats=stats,
+            max_cost_usd=max_cost_usd,
         )
         for spot_id in spot_ids
     ]
@@ -395,9 +425,16 @@ async def run_enrichment(
             pass
 
     stats.completed_at = datetime.now(timezone.utc)
-    final_state = "succeeded" if stats.spots_failed == 0 else (
-        "partial" if stats.spots_succeeded > 0 else "failed"
-    )
+    if stats.abort:
+        final_state = "aborted"
+        logger.error(
+            f"[orchestrator] RUN ABORTADO (spending cap/quota) run={pipeline_run_id} "
+            f"cost=${stats.cost_estimated_usd:.4f}"
+        )
+    else:
+        final_state = "succeeded" if stats.spots_failed == 0 else (
+            "partial" if stats.spots_succeeded > 0 else "failed"
+        )
     if stats.batch_db_id is not None:
         async with pool.acquire() as conn:
             await _update_batch_row(conn, stats.batch_db_id, stats, final_state)

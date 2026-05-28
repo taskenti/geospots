@@ -80,6 +80,30 @@ class ValidatedAlert:
     raw: dict
 
 
+# T2.6 — vocabulario de relation_type para cross_references.
+RELATION_TYPE_VOCAB: set[str] = {
+    "alternative_overnight",   # otro sitio donde dormir cerca
+    "service_provider_for",    # este spot da servicios (agua/vaciado) al otro
+    "parking_for_visit",       # parking para visitar el otro lugar
+    "same_complex",            # parte del mismo complejo/área
+    "walking_distance",        # a poca distancia a pie
+}
+
+
+@dataclass
+class ValidatedCrossRef:
+    """T2.6 — referencia cruzada a OTRO lugar mencionado en una review.
+
+    El nombre `mentioned_name` se resuelve a un `related_spot_id` real en el
+    postproceso (`enrichment/relation_resolver.py`) vía geo + similitud de nombre.
+    """
+    mentioned_name: str
+    relation_type: str
+    review_id: int | None
+    excerpt: str
+    raw: dict
+
+
 # Vocabulario de alert_type aceptado por el parser.
 # Items fuera de este set se registran en errors y se descartan.
 ALERT_TYPE_VOCAB: set[str] = {
@@ -117,6 +141,9 @@ class ValidatedEnrichment:
     elevation_m: int | None = None
     terrain_type: str | None = None
     slope_degrees: int | None = None
+
+    # T2.6 — referencias cruzadas a otros lugares (resueltas a spot_id en postproceso)
+    cross_references: list[ValidatedCrossRef] = field(default_factory=list)
 
     # ---- v3 compat shims (read-only) — temporary, helps tests/ingest during migration
     @property
@@ -403,6 +430,7 @@ def parse_enrichment_response(text: str) -> ValidatedEnrichment:
     slope_degrees = _coerce_int_in_range(
         data.get("slope_degrees"), lo=0, hi=45, field="slope_degrees", errors=errors,
     )
+    cross_references = _parse_cross_references(data.get("cross_references"), errors)
 
     return ValidatedEnrichment(
         claims=claims,
@@ -419,6 +447,7 @@ def parse_enrichment_response(text: str) -> ValidatedEnrichment:
         elevation_m=elevation_m,
         terrain_type=terrain_type,
         slope_degrees=slope_degrees,
+        cross_references=cross_references,
     )
 
 
@@ -486,6 +515,38 @@ def _parse_alerts(raw: Any, errors: list[str]) -> list[ValidatedAlert]:
             confidence=float(conf),
             source_review_ids=review_ids,
             summary=summary,
+            raw=item,
+        ))
+    return out
+
+
+def _parse_cross_references(raw: Any, errors: list[str]) -> list[ValidatedCrossRef]:
+    """T2.6 — parsea `cross_references[]`. Cada item necesita `mentioned_name` y un
+    `relation_type` del vocabulario. `review_id` opcional (puede venir de la
+    descripción). Items inválidos se descartan con warning no fatal."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        errors.append("'cross_references' no es lista (ignorado)")
+        return []
+    out: list[ValidatedCrossRef] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            errors.append(f"cross_reference no es objeto: {item!r}")
+            continue
+        name = _optional_str(item.get("mentioned_name") or item.get("name"), max_len=200)
+        if not name:
+            errors.append("cross_reference sin mentioned_name (descartado)")
+            continue
+        rel = item.get("relation_type")
+        if not isinstance(rel, str) or rel.strip().lower() not in RELATION_TYPE_VOCAB:
+            errors.append(f"cross_reference.relation_type fuera de vocabulario: {rel!r}")
+            continue
+        out.append(ValidatedCrossRef(
+            mentioned_name=name,
+            relation_type=rel.strip().lower(),
+            review_id=_coerce_review_id(item.get("review_id")),
+            excerpt=str(item.get("excerpt") or "")[:500],
             raw=item,
         ))
     return out

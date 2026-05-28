@@ -11,7 +11,7 @@ from __future__ import annotations
 # v4: Spot-level prompts (English narrative, original-language excerpts)
 # ═══════════════════════════════════════════════════════════════
 
-ENRICHMENT_VERSION = 6  # v6 (T1.4 + T1.4b): alerts[] + spot_function/is_overnight_viable/authorization_status + spot_geo fields.
+ENRICHMENT_VERSION = 7  # v7 (T2.6): + cross_references[] → spot_relations. (v6: alerts[] + spot_function/is_overnight_viable/authorization_status + spot_geo fields.)
 # v6 deltas vs v5:
 #  - Nuevo array `alerts[]`: cada item describe una alerta tipada con valid_from,
 #    severity, confidence y source_review_ids. Persiste en tabla `spot_alerts`.
@@ -347,6 +347,26 @@ Emit ONLY if reviews/descriptions give a usable hint. Do NOT speculate.
   terrain_type         → free text ("grass", "gravel", "asphalt", "mixed", "dirt")
   slope_degrees        → int 0..45; 0=flat, 15=noticeable, 30=steep
 
+═══ CROSS REFERENCES (T2.6 — OPTIONAL, links to OTHER places) ═══
+
+Emit an entry in `cross_references[]` ONLY when a review clearly names ANOTHER
+distinct place near this spot (not this spot itself). Examples: "we slept at the
+aire and walked to the marina", "free parking 200m up by the chairlift", "the
+campsite next door lets you fill water". DO NOT invent — only if a review names it.
+
+  mentioned_name       → the name/description of the OTHER place, as written
+  relation_type        → one of:
+    'alternative_overnight'  — another place to sleep nearby
+    'service_provider_for'   — THIS spot provides services (water/dump) to the other
+    'parking_for_visit'      — parking used to visit the other place
+    'same_complex'           — part of the same site/complex (symmetric)
+    'walking_distance'       — a short walk away (symmetric)
+  review_id            → int from REVIEW_EVIDENCE if a review names it (else omit)
+  excerpt              → fragment in ORIGINAL language, ≤120 chars
+
+The name is resolved to a real spot later by geo proximity + name match; if it
+can't be matched, it is silently dropped. Prefer precision over recall.
+
 ═══ OUTPUT FORMAT (strict JSON, no markdown, no comments) ═══
 
 {{
@@ -364,6 +384,10 @@ Emit ONLY if reviews/descriptions give a usable hint. Do NOT speculate.
     {{"alert_type": "<vocab>", "severity": <0-1>, "valid_from_inferred": "YYYY-MM",
       "confidence": <0-1>, "source_review_ids": [<int>, ...],
       "summary": "<English ≤200 chars>"}}
+  ],
+  "cross_references": [
+    {{"mentioned_name": "<other place name>", "relation_type": "<vocab>",
+      "review_id": <int|omit>, "excerpt": "<fragment ≤120 chars>"}}
   ],
   "spot_function": "<vocab|omit>",
   "is_overnight_viable": <bool|omit>,
@@ -384,11 +408,13 @@ Hard rules:
     "services" / "description" are FORBIDDEN and will be discarded.
   - Every entry in `alerts[]` MUST have at least one int in `source_review_ids`.
     An alert without review evidence is DISCARDED.
-  - "spot_function", "is_overnight_viable", "authorization_status" and the geo
-    fields are OPTIONAL. If you have no evidence, OMIT them (do NOT emit null,
-    do NOT guess).
+  - "spot_function", "is_overnight_viable", "authorization_status", the geo
+    fields and "cross_references" are OPTIONAL. If you have no evidence, OMIT
+    them (do NOT emit null, do NOT guess).
+  - Every entry in `cross_references[]` MUST name a DIFFERENT place, with a
+    relation_type from the vocabulary. Self-references are forbidden.
   - If nothing extractable from reviews:
-    {{"review_claims":[],"contradicted_static_facts":[],"alerts":[],"summary":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
+    {{"review_claims":[],"contradicted_static_facts":[],"alerts":[],"cross_references":[],"summary":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
 """
 
 
@@ -410,7 +436,7 @@ Hard rules:
 # T1.2 (v5): reescritos al nuevo schema review_claims[] + contradicted_static_facts[].
 # Mantener el bloque BYTE-ESTABLE entre llamadas — cualquier cambio rompe el prefix cache.
 
-PROMPT_VERSION = "v6-alerts-function-1"   # T1.4 + T1.4b: alerts[], spot_function, is_overnight_viable, authorization_status, spot_geo fields.
+PROMPT_VERSION = "v7-cross-references-1"   # T2.6: cross_references[] → spot_relations. (v6: alerts[], spot_function, is_overnight_viable, authorization_status, spot_geo.)
 
 FEW_SHOT_EXAMPLES_V5 = """
 
@@ -429,7 +455,7 @@ INPUT (compact):
   </STATIC_CONTEXT>
   <REVIEW_EVIDENCE>
     [review_id=501] [2024-06] [park4night] ★★ Bruit insupportable, gros chantier à côté, gravats partout.
-    [review_id=502] [2026-04] [park4night] ★★★★★ Très calme, parfait pour la nuit.
+    [review_id=502] [2026-04] [park4night] ★★★★★ Très calme, parfait pour la nuit. On a marché jusqu'à la marina à 300m.
   </REVIEW_EVIDENCE>
 
 OUTPUT:
@@ -441,6 +467,9 @@ OUTPUT:
   "contradicted_static_facts": [],
   "alerts": [
     {"alert_type": "construction", "severity": 0.8, "valid_from_inferred": "2024-06", "confidence": 0.6, "source_review_ids": [501], "summary": "Heavy nearby construction reported in summer 2024; a 2026 visitor found it quiet — works may have ended but no second confirmation."}
+  ],
+  "cross_references": [
+    {"mentioned_name": "marina", "relation_type": "walking_distance", "review_id": 502, "excerpt": "On a marché jusqu'à la marina à 300m"}
   ],
   "spot_function": "overnight_primary",
   "is_overnight_viable": true,
@@ -474,6 +503,7 @@ OUTPUT:
     {"signal": "water_working", "value": false, "confidence": 0.8, "review_id": 601, "excerpt": "das Wasser am Hahn ist defekt"}
   ],
   "alerts": [],
+  "cross_references": [],
   "spot_function": "overnight_primary",
   "is_overnight_viable": true,
   "authorization_status": "official",
@@ -507,6 +537,7 @@ OUTPUT:
   "alerts": [
     {"alert_type": "construction", "severity": 0.9, "valid_from_inferred": "2025-08", "confidence": 0.55, "source_review_ids": [701], "summary": "Reported as a major construction site in summer 2025 (NL 'bouwput'); single review, severity inferred high from explicit warning."}
   ],
+  "cross_references": [],
   "summary": "A parking area near the beach. As of summer 2025 one visitor described it as a major construction site (Dutch: 'bouwput') and explicitly advised against staying.",
   "tags": ["beach", "construction", "avoid"],
   "best_for": [],

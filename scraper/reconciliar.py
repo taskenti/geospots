@@ -19,6 +19,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from loguru import logger
 
+from db import _limpiar_web
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Ranking hardcoded — usado como desempate cuando 2 fuentes empatan en
@@ -50,7 +52,15 @@ CREDIBILITY = {
     "descripcion_en":     ["google_maps", "thedyrt", "campendium", "freecampsites", "park4night", "stayfree", "campercontact", "bobilguiden", "campy", "agricamper", "wtmg", "vansite", "roadsurfer", "searchforsites", "campspace", "ioverlander"],
     "descripcion_fr":     ["google_maps", "campingcarpark", "park4night", "campingcarinfos", "agricamper", "wtmg", "campercontact", "vansite"],
     "descripcion_de":     ["google_maps", "promobil", "campy", "alpacacamping", "womostell", "park4night", "agricamper", "wtmg", "campercontact", "vansite", "roadsurfer"],
-    "master_rating":      ["google_maps", "campingcarpark", "promobil", "campercontact", "bobilguiden", "park4night", "thedyrt", "campendium", "freecampsites", "stayfree", "alpacacamping", "womostell", "areasac", "campingcarinfos", "agricamper", "campy", "vansite", "roadsurfer", "searchforsites", "furgovw", "wtmg", "campspace"],
+    "master_rating":      ["google_maps_api", "google_maps", "campingcarpark", "promobil", "campercontact", "bobilguiden", "park4night", "thedyrt", "campendium", "freecampsites", "stayfree", "alpacacamping", "womostell", "areasac", "campingcarinfos", "agricamper", "campy", "vansite", "roadsurfer", "searchforsites", "furgovw", "wtmg", "campspace"],
+    # ── Contacto ──────────────────────────────────────────────────────
+    # Telefono: fuentes oficiales/locales primero; Google como apoyo fiable.
+    "telefono":           ["areasac", "campingcarpark", "agricamper", "campercontact", "promobil", "google_maps_api", "park4night", "thedyrt", "campendium", "campy", "bobilguiden", "womostell", "searchforsites"],
+    # Web: la web oficial scrapeada por fuentes locales gana; Google de apoyo.
+    # _limpiar_web() se aplica en job_reconciliar para descartar dominios de agregador.
+    "web":                ["areasac", "agricamper", "campingcarpark", "google_maps_api", "promobil", "campercontact", "park4night", "thedyrt", "campendium", "campy", "bobilguiden", "womostell", "searchforsites"],
+    # Direccion formateada: solo Google la provee de momento.
+    "direccion_formateada": ["google_maps_api", "campingcarinfos", "campercontact", "areasac", "park4night"],
 }
 
 CONFLICT_FIELDS = ["gratuito", "precio_info", "agua_potable", "electricidad", "num_plazas", "tipo"]
@@ -354,8 +364,15 @@ async def job_reconciliar(pool) -> dict:
                     if val is KEEP_EXISTING:
                         stats["empates_tecnicos"] += 1
                         continue
-                    if val is not None:
-                        updates[campo] = val
+                    if val is None:
+                        continue
+                    # La web reconciliada puede ser un dominio de agregador
+                    # (park4night.com, etc.) → descartarla en vez de pisar la real.
+                    if campo == "web":
+                        val = _limpiar_web(val)
+                        if val is None:
+                            continue
+                    updates[campo] = val
 
                 conflictos = _detectar_conflictos(records)
 

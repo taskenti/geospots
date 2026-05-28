@@ -111,8 +111,12 @@ class GoogleMapsSource(AbstractSource):
             logger.error(f"[google_maps] Error normalizando item: {e}")
             return None
 
-    async def run(self, pool, config, log_id: int) -> dict:
-        """Pipeline principal: Busca, reconcilia, extrae opiniones y enriquece spots existentes."""
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
+        """Pipeline principal: Busca, reconcilia, extrae opiniones y enriquece spots existentes.
+
+        `job_id` se acepta por compatibilidad con scheduler.run_source (que siempre
+        lo pasa). Este scraper DOM no reporta progreso granular, pero ignorar el
+        kwarg causaría un TypeError al invocarlo desde la cola."""
         from db import (
             enriquecer_spot, upsert_source_record, upsert_review,
             finish_scraper_log, update_fuente_config

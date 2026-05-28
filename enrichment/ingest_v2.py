@@ -30,6 +30,7 @@ from loguru import logger
 from .gemini_response_parser import ValidatedClaim, ValidatedEnrichment
 from .observation_normalizer import normalize_claim
 from .prompts import ENRICHMENT_VERSION
+from .relation_resolver import ingest_cross_references
 from .signal_registry import STATIC_SIGNALS
 from .state_aggregator import recompute_spot_state
 from .state_resolver import AlertPayload, refresh_active_alert_types, upsert_alert
@@ -54,6 +55,8 @@ class IngestStats:
     alerts_upserted: int = 0
     spot_function_set: bool = False
     spot_geo_updated: bool = False
+    # T2.6
+    relations_upserted: int = 0
 
 
 def _extractor_name(provider: str) -> str:
@@ -393,10 +396,16 @@ async def ingest_spot_enrichment(
             conn, spot_id, parsed, llm_model=llm_model,
         )
 
+        # 7. T2.6 — cross_references → spot_relations (resuelve nombre→spot_id)
+        stats.relations_upserted = await ingest_cross_references(
+            conn, spot_id, parsed,
+        )
+
     logger.info(
         f"[ingest_v2] spot={spot_id} provider={provider} model={llm_model} "
         f"claims={stats.claims_inserted} obs={stats.observations_inserted} "
-        f"alerts={stats.alerts_upserted} func_set={stats.spot_function_set} "
-        f"geo_set={stats.spot_geo_updated} run={pipeline_run_id}"
+        f"alerts={stats.alerts_upserted} relations={stats.relations_upserted} "
+        f"func_set={stats.spot_function_set} geo_set={stats.spot_geo_updated} "
+        f"run={pipeline_run_id}"
     )
     return stats
