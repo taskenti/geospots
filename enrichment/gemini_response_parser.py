@@ -245,10 +245,24 @@ def _optional_str(value: Any, max_len: int = 1000) -> str | None:
 
 
 def parse_enrichment_response(text: str) -> ValidatedEnrichment:
-    """Parsea y valida la respuesta JSON de Gemini para enrichment v2.
+    """Parsea y valida la respuesta JSON del LLM para enrichment v2/v5.
+
+    v5 (T1.2): schema cambia de `claims[]` → `review_claims[]` + `contradicted_static_facts[]`.
+    Ambos arrays se fusionan en `ValidatedEnrichment.claims` para minimizar cambios
+    aguas abajo (ingest_v2 ya tolera review_id NULL → NOW()).
+
+    Reglas:
+      - `review_claims`: cada item DEBE tener `review_id` entero. Items con
+        review_id NULL (incluido "services"/"description" coerced to None) se
+        RECHAZAN — es el bug que T1.2 cierra.
+      - `contradicted_static_facts`: cada item DEBE tener `review_id` entero
+        (un contradiction sin review citada no es contradiction).
+      - Legacy `claims[]` (v4): se sigue aceptando como fallback transitorio —
+        si el LLM emite el schema viejo, no rompemos. Items con review_id NULL
+        se conservan (extractor_name='services'/'description' implicit).
 
     Lanza `ParseError` si el JSON no se puede parsear.
-    Errores de claims individuales se acumulan en `result.errors` (no fatal).
+    Errores de items individuales se acumulan en `result.errors` (no fatal).
     """
     if not text or not text.strip():
         raise ParseError("respuesta vacía")
@@ -263,19 +277,65 @@ def parse_enrichment_response(text: str) -> ValidatedEnrichment:
         raise ParseError(f"raíz no es objeto: {type(data).__name__}")
 
     errors: list[str] = []
-    raw_claims = data.get("claims", [])
-    if not isinstance(raw_claims, list):
-        errors.append("'claims' no es lista (ignorado)")
-        raw_claims = []
-
     claims: list[ValidatedClaim] = []
-    for raw in raw_claims:
+
+    # ── v5 schema: review_claims + contradicted_static_facts ────────────
+    has_v5_schema = "review_claims" in data or "contradicted_static_facts" in data
+
+    raw_review_claims = data.get("review_claims", []) if has_v5_schema else []
+    if not isinstance(raw_review_claims, list):
+        errors.append("'review_claims' no es lista (ignorado)")
+        raw_review_claims = []
+
+    for raw in raw_review_claims:
         if not isinstance(raw, dict):
-            errors.append(f"claim no es objeto: {raw!r}")
+            errors.append(f"review_claim no es objeto: {raw!r}")
             continue
         vc = _validate_claim(raw, errors)
-        if vc:
-            claims.append(vc)
+        if vc is None:
+            continue
+        # v5 hard rule: review_claims sin review_id concreto se rechazan.
+        if vc.review_id is None:
+            errors.append(
+                f"review_claim rechazado: signal={vc.signal} sin review_id "
+                f"(probable re-emisión de STATIC_CONTEXT)"
+            )
+            continue
+        claims.append(vc)
+
+    raw_contradictions = data.get("contradicted_static_facts", []) if has_v5_schema else []
+    if not isinstance(raw_contradictions, list):
+        errors.append("'contradicted_static_facts' no es lista (ignorado)")
+        raw_contradictions = []
+
+    for raw in raw_contradictions:
+        if not isinstance(raw, dict):
+            errors.append(f"contradicted_static_fact no es objeto: {raw!r}")
+            continue
+        vc = _validate_claim(raw, errors)
+        if vc is None:
+            continue
+        # contradiction sin review_id no es contradiction — la rechazamos.
+        if vc.review_id is None:
+            errors.append(
+                f"contradicted_static_fact rechazado: signal={vc.signal} sin review_id"
+            )
+            continue
+        claims.append(vc)
+
+    # ── Fallback legacy v4: campo `claims[]` ────────────────────────────
+    if not has_v5_schema:
+        raw_claims = data.get("claims", [])
+        if not isinstance(raw_claims, list):
+            errors.append("'claims' no es lista (ignorado)")
+            raw_claims = []
+        for raw in raw_claims:
+            if not isinstance(raw, dict):
+                errors.append(f"claim no es objeto: {raw!r}")
+                continue
+            vc = _validate_claim(raw, errors)
+            if vc:
+                claims.append(vc)
 
     # v4: prefer "summary" (English). Fallback to legacy "summary_en" or
     # "summary_es" for transitional robustness if a model still emits old keys.

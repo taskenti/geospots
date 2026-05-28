@@ -11,7 +11,21 @@ from __future__ import annotations
 # v4: Spot-level prompts (English narrative, original-language excerpts)
 # ═══════════════════════════════════════════════════════════════
 
-ENRICHMENT_VERSION = 4  # v4: English narrative; excerpts in original language; ignore-boilerplate rule; soft season rule.
+ENRICHMENT_VERSION = 5  # v5 (T1.2): split STATIC_CONTEXT vs REVIEW_EVIDENCE.
+# v5 deltas vs v4:
+#  - SERVICES block wrapped in <STATIC_CONTEXT readonly="true">…</STATIC_CONTEXT>.
+#  - REVIEWS block wrapped in <REVIEW_EVIDENCE>…</REVIEW_EVIDENCE>.
+#  - Output schema: `claims[]` (with review_id="services"/"description") is GONE.
+#    Now: `review_claims[]` (review_id ALWAYS an integer) and
+#    `contradicted_static_facts[]` (review_id ALWAYS an integer, signal whose
+#    STATIC_CONTEXT value is overridden by a concrete review).
+#  - LLM no longer re-emits structured services facts (water_working, electricity_working,
+#    dump_station_working, dog_friendly, perros…) as claims — those come from
+#    `jobs/ingest_spot_facts.py` (`scraped_facts_v1`). The LLM ONLY documents
+#    review-based signals AND contradictions of STATIC_CONTEXT.
+#  - Postprocesado (gemini_response_parser): cualquier review_claim con review_id NULL
+#    se rechaza (significa que el LLM no entendió la separación).
+# v4 (legacy): English narrative; excerpts in original language; ignore-boilerplate rule; soft season rule.
 
 # Signal catalog — concise; the LLM already knows the domain.
 # Keep in sync with db/schema.sql signal_types and enrichment/signal_registry.py.
@@ -57,15 +71,41 @@ TEXT (categorical):
 
 SYSTEM_PROMPT_V2 = f"""\
 You are an expert analyst of motorhome/campervan spots in Europe.
-You receive the context of ONE spot (metadata + structured services + descriptions
-+ reviews ordered by temporal relevance, most recent first) and return a JSON
-object with atomic claims, a narrative summary, and tags.
+You receive the context of ONE spot wrapped in two XML blocks:
+  <STATIC_CONTEXT readonly="true">  structured facts known about the spot
+                                    (services, prohibitions, capacity, contact).
+                                    Treat these as ALREADY KNOWN — do NOT re-emit
+                                    them as claims.
+  <REVIEW_EVIDENCE>                 free-text user reviews ordered by temporal
+                                    relevance (most recent first). Every claim
+                                    you emit must cite a concrete review_id from
+                                    this block.
+
+You return a JSON object with `review_claims`, `contradicted_static_facts`,
+a narrative summary, tags, best_for, best_season, avoid_season.
+
+═══ CRITICAL — CONTEXT vs EVIDENCE SEPARATION (v5) ═══
+
+A. STATIC_CONTEXT is the ground truth from data sources. You may USE it to
+   inform tags/summary/best_for, but you DO NOT re-emit it as a claim.
+   Example: STATIC_CONTEXT says "Drinking water: Yes" → DO NOT emit
+   `water_working=true` as a review_claim. The structured facts already feed
+   the database via a separate ingestion pipeline.
+
+B. REVIEW_EVIDENCE is where claims come from. Every `review_claim` MUST cite
+   an integer `review_id` from the <REVIEW_EVIDENCE> block. Claims without a
+   concrete review_id will be REJECTED by postprocessing.
+
+C. If a review explicitly contradicts a STATIC_CONTEXT fact (e.g. STATIC says
+   "Drinking water: Yes" but a recent review says "the tap is broken"), emit
+   one entry in `contradicted_static_facts` citing that review_id. This is the
+   ONLY way to override structured facts.
 
 ═══ EXTRACTION RULES ═══
 
 1. DO NOT invent. Only assert what the text literally supports or clearly implies.
-2. Every claim cites review_id, or "description" if from spot descriptions,
-   or "services" if from the structured SERVICES block.
+2. Every `review_claim` cites an integer `review_id` from <REVIEW_EVIDENCE>.
+   No "services", no "description", no null.
 3. Weight recent reviews more. If old and recent reviews contradict,
    prefer recent and mention the change in the summary.
 4. Negation, sarcasm and irony matter: "not very quiet" != "quiet".
@@ -119,20 +159,15 @@ object with atomic claims, a narrative summary, and tags.
     - If SERVICES provides altura_max_m: use it as anchor
       (>3.0m = good; 2.0-2.5m = very restrictive).
 
-13. water_working / electricity_working / dump_station_working (CRITICAL):
-    - ALWAYS emit these claims if the SERVICES block has a value (Yes/No),
-      regardless of whether reviews confirm. These are hard reconciled facts
-      from the sources. DO NOT skip them because "obvious".
-    - Default pattern (no contradiction in reviews):
-        SERVICES "Drinking water: Yes"  → water_working=true,  conf 0.85, review_id="services"
-        SERVICES "Drinking water: No"   → water_working=false, conf 0.9,  review_id="services"
-        SERVICES "Electricity: Yes"     → electricity_working=true, conf 0.85, review_id="services"
-        SERVICES "Grey water dump: Yes" or "Black water dump: Yes" → dump_station_working=true, conf 0.85, review_id="services"
-    - If a recent review CONTRADICTS SERVICES, the review wins:
-        SERVICES "Water: Yes" + review "the tap is broken" → false, conf 0.8, review_id=N
-    - If SERVICES doesn't mention the service AND no review mentions it → OMIT.
-    - At campings/aires with many services, all 3 working claims MUST appear
-      (one per service listed in SERVICES).
+13. water_working / electricity_working / dump_station_working (CRITICAL — v5 rule):
+    - DO NOT emit these as `review_claims` based on STATIC_CONTEXT alone.
+      The structured facts are already ingested separately.
+    - ONLY emit as a `review_claim` if a review REPORTS the actual state
+      (broken, working, queue, dirty water, etc.). In that case `review_id`
+      MUST be the integer id from <REVIEW_EVIDENCE>.
+    - If a review explicitly contradicts STATIC_CONTEXT (STATIC says Yes but
+      a recent review says the tap is broken / box empty / dump closed),
+      ALSO add an entry to `contradicted_static_facts` citing that review_id.
 
 14. police_risk / theft_risk:
     - ONE recent review with clear evidence is enough. Don't require consensus.
@@ -140,32 +175,27 @@ object with atomic claims, a narrative summary, and tags.
       "window smashed" → claim with conf 0.7-0.8.
     - Scales: 0=no risk, 1=high risk.
 
-15. dog_friendly / family_friendly from SERVICES (v4b):
-    - If SERVICES "Dogs allowed: Yes" → emit dog_friendly=true, conf 0.85,
-      review_id="services". If "Dogs allowed: No" → dog_friendly=false, conf 0.9.
-    - Reviews mentioning kids playing happily → family_friendly=true.
-    - These are hard facts when source declares them; don't re-infer.
+15. dog_friendly / family_friendly (v5 rule):
+    - dog_friendly: DO NOT emit from STATIC_CONTEXT alone. Only emit as a
+      `review_claim` if a review actually discusses dogs (welcoming, refused
+      at entrance, dog poop, dog-friendly atmosphere). review_id MUST be int.
+    - family_friendly: same — emit only when a review supports it
+      (kids playing, playground used, families staying) — citing review_id.
 
-16. SERVICES extras (lighting, security, booking, contact) (v4b):
-    - "Night lighting: Yes" → if reviews don't contradict, mildly improves
-      safety perception (consider it as context when scoring safety).
-    - "On-site security: Yes" → context for safety, NOT an automatic safety=1.
-    - "Booking required: Yes" → useful for summary, no claim emitted directly.
-    - Web/Phone/Email → DO NOT emit claims. Use them only in the summary if
-      relevant ("contact via web for booking") or skip entirely. Never put
-      contact info in tags or best_for.
+16. SERVICES extras (lighting, security, booking, contact) (v5 rule):
+    - These live in STATIC_CONTEXT and are NOT to be re-emitted as
+      `review_claims`. Use them as background to inform tags / best_for /
+      summary content, but the claim array only carries REVIEW-derived signals.
+    - Web/Phone/Email → never appear in tags, best_for, or claims. Mention
+      in summary only if directly relevant ("contact via web for booking").
 
-17. PROHIBITIONS / RISKS (v4c — CRITICAL):
-    - If SERVICES contains "PROHIBITIONS: ..." → these are HARD restrictions
-      from the source (e.g., "no fires", "vehicleMore9m", "no dogs",
-      "no late noise"). Reflect them:
-        * "vehicleMore9m" or similar → large_vehicle <= 0.4
-        * "dog" or "no dogs" in prohibitions → dog_friendly=false, conf 0.9
-        * presence of any prohibition mentioning "stay/overnight/camping
-          restrictions" → wild_camping_legal=false (override "free" hint)
-    - If SERVICES contains "RISKS: ..." → mention in summary if relevant.
-      Examples: "flood risk", "exposed to wind" → context for wind_exposure,
-      potentially safety.
+17. PROHIBITIONS / RISKS (v5 rule):
+    - PROHIBITIONS and RISKS live in STATIC_CONTEXT. Do NOT re-emit them as
+      `review_claims`. Reflect them in the summary if relevant and let them
+      inform tags.
+    - If a review explicitly contradicts a prohibition (sign says "no dogs"
+      but a recent review reports dogs welcomed by host), add an entry to
+      `contradicted_static_facts` citing that review_id.
 
 18. SERVICES extras v4c (pool, laundry, gas refill, activities, products):
     - "Pool: Yes" → may inform family_friendly or just stay in summary.
@@ -216,42 +246,59 @@ object with atomic claims, a narrative summary, and tags.
   it. ENGLISH ("spring", "summer", "autumn", "winter", or "june-august").
   If in doubt, OMIT (null).
 
-═══ TRICKY INTERPRETATION EXAMPLE ═══
+═══ TRICKY INTERPRETATION EXAMPLE (v5 schema) ═══
 
-If reviews say:
+If <REVIEW_EVIDENCE> contains:
   [review_id=42] "Parking gratuito junto al super, max 7m. Cartel de prohibido
    motorhomes en la entrada principal pero la gente aparca por detras."
   [review_id=43] "Nos despertaron policia a las 4am pidiendo que nos moviesemos."
   [review_id=44] "Lieben Dank Christa! Wir kommen gerne wieder. Übrigens, das
    Wasser am Hahn funktionierte nicht."
+and <STATIC_CONTEXT> has "Drinking water: Yes":
 
-Correct claims:
+Correct `review_claims`:
   - large_vehicle=0.3 (7m restriction), review_id=42, conf=0.8,
-    excerpt="max 7m"  (excerpt in Spanish — original language)
+    excerpt="max 7m"
   - wild_camping_legal=false (prohibition sign), review_id=42, conf=0.7,
     excerpt="Cartel de prohibido motorhomes"
   - police_risk=0.7 (recent intervention), review_id=43, conf=0.8,
     excerpt="Nos despertaron policia a las 4am"
-  - water_working=false (broken tap from review 44, overrides SERVICES if Yes),
-    review_id=44, conf=0.8, excerpt="das Wasser am Hahn funktionierte nicht"
-    Note: review 44 is mostly politeness BUT the working detail counts.
+
+Correct `contradicted_static_facts`:
+  - {{"signal": "water_working", "value": false, "review_id": 44, "confidence": 0.8,
+     "excerpt": "das Wasser am Hahn funktionierte nicht"}}
+    Note: review 44 is mostly politeness BUT the working detail counts AND
+    it directly contradicts STATIC_CONTEXT "Drinking water: Yes".
+
+DO NOT emit a separate `review_claim` for water_working — `contradicted_static_facts`
+is the canonical channel for STATIC-vs-REVIEW overrides.
 
 ═══ OUTPUT FORMAT (strict JSON, no markdown, no comments) ═══
 
 {{
-  "claims": [
+  "review_claims": [
     {{"signal": "<id>", "value": <num|bool|text>, "confidence": <0-1>,
-      "review_id": <int|"description"|"services">,
+      "review_id": <int from REVIEW_EVIDENCE>,
       "excerpt": "<fragment in ORIGINAL language, <=120 chars>"}}
   ],
-  "summary": "<English string, 2-3 sentences>",
+  "contradicted_static_facts": [
+    {{"signal": "<id>", "value": <num|bool|text>, "confidence": <0-1>,
+      "review_id": <int from REVIEW_EVIDENCE>,
+      "excerpt": "<fragment in ORIGINAL language, <=120 chars>"}}
+  ],
+  "summary": "<English string>",
   "tags": ["<english-tag>", ...],
   "best_for": ["<english-profile>", ...],
   "best_season": "<english string|null>",
   "avoid_season": "<english string|null>"
 }}
 
-If nothing extractable: {{"claims":[],"summary":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
+Hard rules:
+  - Every entry in `review_claims` AND `contradicted_static_facts` MUST have an
+    integer `review_id` pointing to a row in <REVIEW_EVIDENCE>. Strings like
+    "services" / "description" are FORBIDDEN and will be discarded.
+  - If nothing extractable from reviews:
+    {{"review_claims":[],"contradicted_static_facts":[],"summary":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
 """
 
 
@@ -267,60 +314,70 @@ If nothing extractable: {{"claims":[],"summary":null,"tags":[],"best_for":[],"be
 #
 # Los 3 ejemplos cubren las 3 patologías detectadas en la auditoría pre-batch:
 #   1. Construcción documentada en review vieja vs. tranquilidad en review reciente.
-#   2. SERVICES (datos estructurados de la fuente) contradichos por una review.
+#   2. STATIC_CONTEXT contradicho por una review (canal `contradicted_static_facts`).
 #   3. Review multilingüe con palabra culturalmente cargada (NL "bouwput").
 #
+# T1.2 (v5): reescritos al nuevo schema review_claims[] + contradicted_static_facts[].
 # Mantener el bloque BYTE-ESTABLE entre llamadas — cualquier cambio rompe el prefix cache.
 
-PROMPT_VERSION = "v4-fewshot-1"   # T1.1: introducción de FEW_SHOT_EXAMPLES_V4
+PROMPT_VERSION = "v5-static-review-split-1"   # T1.2: STATIC_CONTEXT vs REVIEW_EVIDENCE split + nuevo schema output.
 
-FEW_SHOT_EXAMPLES_V4 = """
+FEW_SHOT_EXAMPLES_V5 = """
 
 ═══ FEW-SHOT EXAMPLES (canonical, do not paraphrase across calls) ═══
 
 EXAMPLE 1 — Older review reports construction; recent review reports quiet.
 The summary MUST mention the transition (do not invert chronology — older
 issues remain relevant unless explicitly contradicted by recent visits).
+Note: no claim is emitted for water/dump/electricity — those live in
+STATIC_CONTEXT and are NOT re-emitted as review_claims.
 
 INPUT (compact):
   SPOT id=99001 | Name: "Aire de la rivière" | Type: aire_ac | Country: FR
+  <STATIC_CONTEXT readonly="true">
   SERVICES: Drinking water: Yes | Grey water dump: Yes | Electricity: No | Free: Yes
-  REVIEWS:
+  </STATIC_CONTEXT>
+  <REVIEW_EVIDENCE>
     [review_id=501] [2024-06] [park4night] ★★ Bruit insupportable, gros chantier à côté, gravats partout.
-    [review_id=502] [2026-04] [park4night] ★★★★★ Très calme, parfait pour la nuit. L'eau fonctionne.
+    [review_id=502] [2026-04] [park4night] ★★★★★ Très calme, parfait pour la nuit.
+  </REVIEW_EVIDENCE>
 
 OUTPUT:
 {
-  "claims": [
-    {"signal": "quietness", "value": 0.6, "confidence": 0.7, "review_id": 502, "excerpt": "Très calme, parfait pour la nuit"},
-    {"signal": "water_working", "value": true, "confidence": 0.85, "review_id": "services", "excerpt": "Drinking water: Yes"},
-    {"signal": "electricity_working", "value": false, "confidence": 0.9, "review_id": "services", "excerpt": "Electricity: No"},
-    {"signal": "dump_station_working", "value": true, "confidence": 0.85, "review_id": "services", "excerpt": "Grey water dump: Yes"}
+  "review_claims": [
+    {"signal": "noise", "value": 0.8, "confidence": 0.75, "review_id": 501, "excerpt": "Bruit insupportable, gros chantier à côté"},
+    {"signal": "quietness", "value": 0.6, "confidence": 0.7, "review_id": 502, "excerpt": "Très calme, parfait pour la nuit"}
   ],
-  "summary": "Free aire AC by the river with potable water and grey water dump but no electricity. A 2024 review reported heavy nearby construction and noise; a 2026 visit found the area very quiet, suggesting the works have ended.",
+  "contradicted_static_facts": [],
+  "summary": "Free aire AC by the river with potable water and grey water dump but no electricity. A 2024 visitor reported heavy nearby construction and unbearable noise; a 2026 visit found the area very quiet, suggesting the works have ended.",
   "tags": ["free", "aire", "river", "water", "quiet"],
   "best_for": ["overnighting", "budget travel"],
   "best_season": null,
   "avoid_season": null
 }
 
-EXAMPLE 2 — SERVICES says water=Yes; a recent review says the tap is broken.
-The review overrides the structured datum. Cite the structured field for the
-unaffected services, cite the review for the contradicted one.
+EXAMPLE 2 — STATIC_CONTEXT says water=Yes; a recent review says the tap is broken.
+The contradiction goes to `contradicted_static_facts`, NOT to review_claims.
+review_claims captures the (positive) atmosphere signal from the same review.
 
 INPUT (compact):
   SPOT id=99002 | Name: "Stellplatz am Wald" | Type: aire_ac | Country: DE
+  <STATIC_CONTEXT readonly="true">
   SERVICES: Drinking water: Yes | Electricity: Yes | Free: No | Approx price: ~10€
-  REVIEWS:
+  </STATIC_CONTEXT>
+  <REVIEW_EVIDENCE>
     [review_id=601] [2026-03] [campercontact] ★★★ Schöner Stellplatz, aber das Wasser am Hahn ist defekt.
+  </REVIEW_EVIDENCE>
 
 OUTPUT:
 {
-  "claims": [
-    {"signal": "water_working", "value": false, "confidence": 0.8, "review_id": 601, "excerpt": "das Wasser am Hahn ist defekt"},
-    {"signal": "electricity_working", "value": true, "confidence": 0.85, "review_id": "services", "excerpt": "Electricity: Yes"}
+  "review_claims": [
+    {"signal": "beauty", "value": 0.7, "confidence": 0.6, "review_id": 601, "excerpt": "Schöner Stellplatz"}
   ],
-  "summary": "Paid stellplatz (around 10€) next to a forest, with electricity. A recent visitor reports the drinking water tap is broken.",
+  "contradicted_static_facts": [
+    {"signal": "water_working", "value": false, "confidence": 0.8, "review_id": 601, "excerpt": "das Wasser am Hahn ist defekt"}
+  ],
+  "summary": "Paid stellplatz (around 10€) next to a forest, with electricity. A recent visitor (March 2026) describes it as a pleasant spot but reports the drinking water tap is broken.",
   "tags": ["paid", "stellplatz", "forest", "electricity"],
   "best_for": ["overnighting"],
   "best_season": null,
@@ -333,15 +390,20 @@ negative connotation in NL (not a mild concern — visitor warns against it).
 
 INPUT (compact):
   SPOT id=99003 | Name: "Strandparkeerplaats" | Type: parking | Country: NL
-  REVIEWS:
+  <STATIC_CONTEXT readonly="true">
+  (no structured services on file)
+  </STATIC_CONTEXT>
+  <REVIEW_EVIDENCE>
     [review_id=701] [2025-08] [campercontact] ★ Dit deel is op dit moment één grote bouwput, niet aan te raden.
+  </REVIEW_EVIDENCE>
 
 OUTPUT:
 {
-  "claims": [
+  "review_claims": [
     {"signal": "beauty", "value": 0.2, "confidence": 0.7, "review_id": 701, "excerpt": "één grote bouwput"},
     {"signal": "noise", "value": 0.7, "confidence": 0.6, "review_id": 701, "excerpt": "één grote bouwput, niet aan te raden"}
   ],
+  "contradicted_static_facts": [],
   "summary": "A parking area near the beach. As of summer 2025 one visitor described it as a major construction site (Dutch: 'bouwput') and explicitly advised against staying.",
   "tags": ["beach", "construction", "avoid"],
   "best_for": [],
@@ -353,7 +415,7 @@ OUTPUT:
 """
 
 # Concatenar few-shots al system prompt (mantener byte-estable entre llamadas).
-SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V2 + FEW_SHOT_EXAMPLES_V4
+SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V2 + FEW_SHOT_EXAMPLES_V5
 
 
 def _fmt_bool_en(b) -> str:
@@ -417,7 +479,13 @@ def _build_servicios_block(spot: dict) -> list[str]:
     ):
         return []
 
-    out: list[str] = ["SERVICES (structured facts from sources — do not re-infer):"]
+    # T1.2: bloque envuelto en XML tags. Marker semántico para que el LLM no re-emita
+    # estos datos como review_claims. Cierre lo añade el helper externo en
+    # build_spot_user_prompt — aquí solo abrimos.
+    out: list[str] = [
+        '<STATIC_CONTEXT readonly="true">',
+        "SERVICES (structured facts from sources — do not re-emit as review_claims):",
+    ]
 
     # Row 1: price
     price_parts = []
@@ -598,6 +666,7 @@ def _build_servicios_block(spot: dict) -> list[str]:
     if contact_parts:
         out.append("  " + " | ".join(contact_parts))
 
+    out.append("</STATIC_CONTEXT>")
     out.append("")  # trailing blank line
     return out
 
@@ -644,7 +713,10 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
         lines.extend(desc_blocks)
         lines.append("")
 
+    # T1.2: bloque envuelto en <REVIEW_EVIDENCE>. Cada claim de la respuesta
+    # debe citar un review_id que aparezca DENTRO de este bloque.
     if reviews:
+        lines.append("<REVIEW_EVIDENCE>")
         lines.append(f"REVIEWS (n={len(reviews)}, ordered by temporal relevance):")
         for r in reviews:
             fecha = r.get("fecha")
@@ -653,8 +725,11 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
             source = r.get("source") or "?"
             texto = (r.get("texto_limpio") or r.get("texto") or r.get("texto_original") or "").strip().replace("\n", " ")
             lines.append(f"[review_id={r['id']}] [{fecha_str}] [{source}] {stars} {texto}")
+        lines.append("</REVIEW_EVIDENCE>")
     else:
-        lines.append("REVIEWS: (none available — extract only from descriptions and services)")
+        lines.append("<REVIEW_EVIDENCE>")
+        lines.append("(no reviews available — return empty review_claims and contradicted_static_facts arrays; use only descriptions/services to write the summary)")
+        lines.append("</REVIEW_EVIDENCE>")
 
     # v4d: richness-aware summary instruction (computed in spot_packager)
     # We inject it here so the LLM tailors `summary` length to the data volume.

@@ -671,16 +671,26 @@ A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly
 
 ## Sprints
 
-### Sprint 0 — Preparación (2 días)
-- T0.1 Lectura código → `docs/fase-3-hardening-codebase-notes.md`
-- T0.2 Regression suite v1 (20-30 casos, 3 niveles)
-- T0.3 Sección "Inmutables vs regenerables" en CLAUDE.md
+### Sprint 0 — Preparación (2 días) ✅ COMPLETO
+- ✅ T0.1 Lectura código → `docs/fase-3-hardening-codebase-notes.md`
+- ✅ T0.2 Regression suite v1 → `tests/regression/semantic_suite.py` (20 casos, 3 tiers; baseline Grau Roig 85057: 1 hard fail chronology_ok, 1 band warn, 3 skips pendientes T1.4)
+- ✅ T0.3 Sección "Inmutables vs regenerables" en CLAUDE.md
 
 ### Sprint 1 — Prompt + redundancia (1.5 días)
-- T1.1 Prompt tail-loading + few-shot estables
-  - Incluye: subir `max_tokens` de 1500 → 2500 en `call_deepseek_sync` (riesgo parse truncado en spots `very_rich`)
-- T1.2 STATIC_CONTEXT vs REVIEW_EVIDENCE
-- T1.3 CURRENT_DATE + age
+- ✅ T1.1 Prompt tail-loading + few-shot estables
+  - `FEW_SHOT_EXAMPLES_V4` + `PROMPT_VERSION = "v4-fewshot-1"` añadidos a `enrichment/prompts.py`
+  - Marcadores `=== SPOT DATA ===` / `=== END SPOT DATA ===` + directriz anti-recency-bias añadidos a `build_spot_user_prompt`
+  - `max_tokens` 1500 → 2500 en `call_deepseek_sync` (`enrichment/llm_provider.py`)
+  - `ENRICHMENT_VERSION` queda en 4 (se bumpa en T1.2 que cambia el schema de output)
+- ✅ T1.2 STATIC_CONTEXT vs REVIEW_EVIDENCE
+  - `ENRICHMENT_VERSION` 4 → 5 (fuerza re-enrichment en el siguiente batch)
+  - `PROMPT_VERSION` "v4-fewshot-1" → "v5-static-review-split-1" (sha256[:16] `c2f6c776306893fb`, 17478 bytes)
+  - SYSTEM_PROMPT_V2: nueva sección "CONTEXT vs EVIDENCE SEPARATION" con reglas A/B/C. Reglas 13/15/16/17 reescritas para NO re-emitir SERVICES como review_claims (esos datos ya entran vía `scraped_facts_v1`). OUTPUT FORMAT: `claims[]` → `review_claims[]` + `contradicted_static_facts[]`. Few-shots reescritos al nuevo schema.
+  - `_build_servicios_block` wrap en `<STATIC_CONTEXT readonly="true">…</STATIC_CONTEXT>`
+  - `build_spot_user_prompt` wrap reviews en `<REVIEW_EVIDENCE>…</REVIEW_EVIDENCE>`
+  - `gemini_response_parser.parse_enrichment_response`: parsea v5 schema, **rechaza** `review_claims` con `review_id NULL`, también rechaza `contradicted_static_facts` sin review_id. Fallback legacy v4 mantenido para transición.
+  - `ingest_v2.py` sin cambios (ya tolera review_id NULL → NOW() — solo relevante para legacy fallback).
+- T1.3 CURRENT_DATE + age  ← **SIGUIENTE**
 
 ### Sprint 2 — Estado operacional + clasificación funcional (2 días)
 - T1.4 `spot_alerts` + resolver determinista
