@@ -23,6 +23,7 @@ el índice — kebab-case, lowercase, sin sufijos.
 
 from __future__ import annotations
 
+import difflib
 import re
 from datetime import datetime, timezone
 
@@ -200,6 +201,41 @@ async def list_top_unknown(conn, *, limit: int = 20, reviewed: bool = False) -> 
         reviewed, limit,
     )
     return [dict(r) for r in rows]
+
+
+async def unknown_tags_stats(conn) -> dict:
+    """Resumen para la cabecera del reporte mensual (T2.4)."""
+    row = await conn.fetchrow(
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE reviewed) AS reviewed,
+               COUNT(*) FILTER (WHERE NOT reviewed) AS pending,
+               COALESCE(SUM(occurrence_count) FILTER (WHERE NOT reviewed), 0) AS pending_occurrences
+        FROM unknown_tags
+        """
+    )
+    return dict(row) if row else {"total": 0, "reviewed": 0, "pending": 0, "pending_occurrences": 0}
+
+
+def suggest_canonical(tag: str, index: dict[str, str], *, cutoff: float = 0.72) -> str | None:
+    """Sugiere el canonical_id más cercano a `tag` por similitud difusa (T2.4).
+
+    Acelera la revisión humana: propone si un unknown es probablemente un typo o
+    variante de un canonical existente. Compara contra todas las claves del índice
+    (canonicals + aliases ya normalizados) y devuelve el canonical_id de la mejor
+    coincidencia por encima de `cutoff`, o None si nada se acerca.
+    """
+    norm = normalize_raw_tag(tag)
+    if not norm or not index:
+        return None
+    # Match exacto sería un canonical conocido (no debería estar en unknowns), pero
+    # por robustez lo cubrimos.
+    if norm in index:
+        return index[norm]
+    matches = difflib.get_close_matches(norm, list(index.keys()), n=1, cutoff=cutoff)
+    if not matches:
+        return None
+    return index[matches[0]]
 
 
 async def promote_unknown_to_canonical(

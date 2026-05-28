@@ -34,13 +34,11 @@ from enrichment.state_resolver import (
 
 
 async def _connect() -> asyncpg.Connection:
-    dsn = os.environ.get("DATABASE_URL") or (
-        f"postgresql://{os.environ.get('POSTGRES_USER','geospots')}:"
-        f"{os.environ.get('POSTGRES_PASSWORD','geospots')}@"
-        f"{os.environ.get('POSTGRES_HOST','db')}:"
-        f"{os.environ.get('POSTGRES_PORT','5432')}/"
-        f"{os.environ.get('POSTGRES_DB','geospots')}"
-    )
+    # Reusa el resolver canónico de credenciales (carga .env + DB_HOST/PORT/...).
+    # El fallback propio con password 'geospots' fallaba contra la DB real — bug
+    # corregido reusando worker._dsn (mismo fix que review_unknown_tags, T2.4).
+    from enrichment.worker import _dsn
+    dsn = os.environ.get("DATABASE_URL") or _dsn()
     return await asyncpg.connect(dsn=dsn)
 
 

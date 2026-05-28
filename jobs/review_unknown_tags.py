@@ -25,39 +25,64 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from datetime import datetime, timezone
 
 import asyncpg
 from loguru import logger
 
 from enrichment.tag_canonicalizer import (
-    list_top_unknown,
-    promote_unknown_to_canonical,
     invalidate_canonical_index,
+    list_top_unknown,
+    load_canonical_index,
+    promote_unknown_to_canonical,
+    suggest_canonical,
+    unknown_tags_stats,
 )
 
 
 async def _connect() -> asyncpg.Connection:
-    dsn = os.environ.get("DATABASE_URL") or (
-        f"postgresql://{os.environ.get('POSTGRES_USER','geospots')}:"
-        f"{os.environ.get('POSTGRES_PASSWORD','geospots')}@"
-        f"{os.environ.get('POSTGRES_HOST','db')}:"
-        f"{os.environ.get('POSTGRES_PORT','5432')}/"
-        f"{os.environ.get('POSTGRES_DB','geospots')}"
-    )
+    # Reusa el resolver canónico de credenciales (carga .env + DB_HOST/PORT/...).
+    # Antes este job tenía su propio fallback con password 'geospots' que fallaba
+    # contra la DB real — bug corregido reusando worker._dsn (T2.4).
+    from enrichment.worker import _dsn
+    dsn = os.environ.get("DATABASE_URL") or _dsn()
     return await asyncpg.connect(dsn=dsn)
 
 
-def _fmt_markdown(rows: list[dict]) -> str:
+def _fmt_markdown(rows: list[dict], suggestions: dict[str, str] | None = None) -> str:
     if not rows:
         return "_No hay unknown_tags pendientes._\n"
-    out = ["| tag | count | first_seen | last_seen |", "|---|---|---|---|"]
+    suggestions = suggestions or {}
+    out = [
+        "| tag | count | first_seen | last_seen | suggested canonical |",
+        "|---|---|---|---|---|",
+    ]
     for r in rows:
+        sug = suggestions.get(r["tag"])
+        sug_cell = f"`{sug}`" if sug else "—"
         out.append(
             f"| `{r['tag']}` | {r['occurrence_count']} | "
             f"{r['first_seen'].strftime('%Y-%m-%d')} | "
-            f"{r['last_seen'].strftime('%Y-%m-%d')} |"
+            f"{r['last_seen'].strftime('%Y-%m-%d')} | {sug_cell} |"
         )
     return "\n".join(out) + "\n"
+
+
+def _fmt_header(stats: dict, top: int) -> str:
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"# Unknown tags — revisión mensual (T2.4)\n\n"
+        f"_Generado {generated}_\n\n"
+        f"- **Pendientes:** {stats.get('pending', 0)} tags "
+        f"({stats.get('pending_occurrences', 0)} ocurrencias)\n"
+        f"- **Ya revisados:** {stats.get('reviewed', 0)}\n"
+        f"- **Total histórico:** {stats.get('total', 0)}\n\n"
+        f"Mostrando top {top} por frecuencia. La columna *suggested canonical* es "
+        f"una pista difusa (typos/variantes); verificar antes de promover.\n\n"
+        f"Promover:  `python -m jobs.review_unknown_tags --promote '<tag>' "
+        f"[--as-alias-of <canonical>] [--category <cat>]`\n"
+        f"Descartar: `python -m jobs.review_unknown_tags --dismiss '<tag>'`\n"
+    )
 
 
 async def run(args) -> int:
@@ -83,9 +108,26 @@ async def run(args) -> int:
             )
             logger.info(f"[unknown_tags] descartado '{args.dismiss}' → {res}")
 
+        stats = await unknown_tags_stats(conn)
         rows = await list_top_unknown(conn, limit=args.top, reviewed=False)
-        print(f"# Top {args.top} unknown tags (reviewed=FALSE)\n")
-        print(_fmt_markdown(rows))
+
+        # Sugerencia difusa de canonical por tag (acelera la revisión humana).
+        suggestions: dict[str, str] = {}
+        if rows:
+            index = await load_canonical_index(conn)
+            for r in rows:
+                sug = suggest_canonical(r["tag"], index)
+                if sug:
+                    suggestions[r["tag"]] = sug
+
+        report = _fmt_header(stats, args.top) + "\n" + _fmt_markdown(rows, suggestions)
+        print(report)
+
+        if args.out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(report)
+            logger.info(f"[unknown_tags] reporte escrito en {args.out}")
         return 0
     finally:
         await conn.close()
@@ -102,6 +144,8 @@ def main():
                    help="Categoría opcional al crear un canonical nuevo.")
     p.add_argument("--dismiss", type=str, default=None,
                    help="Marca el tag como reviewed=TRUE sin promover (ruido).")
+    p.add_argument("--out", type=str, default=None,
+                   help="Escribe también el reporte markdown a este fichero (archivo mensual).")
     args = p.parse_args()
     exit(asyncio.run(run(args)))
 

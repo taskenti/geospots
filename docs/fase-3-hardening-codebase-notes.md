@@ -191,3 +191,28 @@ usando los locator hints incluidos en cada caso.
   `beauty_score` 0.601→0.630 (obs recientes pesan más, esperado), `quietness` estable.
 - **Test:** `tests/test_signal_half_life.py` — boost en t=0/t=window/t≫, decay a 1 HL = 0.5,
   `observation_weight_at` = decay×boost, gate condicional (volátil/persistente/vacío/elapsed=0).
+
+### T2.4 — Job mensual de revisión de unknown_tags ✅ (2026-05-28)
+
+- **El job YA EXISTÍA** desde T1.5 (`jobs/review_unknown_tags.py`: listar top, promover,
+  dismiss). T2.4 lo convierte en herramienta de revisión mensual real.
+- **Net-new — stats de cabecera** (`tag_canonicalizer.unknown_tags_stats`):
+  `COUNT total/reviewed/pending` + `SUM(occurrence_count) FILTER (WHERE NOT reviewed)`.
+  Alimenta `_fmt_header` con pendientes/revisados/total + instrucciones de uso.
+- **Net-new — sugerencia difusa** (`tag_canonicalizer.suggest_canonical`, `import difflib`):
+  - `suggest_canonical(tag, index, cutoff=0.72)` → match exacto si está en el índice;
+    si no, `difflib.get_close_matches(n=1, cutoff)` contra canonicals+aliases normalizados;
+    devuelve el `canonical_id` destino o None. Acelera la revisión humana (typos/variantes).
+  - Columna *suggested canonical* en `_fmt_markdown`; el reporte propone pero no promueve.
+- **Net-new — archivado** (`--out`): escribe el markdown a fichero (os.makedirs + utf-8)
+  para histórico mensual. Verificado: `docs/reports/unknown_tags_2026-05.md` (134 pendientes
+  / 311 ocurrencias; sugerencias correctas: mountain-view→mountain, no-overnight→overnighting,
+  bus→busy).
+- **Bug pre-existente reparado (patrón de actuación):** `_connect()` de
+  `review_unknown_tags.py` Y `nightly_alert_decay.py` tenían su propio fallback de DSN con
+  password literal `'geospots'` / host `'db'` / port `5432`, que fallaba contra la DB real
+  (`InvalidPasswordError`). Ambos reusan ahora `worker._dsn()` (carga .env), igual que el
+  resto del pipeline. `DATABASE_URL` sigue teniendo prioridad si está definida.
+- **Test:** `tests/test_unknown_tag_suggest.py` — typos (quieet→quiet, constructio→construction),
+  alias exacto (mountain-view→mountain), sin parecido→None, vacío→None, índice vacío→None,
+  cutoff alto descarta débiles.
