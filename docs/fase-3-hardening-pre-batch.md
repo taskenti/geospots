@@ -719,7 +719,14 @@ A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly
   - `active_alert_types` se mantiene fuera del UPSERT de `recompute_spot_state`/`update_semantic_state` (queda intacto al recompute), y se refresca explícitamente vía `refresh_active_alert_types` tras cada upsert de alert.
 
 **ENRICHMENT_VERSION 5→6** (nuevos campos top-level + alerts[]). **PROMPT_VERSION** → `v6-alerts-function-1` (sha256[:16] = `5867ea31b50d3533`, 22271 bytes).
-- T1.5 Canonicalizador + unknown_tags
+- ✅ T1.5 Canonicalizador + unknown_tags
+  - Migración `db/migration_phase3_v6b.sql` aplicada: `canonical_tags(canonical_id PK, aliases TEXT[], category)` + `unknown_tags(tag PK, first_seen, last_seen, occurrence_count, reviewed)` + GIN sobre aliases + index parcial sobre `occurrence_count` (reviewed=FALSE).
+  - **Seed de 73 canonicals** con ~325 entradas totales (canonical + alias) en 9 categorías: pricing/type/location/atmosphere/services/people/activity/issue/other. Cubre las palabras culturalmente cargadas multilingües ("bouwput"→construction, "baustelle"→construction, "gratis"→free, etc.).
+  - `enrichment/tag_canonicalizer.py` (nuevo): `normalize_raw_tag` (lowercase/kebab/strip non-alnum), índice cacheado en memoria (`load_canonical_index` se carga UNA vez por proceso), `canonicalize_batch(conn, tags)` → `(canonical_ids, unknown_raws)` + UPSERT idempotente en `unknown_tags` (contador sube en cada llamada). Helpers `list_top_unknown`, `promote_unknown_to_canonical`, `invalidate_canonical_index`.
+  - `enrichment/ingest_v2._update_narrative_and_materialized`: filtra `parsed.tags` por canonical antes del UPDATE. Tags fuera de vocab van a `unknown_tags` y NO se persisten en `spot_semantic_state.tags`.
+  - `jobs/review_unknown_tags.py` (nuevo): CLI mensual con `--top N` (markdown table), `--promote 'tag' [--as-alias-of canonical] [--category cat]`, `--dismiss 'tag'`. Invalida caché tras promover.
+  - Regression suite: la query SQL de `_unknown_tag_count` ahora replica `normalize_raw_tag` para absorber tags legacy con espacios/mayúsculas. Caso `canonical_tags_grau_roig` pasa OK con el snapshot pre-v6.
+  - Smoke OK: alias resolution multilingüe (gratis→free, bouwput→construction, snowboarding→skiing), batch dedup, idempotencia en contador, cleanup.
 - **Una sola migración `db/migration_phase3_v6.sql`** cubre T1.4+T1.4b+T1.4c+T1.5+T1.6+T1.8+T2.7: `spot_alerts`, columnas de `spots`, columnas de `spot_semantic_state`, `spot_geo.source`, `canonical_tags`, `unknown_tags`, `llm_call_metrics`, `semantic_fingerprint`, trigger stale.
 
 ### Sprint 3 — Invalidación + idempotencia + observabilidad (1 día)

@@ -746,7 +746,10 @@ async def _load_state_for_case(conn, spot_id: int) -> dict:
     except asyncpg.PostgresError:
         state["_claims_review_id_null_non_scraped"] = None
 
-    # T1.5: tags no canónicos (sólo aplica si existe la tabla canonical_tags)
+    # T1.5: tags no canónicos (sólo aplica si existe la tabla canonical_tags).
+    # Replica el normalize_raw_tag de enrichment/tag_canonicalizer.py:
+    #   lower → spaces/underscores/slashes a guiones → strip de caracteres no [a-z0-9-]
+    # Esto absorbe tanto los tags PRE-v6 (con espacios y mayúsculas) como los nuevos.
     try:
         tags = state.get("tags") or []
         if isinstance(tags, str):
@@ -754,11 +757,22 @@ async def _load_state_for_case(conn, spot_id: int) -> dict:
         if tags:
             unknown = await conn.fetchval(
                 """
-                SELECT COUNT(*) FROM unnest($1::text[]) AS t(tag)
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM canonical_tags ct
-                    WHERE ct.canonical_id = t.tag OR t.tag = ANY(ct.aliases)
+                WITH normalized AS (
+                    SELECT trim(both '-' from
+                              regexp_replace(
+                                regexp_replace(lower(tag), '[\\s_/]+', '-', 'g'),
+                                '[^a-z0-9\\-]', '', 'g'
+                              )
+                           ) AS n
+                    FROM unnest($1::text[]) AS t(tag)
                 )
+                SELECT COUNT(*) FROM normalized
+                WHERE n <> ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM canonical_tags ct
+                    WHERE ct.canonical_id = normalized.n
+                       OR normalized.n = ANY(ct.aliases)
+                  )
                 """,
                 tags,
             )

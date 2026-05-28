@@ -33,6 +33,7 @@ from .prompts import ENRICHMENT_VERSION
 from .signal_registry import STATIC_SIGNALS
 from .state_aggregator import recompute_spot_state
 from .state_resolver import AlertPayload, refresh_active_alert_types, upsert_alert
+from .tag_canonicalizer import canonicalize_batch
 from .v2_materializer import (
     aggregate_noise_sources,
     aggregate_parking_capacity,
@@ -124,7 +125,11 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
                                              *,
                                              enrichment_version: int,
                                              llm_model: str) -> None:
-    """Update post-recompute: campos narrativos + materializadas v2."""
+    """Update post-recompute: campos narrativos + materializadas v2.
+
+    T1.5: `parsed.tags` se filtra por `canonical_tags`. Los tags fuera del
+    vocabulario van a `unknown_tags` (frequency tracking para promoción mensual).
+    """
     # Releer observations frescas (incluyen las recién insertadas) para materializar
     obs_rows = await conn.fetch(
         """
@@ -139,6 +144,17 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
     noise_sources = aggregate_noise_sources(observations) or None
     parking_capacity = aggregate_parking_capacity(observations)
     last_obs_at = await compute_last_observation_at(conn, spot_id)
+
+    # T1.5 — canonicalizar tags. Los que no mapean a canonical_tags van a
+    # unknown_tags (frequency tracking) y NO se persisten en spot_semantic_state.
+    canonical_tags, unknown_raws = await canonicalize_batch(
+        conn, parsed.tags or [], register_unknown=True,
+    )
+    if unknown_raws:
+        logger.debug(
+            f"[ingest_v2] spot={spot_id} tags fuera de vocab: {unknown_raws} "
+            f"(registrados en unknown_tags)"
+        )
 
     # v4: parsed.summary es un único string en inglés. Lo escribimos en summary_en.
     # summary_es se deja NULL (deprecated — el cliente API traducirá si necesita).
@@ -164,7 +180,7 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
         spot_id,
         parsed.summary_es,  # v4: None (shim devuelve None) — futuro: drop column
         parsed.summary or parsed.summary_en,  # v4 canonical: parsed.summary (English)
-        parsed.tags or None,
+        canonical_tags or None,
         parsed.best_for or None,
         parsed.best_season,
         parsed.avoid_season,
