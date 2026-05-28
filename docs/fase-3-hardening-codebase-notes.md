@@ -216,3 +216,35 @@ usando los locator hints incluidos en cada caso.
 - **Test:** `tests/test_unknown_tag_suggest.py` — typos (quieet→quiet, constructio→construction),
   alias exacto (mountain-view→mountain), sin parecido→None, vacío→None, índice vacío→None,
   cutoff alto descarta débiles.
+
+### T2.5 — Detección de cambio de régimen con guardas ✅ (2026-05-28)
+
+- **Objetivo:** detectar contradicciones temporales reales (Grau Roig: obras 2025 →
+  tranquilo 2026) sin falsos positivos en spots con poca actividad.
+- **`detect_regime_change(observations, signal_type, *, value_type, now)`**
+  (`enrichment/state_aggregator.py`): parte las observaciones de UNA señal en
+  reciente (≤180d) e histórico (>180d), compara medias ponderadas. Guardas:
+  - cada cluster ≥3 observaciones (`REGIME_MIN_CLUSTER_SIZE`),
+  - separación temporal entre clusters ≥90d (`REGIME_MIN_SEPARATION_DAYS`),
+  - |Δmedia| > 0.4 (`REGIME_MIN_DELTA`).
+  Devuelve `{changed, old, new, delta, since, n_recent, n_historical}` o None.
+- **Pesos sin decay/recency:** usa `observation_weight` crudo — comparamos el valor
+  intrínseco de cada periodo; decaer el histórico a ~0 distorsionaría su media.
+- **Bug del pseudocódigo del plan reparado (patrón de actuación):** el plan escribía
+  la separación como `min(historical) − max(recent)`, pero el histórico es MÁS
+  antiguo → esa resta es siempre negativa → guard siempre activa → nunca detecta nada.
+  Correcto: `min(recent_dates) − max(historical_dates)`. Implementado así y documentado
+  en el docstring.
+- **`compute_signal_flux(rows, ...)`**: aplica la detección a todas las señales
+  numéricas/booleanas del spot; salta las TEXT (`recent_wins`: noise_source,
+  parking_capacity — el test |Δ|>0.4 no aplica a categóricas libres).
+- **Materialización:** se computa SOLO en `recompute_spot_state` (full recompute, donde
+  están TODAS las observaciones) y se persiste en `spot_semantic_state.signal_flux`
+  (columna ya reservada en T1.4c, schema `{"<signal>": {...}}`). El path incremental
+  `update_semantic_state` NO la toca → el UPSERT preserva el valor existente.
+- **Verificación live:** spot 78809 tenía Δmedia 0.67→0.20 en quietness con n≥3 por
+  cluster, pero gap=29d <90d → correctamente rechazado (drift continuo, no salto). El
+  test sintético con gap real ≥90d sí lo detecta. Las guardas funcionan como esperado.
+- **Test:** `tests/test_regime_change.py` — caso Grau Roig (0.2→0.85), guarda n bajo,
+  guarda separación (drift continuo cruzando 180d), guarda delta pequeño, señal boolean
+  (0→1), `compute_signal_flux` salta señales TEXT.

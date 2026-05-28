@@ -188,6 +188,135 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
     }
 
 
+# ── Detección de cambio de régimen (T2.5 — Tier 2 hardening) ─────────────────
+# Detecta contradicciones temporales REALES (p.ej. Grau Roig: obras en 2025 →
+# tranquilo en 2026) separando observaciones en dos clusters (reciente vs
+# histórico) y comparando sus medias. Guardas para no generar ruido en spots
+# con poca actividad (n bajo) ni confundir drift continuo con un salto de régimen.
+REGIME_RECENT_WINDOW_DAYS = 180     # ≤180d = "reciente"; >180d = "histórico"
+REGIME_MIN_CLUSTER_SIZE = 3         # cada cluster necesita ≥3 observaciones
+REGIME_MIN_SEPARATION_DAYS = 90     # gap temporal mínimo entre clusters
+REGIME_MIN_DELTA = 0.4              # salto mínimo de media para considerarlo cambio
+
+
+def _regime_value(row: dict, value_type: str) -> float | None:
+    """Extrae el valor numérico de una observación para el test de régimen."""
+    if value_type == "boolean":
+        v = row.get("value_bool")
+        if v is None:
+            return None
+        return 1.0 if v else 0.0
+    v = row.get("value_num")
+    return float(v) if v is not None else None
+
+
+def _weighted_mean(pairs: list[tuple[float, float]]) -> float | None:
+    total_w = sum(w for _, w in pairs)
+    if total_w <= 0:
+        return None
+    return sum(v * w for v, w in pairs) / total_w
+
+
+def detect_regime_change(observations: Iterable[dict], signal_type: str,
+                         *, value_type: str = "numeric",
+                         now: datetime | None = None) -> dict | None:
+    """Detecta un cambio de régimen para UNA señal (T2.5).
+
+    `observations` son las filas de `normalized_observations` de un solo
+    `signal_type` (dicts con `observed_at`, `value_num`/`value_bool`,
+    `observation_weight`). Particiona en reciente (≤180d) e histórico (>180d) y
+    compara medias ponderadas. Devuelve None si no hay cambio significativo o si
+    no se cumplen las guardas.
+
+    Guardas (evitan falsos positivos):
+      - cada cluster necesita ≥ REGIME_MIN_CLUSTER_SIZE observaciones.
+      - separación temporal entre clusters ≥ REGIME_MIN_SEPARATION_DAYS (filtra
+        drift continuo: si las observaciones cruzan el límite de 180d sin hueco,
+        no es un salto de régimen).
+      - |media_reciente − media_histórica| > REGIME_MIN_DELTA.
+
+    Pesos: usa `observation_weight` SIN decay/recency — comparamos el valor
+    intrínseco de cada periodo, no el peso decaído a hoy (decaer el histórico a
+    cero distorsionaría su media).
+
+    NOTA: la separación correcta es `min(fechas_recientes) − max(fechas_históricas)`
+    (el histórico es MÁS antiguo). El pseudocódigo del plan tenía los operandos
+    invertidos (`min(historical) − max(recent)`), siempre negativo → guard siempre
+    activa. Corregido aquí (patrón de actuación).
+    """
+    now = now or datetime.now(timezone.utc)
+    recent: list[dict] = []
+    historical: list[dict] = []
+    for row in observations:
+        observed_at = row.get("observed_at")
+        if observed_at is None:
+            continue
+        if _regime_value(row, value_type) is None:
+            continue
+        if _age_days(observed_at, now) <= REGIME_RECENT_WINDOW_DAYS:
+            recent.append(row)
+        else:
+            historical.append(row)
+
+    if len(recent) < REGIME_MIN_CLUSTER_SIZE or len(historical) < REGIME_MIN_CLUSTER_SIZE:
+        return None
+
+    def _norm_dt(dt: datetime) -> datetime:
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+    recent_dates = [_norm_dt(r["observed_at"]) for r in recent]
+    hist_dates = [_norm_dt(h["observed_at"]) for h in historical]
+    separation_days = (min(recent_dates) - max(hist_dates)).total_seconds() / 86400.0
+    if separation_days < REGIME_MIN_SEPARATION_DAYS:
+        return None
+
+    recent_mean = _weighted_mean(
+        [(_regime_value(r, value_type), float(r["observation_weight"])) for r in recent]
+    )
+    hist_mean = _weighted_mean(
+        [(_regime_value(h, value_type), float(h["observation_weight"])) for h in historical]
+    )
+    if recent_mean is None or hist_mean is None:
+        return None
+    if abs(recent_mean - hist_mean) <= REGIME_MIN_DELTA:
+        return None
+
+    return {
+        "changed": True,
+        "old": round(hist_mean, 4),
+        "new": round(recent_mean, 4),
+        "delta": round(recent_mean - hist_mean, 4),
+        "since": min(recent_dates).date().isoformat(),
+        "n_recent": len(recent),
+        "n_historical": len(historical),
+    }
+
+
+def compute_signal_flux(rows: Iterable[dict],
+                        signal_types: dict[str, SignalType] | None = None,
+                        now: datetime | None = None) -> dict[str, dict]:
+    """Aplica `detect_regime_change` a todas las señales numéricas/booleanas de
+    un spot y devuelve el dict listo para `spot_semantic_state.signal_flux`.
+
+    Las señales TEXT (recent_wins: noise_source, parking_capacity) se saltan — el
+    test |Δmedia|>0.4 no aplica a categóricas libres.
+    """
+    signal_types = signal_types or STATIC_SIGNALS
+    buckets: dict[str, list[dict]] = {}
+    for row in rows:
+        buckets.setdefault(row["signal_type"], []).append(row)
+
+    flux: dict[str, dict] = {}
+    for signal, obs_rows in buckets.items():
+        stype = signal_types.get(signal)
+        if not stype or stype.value_type == "text":
+            continue
+        change = detect_regime_change(obs_rows, signal, value_type=stype.value_type, now=now)
+        if change:
+            flux[signal] = change
+    return flux
+
+
 def needs_recompute(signal_half_lives: Iterable[int], days_since_last_aggregate: float) -> bool:
     """Gate de reprocesamiento condicionado (T2.3).
 
@@ -229,6 +358,11 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
     parking_capacity = aggregate_parking_capacity(obs_dicts)
     last_obs_at = await compute_last_observation_at(conn, spot_id)
 
+    # T2.5 — cambio de régimen (reciente vs histórico) sobre el set completo de
+    # observaciones. Solo se computa en el recompute full (aquí están TODAS las
+    # observaciones); el path incremental no lo toca y la columna se preserva.
+    signal_flux = compute_signal_flux(obs_dicts)
+
     current = await conn.fetchrow("SELECT signals_data FROM spot_semantic_state WHERE spot_id = $1", spot_id)
     previous = _json_object(current["signals_data"]) if current else None
     distance = semantic_distance(previous, state["signals_data"])
@@ -252,10 +386,10 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
             crowd_level_score, overnight_safe, stealth_score, signals_data, semantic_dsl,
             total_observations, consensus_confidence, weight_support, last_snapshot_data,
             cell_coverage, wild_camping_legal, noise_sources, parking_capacity, last_observation_at,
-            stale, updated_at, last_aggregated_at
+            signal_flux, stale, updated_at, last_aggregated_at
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $9::jsonb,
-            $14, $15, $16, $17, $18,
+            $14, $15, $16, $17, $18, $19::jsonb,
             FALSE, NOW(), NOW()
         )
         ON CONFLICT (spot_id) DO UPDATE SET
@@ -277,6 +411,7 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
             noise_sources = EXCLUDED.noise_sources,
             parking_capacity = EXCLUDED.parking_capacity,
             last_observation_at = EXCLUDED.last_observation_at,
+            signal_flux = EXCLUDED.signal_flux,
             stale = FALSE,
             updated_at = NOW(),
             last_aggregated_at = NOW()
@@ -299,7 +434,9 @@ async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0
         noise_sources,
         parking_capacity,
         last_obs_at,
+        json.dumps(signal_flux),
     )
+    state["signal_flux"] = signal_flux
     return state
 
 
