@@ -32,6 +32,7 @@ from .observation_normalizer import normalize_claim
 from .prompts import ENRICHMENT_VERSION
 from .signal_registry import STATIC_SIGNALS
 from .state_aggregator import recompute_spot_state
+from .state_resolver import AlertPayload, refresh_active_alert_types, upsert_alert
 from .v2_materializer import (
     aggregate_noise_sources,
     aggregate_parking_capacity,
@@ -48,6 +49,10 @@ class IngestStats:
     enrichment_version: int
     llm_model: str
     pipeline_run_id: str
+    # v6 (T1.4 + T1.4b)
+    alerts_upserted: int = 0
+    spot_function_set: bool = False
+    spot_geo_updated: bool = False
 
 
 def _extractor_name(provider: str) -> str:
@@ -171,6 +176,108 @@ async def _update_narrative_and_materialized(conn, spot_id: int,
     )
 
 
+async def _upsert_spot_functional_fields(
+    conn, spot_id: int, parsed: ValidatedEnrichment,
+) -> bool:
+    """T1.4b — escribe spot_function, is_overnight_viable, authorization_status
+    en `spots` SOLO si el LLM los emitió. COALESCE preserva valores legacy si el
+    LLM no opina (NULL = "no determinado").
+
+    Devuelve True si al menos un campo se tocó.
+    """
+    if (parsed.spot_function is None
+            and parsed.is_overnight_viable is None
+            and parsed.authorization_status is None):
+        return False
+    await conn.execute(
+        """
+        UPDATE spots
+        SET spot_function        = COALESCE($2, spot_function),
+            is_overnight_viable  = COALESCE($3, is_overnight_viable),
+            authorization_status = COALESCE($4, authorization_status)
+        WHERE id = $1
+        """,
+        spot_id,
+        parsed.spot_function,
+        parsed.is_overnight_viable,
+        parsed.authorization_status,
+    )
+    return True
+
+
+async def _upsert_spot_geo_from_llm(
+    conn, spot_id: int, parsed: ValidatedEnrichment,
+) -> bool:
+    """T1.4b/D8 — escribe valores geofísicos a `spot_geo`. NO sobreescribe si
+    ya hay otro source (DEM/OSM ganan al LLM).
+
+    Crea la fila si no existe. Devuelve True si tocó algo.
+    """
+    if (parsed.elevation_m is None
+            and parsed.terrain_type is None
+            and parsed.slope_degrees is None):
+        return False
+
+    existing = await conn.fetchrow(
+        "SELECT source FROM spot_geo WHERE spot_id = $1", spot_id,
+    )
+    if existing is None:
+        await conn.execute(
+            """
+            INSERT INTO spot_geo (spot_id, elevation_m, terrain_type, slope_degrees, source)
+            VALUES ($1, $2, $3, $4, 'llm_v6')
+            """,
+            spot_id, parsed.elevation_m, parsed.terrain_type, parsed.slope_degrees,
+        )
+        return True
+
+    # Si la fila ya viene de DEM/OSM/manual, NO la sobreescribimos con LLM.
+    src = (existing["source"] or "").strip().lower()
+    if src in ("dem", "osm", "manual"):
+        return False
+
+    # Source NULL o 'llm_*' → COALESCE con los valores del LLM (no pisa NOT NULL legacy)
+    await conn.execute(
+        """
+        UPDATE spot_geo
+        SET elevation_m   = COALESCE($2, elevation_m),
+            terrain_type  = COALESCE($3, terrain_type),
+            slope_degrees = COALESCE($4, slope_degrees),
+            source        = 'llm_v6'
+        WHERE spot_id = $1
+        """,
+        spot_id, parsed.elevation_m, parsed.terrain_type, parsed.slope_degrees,
+    )
+    return True
+
+
+async def _upsert_alerts_from_llm(
+    conn, spot_id: int, parsed: ValidatedEnrichment, *, llm_model: str,
+) -> int:
+    """T1.4 — vuelca `parsed.alerts[]` a `spot_alerts` vía state_resolver.upsert_alert.
+
+    Devuelve el número de alerts efectivamente persistidas.
+    """
+    if not parsed.alerts:
+        return 0
+    detected_by = f"llm_v{ENRICHMENT_VERSION}"
+    count = 0
+    for va in parsed.alerts:
+        payload = AlertPayload.from_validated(va)
+        if payload is None:
+            logger.warning(
+                f"[ingest_v2] alert descartada spot={spot_id} tipo={va.alert_type}: "
+                f"valid_from_inferred no parseable ({va.valid_from!r})"
+            )
+            continue
+        await upsert_alert(conn, spot_id, payload, detected_by=detected_by)
+        count += 1
+    if count:
+        # Refrescar materializada active_alert_types en spot_semantic_state
+        await refresh_active_alert_types(conn, spot_id)
+    return count
+
+
 async def ingest_spot_enrichment(
     conn,
     spot_id: int,
@@ -234,8 +341,25 @@ async def ingest_spot_enrichment(
         )
         stats.narrative_updated = True
 
+        # 4. v6 (T1.4b) — clasificación funcional en `spots`
+        stats.spot_function_set = await _upsert_spot_functional_fields(
+            conn, spot_id, parsed,
+        )
+
+        # 5. v6 (T1.4b/D8) — geofísicos en `spot_geo`
+        stats.spot_geo_updated = await _upsert_spot_geo_from_llm(
+            conn, spot_id, parsed,
+        )
+
+        # 6. v6 (T1.4) — alerts → spot_alerts + refresh active_alert_types
+        stats.alerts_upserted = await _upsert_alerts_from_llm(
+            conn, spot_id, parsed, llm_model=llm_model,
+        )
+
     logger.info(
         f"[ingest_v2] spot={spot_id} provider={provider} model={llm_model} "
-        f"claims={stats.claims_inserted} obs={stats.observations_inserted} run={pipeline_run_id}"
+        f"claims={stats.claims_inserted} obs={stats.observations_inserted} "
+        f"alerts={stats.alerts_upserted} func_set={stats.spot_function_set} "
+        f"geo_set={stats.spot_geo_updated} run={pipeline_run_id}"
     )
     return stats

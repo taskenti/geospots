@@ -699,10 +699,26 @@ A 125K spots con ~2% diario tocados, esto reduce el coste del aggregator nightly
   - SYSTEM_PROMPT_V2 sha256[:16] = `a445610126345b35`, 17814 bytes.
 
 ### Sprint 2 — Estado operacional + clasificación funcional (2 días)
-- T1.4 `spot_alerts` + resolver determinista
-- T1.4b `spot_function` + `is_overnight_viable` + `authorization_status` + `spot_geo` (D8)
-  - Nombres DB reales: `terrain_type` (no `terrain_surface`), `slope_degrees` (no `slope_grade`)
-- T1.4c `signal_flux` + `active_alert_types` en `spot_semantic_state`
+- ✅ T1.4 `spot_alerts` + resolver determinista
+  - Migración `db/migration_phase3_v6.sql` aplicada: tabla `spot_alerts` + 4 índices parciales (`idx_spot_alerts_active`, `_type_validity`, `_type_btree`, `_detected_by`) + función SQL `refresh_active_alert_types(spot_id)`.
+  - `enrichment/state_resolver.py` (nuevo): `parse_valid_from`, `upsert_alert` (idempotente: merge unión de review_ids del mismo tipo), `apply_decay` (0.85^meses + guarda 180d), `decay_all_active` (cron batch), `is_permanent` (skip `permanent_*`/`permanently_closed`).
+  - `enrichment/gemini_response_parser.py`: nueva clase `ValidatedAlert`, `ALERT_TYPE_VOCAB`, parser `_parse_alerts` rechaza items sin `source_review_ids`, vocab fuera de set, severity/confidence fuera de [0,1].
+  - `enrichment/prompts.py`: SYSTEM_PROMPT v6 documenta vocab de `alert_type`, schema `alerts[]` en OUTPUT FORMAT, hard rule "alert sin source_review_ids → descartada". 3 few-shots actualizados con `alerts[]`.
+  - `enrichment/ingest_v2.py`: paso 6 `_upsert_alerts_from_llm` invoca `state_resolver.upsert_alert` y luego `refresh_active_alert_types`. `IngestStats.alerts_upserted` para observabilidad.
+  - `jobs/nightly_alert_decay.py` (nuevo): CLI con `--spot-id` y `--dry-run` para ejecutar el cron diario de decay.
+  - Smoke DB OK: insert manual alerta `construction` → `active_alert_types=['construction']` (vía función SQL) → delete → `[]`.
+- ✅ T1.4b `spot_function` + `is_overnight_viable` + `authorization_status` + `spot_geo` (D8)
+  - Migración v6 añade 3 columnas a `spots` + 1 columna `source` a `spot_geo` (+ 2 índices parciales en `spots`).
+  - Nombres DB reales mantenidos: `terrain_type` (texto) + `slope_degrees` (int 0..45).
+  - Parser: vocabs `SPOT_FUNCTION_VOCAB`, `AUTHORIZATION_STATUS_VOCAB`; helpers `_validated_enum`, `_coerce_int_in_range` (elevation_m [-500..9000], slope_degrees [0..45]).
+  - Prompt v6: sección "FUNCTIONAL CLASSIFICATION" + "GEOPHYSICAL FIELDS" con regla "OMIT si no hay evidencia, NO null, NO unknown por default".
+  - `ingest_v2._upsert_spot_functional_fields` usa COALESCE (no sobreescribe valores ya seteados). `_upsert_spot_geo_from_llm` respeta jerarquía: `source ∈ {dem, osm, manual}` gana al LLM (no se pisa), `NULL`/`llm_*` se sobreescribe.
+- ✅ T1.4c `signal_flux` + `active_alert_types` en `spot_semantic_state`
+  - Migración v6 añade ambas columnas + GIN sobre `active_alert_types`.
+  - `signal_flux JSONB DEFAULT '{}'` queda vacío hasta T2.5 (cambio de régimen). Schema documentado en COMMENT.
+  - `active_alert_types` se mantiene fuera del UPSERT de `recompute_spot_state`/`update_semantic_state` (queda intacto al recompute), y se refresca explícitamente vía `refresh_active_alert_types` tras cada upsert de alert.
+
+**ENRICHMENT_VERSION 5→6** (nuevos campos top-level + alerts[]). **PROMPT_VERSION** → `v6-alerts-function-1` (sha256[:16] = `5867ea31b50d3533`, 22271 bytes).
 - T1.5 Canonicalizador + unknown_tags
 - **Una sola migración `db/migration_phase3_v6.sql`** cubre T1.4+T1.4b+T1.4c+T1.5+T1.6+T1.8+T2.7: `spot_alerts`, columnas de `spots`, columnas de `spot_semantic_state`, `spot_geo.source`, `canonical_tags`, `unknown_tags`, `llm_call_metrics`, `semantic_fingerprint`, trigger stale.
 

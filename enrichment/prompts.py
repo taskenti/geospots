@@ -11,7 +11,20 @@ from __future__ import annotations
 # v4: Spot-level prompts (English narrative, original-language excerpts)
 # ═══════════════════════════════════════════════════════════════
 
-ENRICHMENT_VERSION = 5  # v5 (T1.2): split STATIC_CONTEXT vs REVIEW_EVIDENCE.
+ENRICHMENT_VERSION = 6  # v6 (T1.4 + T1.4b): alerts[] + spot_function/is_overnight_viable/authorization_status + spot_geo fields.
+# v6 deltas vs v5:
+#  - Nuevo array `alerts[]`: cada item describe una alerta tipada con valid_from,
+#    severity, confidence y source_review_ids. Persiste en tabla `spot_alerts`.
+#  - Nuevos campos top-level (solo si hay evidencia):
+#      `spot_function`         → spots.spot_function
+#      `is_overnight_viable`   → spots.is_overnight_viable
+#      `authorization_status`  → spots.authorization_status
+#      `elevation_m`           → spot_geo.elevation_m
+#      `terrain_type`          → spot_geo.terrain_type
+#      `slope_degrees`         → spot_geo.slope_degrees
+#  - Estos campos son OPCIONALES — si el LLM no tiene evidencia los omite y la
+#    columna queda NULL ("no determinado", NO "false"/"unknown").
+# v5 (T1.2): split STATIC_CONTEXT vs REVIEW_EVIDENCE.
 # v5 deltas vs v4:
 #  - SERVICES block wrapped in <STATIC_CONTEXT readonly="true">…</STATIC_CONTEXT>.
 #  - REVIEWS block wrapped in <REVIEW_EVIDENCE>…</REVIEW_EVIDENCE>.
@@ -278,6 +291,62 @@ Correct `contradicted_static_facts`:
 DO NOT emit a separate `review_claim` for water_working — `contradicted_static_facts`
 is the canonical channel for STATIC-vs-REVIEW overrides.
 
+═══ ALERTS (v6 — temporary states with lifecycle) ═══
+
+Emit an entry in `alerts[]` ONLY when one or more reviews report a temporary
+or durable adverse state that affects whether someone should stay there now.
+Each alert documents ONE coherent issue, not one per review — group reviews
+about the same incident.
+
+alert_type vocabulary (use exactly these strings):
+  construction         — building works, machinery noise, dust, dug-up access
+  closed_season        — seasonally closed (winter, off-season)
+  access_restricted    — barrier installed, road damaged, height limit changed
+  temporary_ban        — local authority forbids motorhome stays
+  natural_hazard       — flood, landslide, wildfire risk reported
+  event_overflow       — local event makes the spot unusable (festival, market)
+  permanently_closed   — permanently closed; does NOT decay (manual resolution)
+
+Fields per alert:
+  alert_type           → one of the vocabulary above
+  severity             → 0..1; how disruptive (0.2=mild, 0.8=heavy, 1.0=blocking)
+  valid_from_inferred  → "YYYY-MM" or "YYYY-MM-DD": when the issue started,
+                         inferred from review dates / textual hints
+  confidence           → 0..1; certainty of the alert (n_reviews + recency)
+  source_review_ids    → [int, …]; reviews that reported it
+  summary              → ≤200 chars in English, factual
+
+═══ FUNCTIONAL CLASSIFICATION (v6 — top-level fields, OPTIONAL) ═══
+
+Only emit these fields if reviews + STATIC_CONTEXT give clear evidence.
+If unsure, OMIT (the column will stay NULL — that means "not determined",
+NOT "false" or "unknown").
+
+  spot_function        → one of:
+    'overnight_primary'    — designed for overnight (aire, stellplatz, camping)
+    'overnight_tolerated'  — overnight is OK but not the primary purpose
+    'service_only'         — water/dump only, no overnight intended
+    'shop_workshop'        — store/workshop with optional parking (NOT a spot to sleep)
+    'transit'              — rest area on highway, gas station
+    'daytime_only'         — viewpoint, beach parking with night ban
+
+  is_overnight_viable  → true | false (omit if uncertain)
+
+  authorization_status → one of:
+    'official'         — registered/declared by the municipality or operator
+    'tolerated'        — informally permitted, no sign either way
+    'sign_authorized'  — explicit "motorhomes allowed" sign or P+caravan symbol
+    'illegal'          — explicit prohibition sign or forbidden by ordinance
+    'unknown'          — no information either way (OR omit the field)
+
+═══ GEOPHYSICAL FIELDS (v6 — top-level, OPTIONAL, into spot_geo) ═══
+
+Emit ONLY if reviews/descriptions give a usable hint. Do NOT speculate.
+
+  elevation_m          → int meters above sea level
+  terrain_type         → free text ("grass", "gravel", "asphalt", "mixed", "dirt")
+  slope_degrees        → int 0..45; 0=flat, 15=noticeable, 30=steep
+
 ═══ OUTPUT FORMAT (strict JSON, no markdown, no comments) ═══
 
 {{
@@ -291,6 +360,17 @@ is the canonical channel for STATIC-vs-REVIEW overrides.
       "review_id": <int from REVIEW_EVIDENCE>,
       "excerpt": "<fragment in ORIGINAL language, <=120 chars>"}}
   ],
+  "alerts": [
+    {{"alert_type": "<vocab>", "severity": <0-1>, "valid_from_inferred": "YYYY-MM",
+      "confidence": <0-1>, "source_review_ids": [<int>, ...],
+      "summary": "<English ≤200 chars>"}}
+  ],
+  "spot_function": "<vocab|omit>",
+  "is_overnight_viable": <bool|omit>,
+  "authorization_status": "<vocab|omit>",
+  "elevation_m": <int|omit>,
+  "terrain_type": "<text|omit>",
+  "slope_degrees": <int|omit>,
   "summary": "<English string>",
   "tags": ["<english-tag>", ...],
   "best_for": ["<english-profile>", ...],
@@ -302,8 +382,13 @@ Hard rules:
   - Every entry in `review_claims` AND `contradicted_static_facts` MUST have an
     integer `review_id` pointing to a row in <REVIEW_EVIDENCE>. Strings like
     "services" / "description" are FORBIDDEN and will be discarded.
+  - Every entry in `alerts[]` MUST have at least one int in `source_review_ids`.
+    An alert without review evidence is DISCARDED.
+  - "spot_function", "is_overnight_viable", "authorization_status" and the geo
+    fields are OPTIONAL. If you have no evidence, OMIT them (do NOT emit null,
+    do NOT guess).
   - If nothing extractable from reviews:
-    {{"review_claims":[],"contradicted_static_facts":[],"summary":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
+    {{"review_claims":[],"contradicted_static_facts":[],"alerts":[],"summary":null,"tags":[],"best_for":[],"best_season":null,"avoid_season":null}}
 """
 
 
@@ -325,7 +410,7 @@ Hard rules:
 # T1.2 (v5): reescritos al nuevo schema review_claims[] + contradicted_static_facts[].
 # Mantener el bloque BYTE-ESTABLE entre llamadas — cualquier cambio rompe el prefix cache.
 
-PROMPT_VERSION = "v5-current-date-1"   # T1.3: + CURRENT_DATE en SPOT DATA y [age: Xd ago] por review.
+PROMPT_VERSION = "v6-alerts-function-1"   # T1.4 + T1.4b: alerts[], spot_function, is_overnight_viable, authorization_status, spot_geo fields.
 
 FEW_SHOT_EXAMPLES_V5 = """
 
@@ -354,6 +439,12 @@ OUTPUT:
     {"signal": "quietness", "value": 0.6, "confidence": 0.7, "review_id": 502, "excerpt": "Très calme, parfait pour la nuit"}
   ],
   "contradicted_static_facts": [],
+  "alerts": [
+    {"alert_type": "construction", "severity": 0.8, "valid_from_inferred": "2024-06", "confidence": 0.6, "source_review_ids": [501], "summary": "Heavy nearby construction reported in summer 2024; a 2026 visitor found it quiet — works may have ended but no second confirmation."}
+  ],
+  "spot_function": "overnight_primary",
+  "is_overnight_viable": true,
+  "authorization_status": "official",
   "summary": "Free aire AC by the river with potable water and grey water dump but no electricity. A 2024 visitor reported heavy nearby construction and unbearable noise; a 2026 visit found the area very quiet, suggesting the works have ended.",
   "tags": ["free", "aire", "river", "water", "quiet"],
   "best_for": ["overnighting", "budget travel"],
@@ -382,6 +473,10 @@ OUTPUT:
   "contradicted_static_facts": [
     {"signal": "water_working", "value": false, "confidence": 0.8, "review_id": 601, "excerpt": "das Wasser am Hahn ist defekt"}
   ],
+  "alerts": [],
+  "spot_function": "overnight_primary",
+  "is_overnight_viable": true,
+  "authorization_status": "official",
   "summary": "Paid stellplatz (around 10€) next to a forest, with electricity. A recent visitor (March 2026) describes it as a pleasant spot but reports the drinking water tap is broken.",
   "tags": ["paid", "stellplatz", "forest", "electricity"],
   "best_for": ["overnighting"],
@@ -409,6 +504,9 @@ OUTPUT:
     {"signal": "noise", "value": 0.7, "confidence": 0.6, "review_id": 701, "excerpt": "één grote bouwput, niet aan te raden"}
   ],
   "contradicted_static_facts": [],
+  "alerts": [
+    {"alert_type": "construction", "severity": 0.9, "valid_from_inferred": "2025-08", "confidence": 0.55, "source_review_ids": [701], "summary": "Reported as a major construction site in summer 2025 (NL 'bouwput'); single review, severity inferred high from explicit warning."}
+  ],
   "summary": "A parking area near the beach. As of summer 2025 one visitor described it as a major construction site (Dutch: 'bouwput') and explicitly advised against staying.",
   "tags": ["beach", "construction", "avoid"],
   "best_for": [],

@@ -69,6 +69,36 @@ class ValidatedClaim:
 
 
 @dataclass
+class ValidatedAlert:
+    """T1.4 — alerta tipada con lifecycle. Persiste en `spot_alerts`."""
+    alert_type: str
+    severity: float           # 0..1
+    valid_from: str           # "YYYY-MM" o "YYYY-MM-DD"; ingest_v2 lo parsea a DATE
+    confidence: float         # 0..1
+    source_review_ids: list[int]
+    summary: str | None
+    raw: dict
+
+
+# Vocabulario de alert_type aceptado por el parser.
+# Items fuera de este set se registran en errors y se descartan.
+ALERT_TYPE_VOCAB: set[str] = {
+    "construction", "closed_season", "access_restricted",
+    "temporary_ban", "natural_hazard", "event_overflow",
+    "permanently_closed",
+}
+
+# T1.4b — vocabularios de clasificación funcional.
+SPOT_FUNCTION_VOCAB: set[str] = {
+    "overnight_primary", "overnight_tolerated", "service_only",
+    "shop_workshop", "transit", "daytime_only",
+}
+AUTHORIZATION_STATUS_VOCAB: set[str] = {
+    "official", "tolerated", "sign_authorized", "illegal", "unknown",
+}
+
+
+@dataclass
 class ValidatedEnrichment:
     claims: list[ValidatedClaim]
     summary: str | None       # v4: single English narrative (was summary_es/summary_en)
@@ -77,6 +107,16 @@ class ValidatedEnrichment:
     best_season: str | None
     avoid_season: str | None
     errors: list[str] = field(default_factory=list)  # non-fatal warnings
+
+    # v6 (T1.4 + T1.4b) — campos opcionales. Default vacíos/None para no romper
+    # cualquier consumidor pre-v6 que solo lee `claims` + narrativa.
+    alerts: list[ValidatedAlert] = field(default_factory=list)
+    spot_function: str | None = None
+    is_overnight_viable: bool | None = None
+    authorization_status: str | None = None
+    elevation_m: int | None = None
+    terrain_type: str | None = None
+    slope_degrees: int | None = None
 
     # ---- v3 compat shims (read-only) — temporary, helps tests/ingest during migration
     @property
@@ -345,6 +385,25 @@ def parse_enrichment_response(text: str) -> ValidatedEnrichment:
         or _optional_str(data.get("summary_es"))
     )
 
+    # ── v6 (T1.4 + T1.4b) parsing — alerts + functional fields + geo ────
+    alerts = _parse_alerts(data.get("alerts"), errors)
+    spot_function = _validated_enum(
+        data.get("spot_function"), SPOT_FUNCTION_VOCAB,
+        "spot_function", errors,
+    )
+    is_overnight_viable = _coerce_bool(data.get("is_overnight_viable"))
+    authorization_status = _validated_enum(
+        data.get("authorization_status"), AUTHORIZATION_STATUS_VOCAB,
+        "authorization_status", errors,
+    )
+    elevation_m = _coerce_int_in_range(
+        data.get("elevation_m"), lo=-500, hi=9000, field="elevation_m", errors=errors,
+    )
+    terrain_type = _optional_str(data.get("terrain_type"), max_len=40)
+    slope_degrees = _coerce_int_in_range(
+        data.get("slope_degrees"), lo=0, hi=45, field="slope_degrees", errors=errors,
+    )
+
     return ValidatedEnrichment(
         claims=claims,
         summary=summary,
@@ -353,4 +412,120 @@ def parse_enrichment_response(text: str) -> ValidatedEnrichment:
         best_season=_optional_str(data.get("best_season"), max_len=100),
         avoid_season=_optional_str(data.get("avoid_season"), max_len=100),
         errors=errors,
+        alerts=alerts,
+        spot_function=spot_function,
+        is_overnight_viable=is_overnight_viable,
+        authorization_status=authorization_status,
+        elevation_m=elevation_m,
+        terrain_type=terrain_type,
+        slope_degrees=slope_degrees,
     )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v6 helpers — alerts + enum + range validators
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _parse_alerts(raw: Any, errors: list[str]) -> list[ValidatedAlert]:
+    """Parsea `alerts[]` del schema v6. Rechaza alerts sin source_review_ids."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        errors.append("'alerts' no es lista (ignorado)")
+        return []
+    out: list[ValidatedAlert] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            errors.append(f"alert no es objeto: {item!r}")
+            continue
+
+        alert_type = item.get("alert_type")
+        if not isinstance(alert_type, str) or alert_type.strip() not in ALERT_TYPE_VOCAB:
+            errors.append(f"alert_type fuera de vocabulario: {alert_type!r}")
+            continue
+        alert_type = alert_type.strip()
+
+        sev = _coerce_numeric(item.get("severity"))
+        if sev is None or sev < 0 or sev > 1:
+            errors.append(f"alert.severity inválida: {item.get('severity')!r}")
+            continue
+
+        conf = _coerce_numeric(item.get("confidence"))
+        if conf is None or conf < 0 or conf > 1:
+            errors.append(f"alert.confidence inválida: {item.get('confidence')!r}")
+            continue
+
+        valid_from = _optional_str(item.get("valid_from_inferred"), max_len=10)
+        if not valid_from:
+            errors.append(f"alert.valid_from_inferred ausente para {alert_type}")
+            continue
+
+        raw_ids = item.get("source_review_ids") or []
+        if not isinstance(raw_ids, list):
+            errors.append(f"alert.source_review_ids no es lista: {raw_ids!r}")
+            continue
+        review_ids: list[int] = []
+        for rid in raw_ids:
+            rid_int = _coerce_review_id(rid)
+            if rid_int is not None:
+                review_ids.append(rid_int)
+        if not review_ids:
+            errors.append(
+                f"alert {alert_type} rechazada: source_review_ids vacío "
+                "(toda alerta debe citar al menos una review)"
+            )
+            continue
+
+        summary = _optional_str(item.get("summary"), max_len=300)
+
+        out.append(ValidatedAlert(
+            alert_type=alert_type,
+            severity=float(sev),
+            valid_from=valid_from,
+            confidence=float(conf),
+            source_review_ids=review_ids,
+            summary=summary,
+            raw=item,
+        ))
+    return out
+
+
+def _validated_enum(value: Any, vocab: set[str], field: str, errors: list[str]) -> str | None:
+    """Devuelve `value` si está en `vocab` (lowercase strip), None si ausente,
+    log + None si fuera de vocabulario."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        errors.append(f"{field} no es string: {value!r}")
+        return None
+    v = value.strip().lower()
+    if not v:
+        return None
+    if v not in vocab:
+        errors.append(f"{field} fuera de vocabulario: {value!r}")
+        return None
+    return v
+
+
+def _coerce_int_in_range(value: Any, *, lo: int, hi: int, field: str, errors: list[str]) -> int | None:
+    """Coerciona a int y valida rango. Errores no fatales, devuelve None si inválido."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        v = int(value)
+    elif isinstance(value, str):
+        try:
+            v = int(float(value.strip()))
+        except ValueError:
+            errors.append(f"{field} no parseable: {value!r}")
+            return None
+    else:
+        errors.append(f"{field} tipo inválido: {type(value).__name__}")
+        return None
+    if v < lo or v > hi:
+        errors.append(f"{field} fuera de rango [{lo},{hi}]: {v}")
+        return None
+    return v
