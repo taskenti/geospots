@@ -593,7 +593,7 @@ async def admin_scrapers_list(background_tasks: BackgroundTasks):
                 lr.reviews_nuevas AS ultimo_reviews_nuevas,
                 lr.errores AS ultimo_errores,
                 fc.cron_schedule,
-                (COALESCE(mvs.total_reviews, 0) > 0) AS has_reviews_support,
+                (COALESCE(fc.has_reviews_support, FALSE) OR COALESCE(mvs.total_reviews, 0) > 0) AS has_reviews_support,
                 aj.job_types AS active_job_types
             FROM known_sources ks
             LEFT JOIN source_credibility sc ON sc.source = ks.nombre

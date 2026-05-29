@@ -94,6 +94,7 @@ Test sintético con sample real + 9 casos edge (sin red, API caída):
 
 ## ⚠️ Notas operativas
 - **Endpoints inestables**: durante esta auditoría tanto `androidApp.php` como `wp-json/comments` daban errores vacíos. El retry triple con backoff cubre fallos puntuales pero un scrape completo puede requerir varias re-ejecuciones.
+- **Circuit breaker (2026-05-29)**: tras `CIRCUIT_THRESHOLD=8` fallos de conexión consecutivos (`ConnectError`/`ReadTimeout`/etc.), `fetch_cell` abre el circuito y devuelve `[]` sin seguir martilleando el host. Se resetea al primer éxito. Evita que un host caído consuma todo el run en timeouts.
 - La fuente está limitada a **Norteamérica** por el filtro en `generate_active_grid`. Spots fuera de NA se descartan automáticamente.
 
 ---

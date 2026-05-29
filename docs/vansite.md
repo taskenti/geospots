@@ -34,3 +34,4 @@ El scraper `vansite.py` presenta uno de los mayores desafíos de serialización 
 
 ## 🔄 Cambios Recientes (Mayo 2026)
 - **Eliminación de Filtros Geográficos**: Se amplió el Bounding Box de Europa a nivel mundial (`90.0,-180.0,-90.0,180.0`).
+- **Fix `UnicodeEncodeError` (2026-05-29)**: los `displayName` de autores y los textos de reviews (provienen de Google/Sharetribe) traían surrogates Unicode aislados (emoji mal codificados) que reventaban asyncpg al hacer el upsert (`'utf-8' codec can't encode character '\ud83c'... surrogates not allowed`). El helper `_clean_surrogates()` los sanea antes de guardar autor y texto.

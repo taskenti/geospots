@@ -390,7 +390,18 @@ def extract_campy(raw: dict) -> dict:
     out: dict = {}
     facilities = raw.get("facilities") or []
     if isinstance(facilities, list) and facilities:
-        labels = [str(f).lower() for f in facilities if f]
+        # facilities es lista de dicts {title, price, description, available}.
+        # Solo contamos las disponibles (available no es False/0) y usamos su title.
+        labels = []
+        for f in facilities:
+            if isinstance(f, dict):
+                if f.get("available") is False or f.get("available") == 0:
+                    continue
+                t = f.get("title")
+                if t:
+                    labels.append(str(t).lower())
+            elif f:
+                labels.append(str(f).lower())
         out["piscina"]       = _has(labels, "pool", "swim")
         out["restaurant"]    = _has(labels, "restaurant")
         out["lavanderia"]    = _has(labels, "laundry")

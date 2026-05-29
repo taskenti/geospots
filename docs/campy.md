@@ -16,9 +16,14 @@ Content-Type: application/json
 
 Una sola query GraphQL `LocationsWithinRadius` con parámetros lat/lng/radius/filters. El scraper convierte cada celda del grid (1°×1°) en una llamada centrada con radio de 90km (cubre los ~78km de la diagonal de la celda con margen).
 
-### Pipeline
-- Sin `run()` propio: usa el de `AbstractSource`. El grid activo (dilatación dinámica de celdas con spots existentes) genera puntos centrales que se mapean a `fetch_cell` → POST GraphQL.
-- Sin `download_reviews()`: la API pública de Campy no expone reseñas (el sistema de reviews es interno de la app y no se sirve por GraphQL anónimo).
+### Pipeline (dos fases)
+- **Fase 1 — descubrimiento (`run` heredado de `AbstractSource`):** el grid activo genera puntos centrales que se mapean a `fetch_cell` → POST GraphQL `LocationsWithinRadius`. Esta query de **lista** devuelve campos limitados (ver abajo) y NO trae reviews, contacto ni facilities pobladas.
+- **Fase 2 — enriquecimiento (`download_reviews`):** por cada source_record campy se llama `LocationFull(uid, language)` (query de **detalle**), que SÍ devuelve la información rica. El endpoint GraphQL **no requiere autenticación** (verificado 2026-05-29). Aporta:
+  - `reviews[]` — reseñas chupadas de **Google** (a veces también nativas de campy, con `externalSource: null`). Cada una: `id` (único, formato `google<digits><uid>`), `rating`, `comment`, `updatedAt` (epoch ms), `userDisplayName`, `translation{comment, sourceLanguage}`. → tabla `reviews`.
+  - `website` / `email` / `phone` → columnas `web` / `email` / `telefono`. **Este es el mayor valor añadido** de campy: contacto directo verificado del establecimiento.
+  - `facilities[]` pobladas (wifi/wc/ducha/agua/electricidad/vaciados/perros) → columnas de servicios.
+  - `reviewSummary{pros, cons, summary}` — resumen IA generado por el bot **"sam"** de campy. Se guarda en `servicios_extras.campy_review_summary` como **metadata del spot, NUNCA como review** (no contamina el corpus de reseñas).
+  - `reviewsCount` → `source_records.review_count` (esperado) + marca `details_fetched=true` para re-descargas incrementales.
 
 ## 🗂️ Mapeo y Normalización
 
@@ -41,10 +46,11 @@ La API devuelve tipos reales: `camp`, `van`, `microcamping`. Mapeo:
 | `description` | `descripcion_<lang>` | con detect_language |
 | `address` / `city` | `region` | preferimos city, fallback address |
 
-### Campos siempre nulos en la API pública (no usar)
-- `price`: el precio solo se carga en el checkout privado de la app
-- `places`, `rating`, `country`, `facilities[]`, `dateOpenFrom`, `dateOpenTo`, `camperSize`, `isTopQuality`
-- Por eso `gratuito = None` (desconocido), nunca `False` por defecto
+### Campos nulos en la query de LISTA (`LocationsWithinRadius`)
+- `price`: el precio solo se carga en el checkout privado de la app → `gratuito = None` (desconocido), nunca `False`
+- `facilities[]` viene vacío en la lista, pero **sí poblado en `LocationFull`** (fase 2)
+- `places`, `rating`, `country`, `dateOpenFrom`, `dateOpenTo`, `camperSize`, `isTopQuality`
+- `website`/`email`/`phone`/`reviews`/`reviewSummary`: NO existen en la lista; solo en `LocationFull` (fase 2)
 
 ## 🔧 Auditoría y Fixes Mayo 2026
 
@@ -71,5 +77,19 @@ Sobre 150 spots vivos de la API:
 - 13 spots `tipo=naturaleza` mal puestos por microcamping → `tipo=camping`
 - `fuentes_config.activa` reactivado a `true`
 
+## 🚀 Mejora 2026-05-29 — Fase 2 (LocationFull) + subida de prioridad
+
+Descubierto que el bug #3 ("Campy no expone permalink/web") era falso: la query de **detalle** `LocationFull` (no la de lista) devuelve contacto completo, reviews y resumen IA, **sin autenticación**. Se añadió `download_reviews()` (ver Pipeline arriba).
+
+| Cambio | Detalle |
+|---|---|
+| `download_reviews()` nuevo | Reviews de Google + contacto (web/email/tel) + facilities + resumen "sam" |
+| Bug latente en `extract_campy` | Trataba `facilities` (dicts `{title, available}`) como strings → corregido para leer `title` solo de las disponibles |
+| Credibilidad subida | `base_score` 0.75→0.82, `review_quality` 0.72→0.82 — a la par de campercontact/caramaps, por debajo de park4night (0.92) |
+
+Validación en vivo (uid `1530285951571NL`): website/email/phone poblados, 49 reviews, 7 facilities, resumen IA presente. Roundtrip a DB (enriquecer + upsert reviews) sin errores.
+
+**Lanzar la fase 2:** `python scheduler.py --reviews campy` (dentro del contenedor scraper).
+
 ---
-**Estado Actual:** Auditado y operativo. La API es estable y los fixes preservan la integridad ante los campos siempre-null de la API pública.
+**Estado Actual:** Auditado y operativo, **ahora con reviews y contacto**. Fase 1 (lista) + Fase 2 (detalle/LocationFull) desacopladas como park4night/campercontact.

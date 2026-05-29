@@ -98,5 +98,6 @@ En `reconciliar.py`, `thedyrt` posee la máxima prioridad para los campos textua
 ## 🚦 Parámetros de Operación
 
 - **Scraper (spots):** `rate_limit = 1.0s` entre peticiones de búsqueda. Utiliza un tamaño de cuadrícula activa de `grid_step = 2.0` grados.
+- **Reintentos de gateway (2026-05-29):** `fetch_cell` reintenta los `502`/`503`/`504` transitorios con backoff exponencial (5s→10s→20s, máx 3 intentos) y resetea el contador tras éxito. Antes, un 502 puntual descartaba la celda entera.
 - **Reviews & Detalles:** Limitador de trabajadores concurrentes a 3. Manejo inteligente de error `HTTP 429` (esperando 60s antes de reintentar) y rate limiting de `1.0s` por petición.
 - **Dedup radius:** `100m`.

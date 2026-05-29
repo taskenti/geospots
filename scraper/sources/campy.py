@@ -1,6 +1,7 @@
 """Campy — scraper para la fuente Campy app (GraphQL API)."""
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from loguru import logger
 import httpx
@@ -42,6 +43,62 @@ def infer_dogs(text: str) -> bool | None:
         if kw in text:
             return True
     return None
+
+GRAPHQL_URL = "https://graphql-server-132719581042.europe-west1.run.app/"
+
+# Subconjunto de LocationFull con lo que aprovechamos en download_reviews:
+# contacto (website/email/phone), facilidades, resumen IA ("sam") y reviews
+# (chupadas de Google). El endpoint NO requiere autenticación (verificado).
+LOCATION_FULL_QUERY = """query LocationFull($uid: String!, $language: String) {
+  location: locationFull(uid: $uid, language: $language) {
+    uid
+    website
+    email
+    phone
+    reviewsCount
+    facilities { title available }
+    reviewSummary { pros cons summary }
+    reviews {
+      id
+      externalSource
+      rating
+      comment
+      updatedAt
+      userDisplayName
+      translation { comment sourceLanguage }
+    }
+  }
+}"""
+
+
+def _map_facilities(facilities) -> dict:
+    """Mapea la lista facilities {title, available} de campy a columnas spots."""
+    out = {}
+    for fac in facilities or []:
+        if not isinstance(fac, dict):
+            continue
+        available = fac.get("available")
+        if available is False or available == 0:
+            continue
+        title = (fac.get("title") or "").lower()
+        if "wifi" in title or "internet" in title:
+            out["wifi"] = True
+        if "toilet" in title or "wc" in title:
+            out["wc_publico"] = True
+        if "shower" in title:
+            out["ducha"] = True
+        if "water" in title:
+            out["agua_potable"] = True
+        if "electricity" in title or "power" in title:
+            out["electricidad"] = True
+        if "grey" in title or "gray" in title:
+            out["vaciado_grises"] = True
+        if "chemical" in title or "black" in title:
+            out["vaciado_negras"] = True
+        if "dog" in title or "pet" in title:
+            out["perros"] = True
+    return out
+
 
 class CampySource(AbstractSource):
     name = "campy"
@@ -259,3 +316,187 @@ class CampySource(AbstractSource):
         }
         res.update(desc_fields)
         return merge_extra(res, extract_campy(raw))
+
+    async def download_reviews(self, pool, config, job_id: int = None) -> dict:
+        """Segunda fase: por cada spot campy llama LocationFull(uid) y aprovecha
+        lo que LocationsWithinRadius NO devuelve:
+          - reviews[] (chupadas de Google) → tabla reviews
+          - website/email/phone → columnas de contacto
+          - facilities ampliadas → columnas de servicios
+          - reviewSummary (resumen IA "sam": pros/cons/summary) → servicios_extras
+            (metadata del spot, NUNCA como review, para no contaminar el corpus)
+        El endpoint GraphQL no requiere auth.
+        """
+        from db import enriquecer_spot, upsert_review, refresh_review_count
+
+        stats = {"nuevos": 0, "actualizados": 0, "reviews_nuevas": 0, "errores": 0}
+
+        logger.info(f"[{self.name}] Buscando spots con detalles/reviews pendientes...")
+        async with pool.acquire() as conn:
+            enrich_jobs = await conn.fetch("""
+                SELECT sr.spot_id, sr.source_id,
+                       sr.review_count, COALESCE(r.cnt, 0) AS db_review_count
+                FROM source_records sr
+                LEFT JOIN (
+                    SELECT spot_id, COUNT(*) AS cnt
+                    FROM reviews
+                    WHERE source = 'campy'
+                    GROUP BY spot_id
+                ) r ON sr.spot_id = r.spot_id
+                WHERE sr.source = 'campy'
+                  AND (
+                    (sr.normalized_data->>'details_fetched') IS NULL
+                    OR (sr.review_count > 0 AND COALESCE(r.cnt, 0) < sr.review_count)
+                  )
+                ORDER BY COALESCE(sr.review_count, 0) DESC;
+            """)
+
+        logger.info(f"[{self.name}] Encontrados {len(enrich_jobs)} spots pendientes.")
+        if not enrich_jobs:
+            return stats
+
+        job_queue = asyncio.Queue()
+        for r in enrich_jobs:
+            await job_queue.put(dict(r))
+
+        progress_state = [0, len(enrich_jobs)]
+
+        async def enrich_worker(client):
+            while not job_queue.empty():
+                try:
+                    job = await job_queue.get()
+                except asyncio.CancelledError:
+                    break
+
+                spot_id = job["spot_id"]
+                uid = job["source_id"]
+                try:
+                    await asyncio.sleep(self.rate_limit)
+                    q = {
+                        "operationName": "LocationFull",
+                        "variables": {"uid": uid, "language": "en"},
+                        "query": LOCATION_FULL_QUERY,
+                    }
+                    resp = await client.post(GRAPHQL_URL, json=q, timeout=30)
+                    resp.raise_for_status()
+                    loc = (resp.json().get("data") or {}).get("location") or {}
+                    if not loc:
+                        stats["errores"] += 1
+                        job_queue.task_done()
+                        progress_state[0] += 1
+                        continue
+
+                    # Detalle a enriquecer en spots
+                    detail_norm: dict = {}
+                    web = (loc.get("website") or "").strip()
+                    if web:
+                        detail_norm["web"] = web
+                    email = (loc.get("email") or "").strip()
+                    if email:
+                        detail_norm["email"] = email
+                    phone = (loc.get("phone") or "").strip()
+                    if phone:
+                        detail_norm["telefono"] = phone
+                    detail_norm.update(_map_facilities(loc.get("facilities")))
+
+                    # reviewSummary (bot "sam") → servicios_extras, no como review
+                    rs = loc.get("reviewSummary")
+                    if isinstance(rs, dict) and (rs.get("summary") or rs.get("pros") or rs.get("cons")):
+                        detail_norm["servicios_extras"] = {
+                            "campy_review_summary": {
+                                "summary": clean_surrogates(rs.get("summary") or "") or None,
+                                "pros": [clean_surrogates(str(p)) for p in (rs.get("pros") or [])],
+                                "cons": [clean_surrogates(str(c)) for c in (rs.get("cons") or [])],
+                            }
+                        }
+
+                    reviews_list = loc.get("reviews") or []
+                    reviews_count = loc.get("reviewsCount")
+
+                    async with pool.acquire() as conn:
+                        async with conn.transaction():
+                            if detail_norm:
+                                await enriquecer_spot(conn, spot_id, detail_norm, self.name)
+
+                            for rev in reviews_list:
+                                rid = rev.get("id")
+                                if not rid:
+                                    continue
+                                comment = clean_surrogates(rev.get("comment") or "").strip()
+                                if not comment:
+                                    continue
+                                fecha = None
+                                ts = rev.get("updatedAt")
+                                if ts:
+                                    try:
+                                        fecha = datetime.fromtimestamp(
+                                            int(ts) / 1000, tz=timezone.utc
+                                        ).date()
+                                    except (TypeError, ValueError, OSError):
+                                        pass
+                                tr = rev.get("translation") or {}
+                                idioma = (tr.get("sourceLanguage") or "").lower() or None
+                                if not idioma:
+                                    idioma = detect_language(comment)
+                                inserted = await upsert_review(conn, {
+                                    "spot_id": spot_id,
+                                    "source": self.name,
+                                    "source_review_id": str(rid),
+                                    "texto": comment,
+                                    "texto_original": comment,
+                                    "rating": rev.get("rating"),
+                                    "autor": clean_surrogates(rev.get("userDisplayName") or "") or None,
+                                    "fecha": fecha,
+                                    "idioma": idioma,
+                                })
+                                stats["reviews_nuevas"] += int(bool(inserted))
+
+                            # Marcar details_fetched y guardar reviewsCount esperado
+                            mark = {"details_fetched": True}
+                            if reviews_count is not None:
+                                try:
+                                    mark["num_reviews"] = int(reviews_count)
+                                except (TypeError, ValueError):
+                                    pass
+                            await conn.execute("""
+                                UPDATE source_records
+                                SET normalized_data = COALESCE(normalized_data, '{}'::jsonb) || $1::jsonb,
+                                    review_count = GREATEST(COALESCE(review_count, 0), $2::int),
+                                    last_seen = NOW()
+                                WHERE source = $3 AND source_id = $4
+                            """, json.dumps(mark), int(reviews_count or 0), self.name, uid)
+
+                            await refresh_review_count(conn, self.name, spot_id)
+                            stats["actualizados"] += 1
+                except Exception as e:
+                    logger.error(f"[{self.name}] Error enriqueciendo spot {uid}: {e}")
+                    stats["errores"] += 1
+                finally:
+                    progress_state[0] += 1
+                    if progress_state[0] % 20 == 0:
+                        logger.info(
+                            f"[{self.name}] Progreso: {progress_state[0]}/{progress_state[1]} "
+                            f"spots | reviews={stats['reviews_nuevas']} errores={stats['errores']}"
+                        )
+                        if job_id:
+                            try:
+                                await self.update_job_progress(
+                                    pool, job_id, progress_state[0], progress_state[1], stats
+                                )
+                            except Exception:
+                                pass
+                    job_queue.task_done()
+
+        num_workers = min(config.max_workers or 3, 5)
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+            workers = [asyncio.create_task(enrich_worker(client)) for _ in range(num_workers)]
+            await job_queue.join()
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+
+        logger.info(
+            f"[{self.name}] Reviews terminado: {stats['actualizados']} spots enriquecidos, "
+            f"{stats['reviews_nuevas']} reviews nuevas, {stats['errores']} errores."
+        )
+        return stats

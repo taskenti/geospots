@@ -245,7 +245,7 @@ FUENTES EXTERNAS (20+ scrapers)
 | agricamper | API JSON bulk (WP REST) | ✅ Integrada | IT (~605 agroturismos) |
 | campendium | Tiles OSM zoom 8 + REST detail | ✅ Integrada | US/CA |
 | campingcarpark | Bulk API gateway + detail por ID | ✅ Integrada | EU (~906 áreas oficiales CCP) |
-| campy | GraphQL LocationsWithinRadius (90km/grid 1°) | ✅ Integrada | DACH + EU (microcamping) |
+| campy | GraphQL: LocationsWithinRadius (lista, 90km/grid 1°) + LocationFull (detalle: reviews Google + web/email/tel + resumen IA "sam") | ✅ Integrada con reviews | DACH + EU (microcamping) |
 | bobilguiden | Bulk JSON `/places/mobile` (1 request) | ✅ Integrada | NO/SE/FI/DK (~1936 spots) |
 | freecampsites | androidApp.php + wp-json comments | ✅ Integrada | US/CA/MX (~2248 spots, boondocking) |
 | google_maps | Playwright headless (DOM scraping) | 🧪 Experimental — servicio docker separado `gmaps`, fallback manual | Mundial (enriquecimiento on-demand) |

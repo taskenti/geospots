@@ -47,7 +47,7 @@ async def main():
               ('campendium', 'Campendium', 0.85, 0.75, ARRAY['US', 'CA']),
               ('campingcarpark', 'CampingCar Park', 0.90, 0.85, ARRAY['EU']),
               ('campspace', 'Campspace', 0.74, 0.76, ARRAY['EU']),
-              ('campy', 'Campy', 0.75, 0.72, ARRAY['DE', 'AT', 'CH']),
+              ('campy', 'Campy', 0.82, 0.82, ARRAY['DE', 'AT', 'CH']),
               ('google_maps', 'Google Maps', 0.90, 0.95, ARRAY['GL']),
               ('bobilguiden', 'Bobilguiden', 0.85, 0.80, ARRAY['NO', 'SE', 'DK']),
               ('amigosac', 'AmigosAC España/Portugal', 0.85, 0.70, ARRAY['ES', 'PT']),
@@ -74,8 +74,28 @@ async def main():
             )
         """)
 
+        # 4. Marcar qué fuentes implementan download_reviews() (override real,
+        #    no el no-op de AbstractSource). El PWA lo usa para mostrar el botón
+        #    "Reviews" aunque la fuente aún tenga 0 reviews descargadas.
+        print("Detectando soporte de reviews por fuente...")
+        from scheduler import SOURCES, _load_source
+        from sources.base import AbstractSource
+        con_reviews = []
+        for key in SOURCES.keys():
+            try:
+                src = _load_source(key)
+                if type(src).download_reviews is not AbstractSource.download_reviews:
+                    con_reviews.append(key)
+            except Exception as e:
+                print(f"  ⚠ no se pudo inspeccionar {key}: {e}")
+        await conn.execute(
+            "UPDATE fuentes_config SET has_reviews_support = (nombre = ANY($1::text[]))",
+            con_reviews,
+        )
+        print(f"  {len(con_reviews)} fuentes con download_reviews: {sorted(con_reviews)}")
+
         print("Sincronización completada con éxito!")
-        
+
     await pool.close()
 
 if __name__ == "__main__":

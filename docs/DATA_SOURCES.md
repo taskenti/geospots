@@ -27,11 +27,26 @@
 | **agricamper** | `www.agricamper.com/wp-json/interactive-map/v1/fiches` | JSON bulk (WP REST) | Descarga global única | Semanal | Activo | IT (~605 fiches agroturismo) |
 | **campendium** | `maps.campendium.com/api/v2/tiles/{z}/{x}/{y}` | GeoJSON tiles + REST detail | Tiles OSM zoom 8 + bbox NA | Mensual | Activo | US/CA (cobertura amplia) |
 | **campingcarpark** | `gateway.feature.campingcarpark.com` | Bulk API gateway (status + detail) | Lista global IDs + detalle por ID | Semanal | Activo | EU (~906 áreas oficiales red CCP) |
-| **campy** | `graphql-server-...run.app` | GraphQL (LocationsWithinRadius) | Radio 90km en grid 1° | Semanal | Activo | DACH + EU (microcamping) |
+| **campy** | `graphql-server-...run.app` | GraphQL (LocationsWithinRadius + **LocationFull** para reviews/contacto) | Radio 90km en grid 1° | Semanal | Activo **(con reviews)** | DACH + EU (microcamping) |
 | **bobilguiden** | `api.bobilguiden.no/places/mobile` | Bulk JSON único | Descarga global (no grid) | Semanal | Activo | NO/SE/FI/DK (~1936 spots, NO=95%) |
 | **freecampsites** | `freecampsites.net/.../androidApp.php` + wp-json comments | JSON-en-texto + WP JSON API | Grid 1° filtrado a NA | Mensual | Activo (API inestable) | US/CA/MX (~2248 spots) |
 | **google_maps** | `google.com/maps` (Playwright headless) | DOM scraping con Chromium | Enriquece spots existentes (LIMIT 50/run) | Manual on-demand | Experimental — servicio docker separado `gmaps` | Mundial (cualquier spot con buen rating en Google) |
 | **portugaleasycamp** | — | — | — | — | Stub vacío | Portugal |
+
+---
+
+## Correcciones recientes en scrapers (2026-05-29)
+
+Robustez y cobertura tras el smoke test de las 30 fuentes (`scraper/smoke_test.py`).
+
+| Fuente | Corrección | Detalle |
+|---|---|---|
+| **campy** | Fase 2 de reviews + contacto | Nuevo `download_reviews()` vía query GraphQL `LocationFull` (sin auth): reviews de Google, `web`/`email`/`telefono`, facilities pobladas y resumen IA "sam" (en `servicios_extras.campy_review_summary`, no como review). Bug latente en `extract_campy` corregido (facilities son dicts, no strings). Credibilidad subida a 0.82/0.82. Ver `docs/campy.md`. |
+| **freecampsites** | Circuit breaker | API inestable: tras `CIRCUIT_THRESHOLD=8` fallos de conexión consecutivos, `fetch_cell` abre el circuito y deja de martillear el host. Se resetea al primer éxito. |
+| **thedyrt** | Reintentos 502/503/504 | Backoff exponencial (5s→10s→20s, máx 3 intentos) ante errores de gateway transitorios. Resetea contador tras éxito. |
+| **vansite** | Fix `UnicodeEncodeError` | Autores/textos de reviews (vía Google/Sharetribe) traían surrogates Unicode aislados (emoji) que reventaban asyncpg. `_clean_surrogates()` los limpia antes del upsert. |
+
+**Soporte de reviews en el PWA:** el panel de scrapers ahora deriva el botón "Reviews" de `fuentes_config.has_reviews_support` (poblado por `sync_db.py` detectando qué fuentes overridean `download_reviews`), no de `total_reviews > 0`. Antes, una fuente con 0 reviews descargadas nunca mostraba el botón → no se podía lanzar la primera descarga (círculo vicioso). Migración: `db/migration_fuentes_reviews_support.sql`.
 
 ---
 

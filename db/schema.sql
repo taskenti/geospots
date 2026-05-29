@@ -196,7 +196,7 @@ INSERT INTO source_credibility (source, display_name, base_score, review_quality
 ('furgovw',         'Furgovw',             0.80, 0.88, ARRAY['ES']),
 ('searchforsites',  'SearchForSites',      0.80, 0.75, ARRAY['UK']),
 ('stayfree',        'StayFree',            0.75, 0.70, ARRAY['EU']),
-('campy',           'Campy',               0.75, 0.72, ARRAY['DE','AT','CH']),
+('campy',           'Campy',               0.82, 0.82, ARRAY['DE','AT','CH']),
 ('areasac',         'AreasAC',             0.85, 0.60, ARRAY['ES']),
 ('osm',             'OpenStreetMap',       0.60, 0.00, ARRAY['WW']),
 ('stellplatz',      'Stellplatz Radar',    0.75, 0.70, ARRAY['DE','AT','CH']),
@@ -422,7 +422,10 @@ CREATE TABLE IF NOT EXISTS fuentes_config (
     ultimo_run_estado   TEXT,
     spots_totales       INT DEFAULT 0,
     reviews_totales     INT DEFAULT 0,
-    errores_ultimo_run  INT DEFAULT 0
+    errores_ultimo_run  INT DEFAULT 0,
+    -- TRUE si la source overridea download_reviews() (lo puebla sync_db.py).
+    -- El PWA usa esto para mostrar el botón "Reviews" aunque aún haya 0 reviews.
+    has_reviews_support BOOLEAN DEFAULT FALSE
 );
 
 INSERT INTO fuentes_config (nombre, activa, notas) VALUES
@@ -553,6 +556,30 @@ CREATE TRIGGER trg_classify_spot
 BEFORE INSERT OR UPDATE OF lat, lon ON spots
 FOR EACH ROW
 EXECUTE FUNCTION fn_classify_spot();
+
+-- BUG-COUNTRY-CASE (2026-05-29): country_iso debe estar SIEMPRE en minúsculas.
+-- fn_classify_spot solo dispara en UPDATE OF lat,lon; cualquier otro path que
+-- escriba country_iso (reconciliación, scraper con valor crudo, INSERT con
+-- lat/lon fuera de los polígonos `countries`) podría dejar mayúsculas. Este
+-- trigger dedicado lo normaliza en toda escritura. Ver db/migration_country_iso_lowercase.sql
+CREATE OR REPLACE FUNCTION fn_lowercase_country_iso()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.country_iso IS NOT NULL THEN
+        NEW.country_iso := lower(NEW.country_iso);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_lowercase_country_iso ON spots;
+DROP TRIGGER IF EXISTS a_trg_lowercase_country_iso ON spots;
+
+-- Prefijo 'a_' → orden alfabético lo ejecuta antes que trg_classify_spot (determinista).
+CREATE TRIGGER a_trg_lowercase_country_iso
+BEFORE INSERT OR UPDATE OF country_iso ON spots
+FOR EACH ROW
+EXECUTE FUNCTION fn_lowercase_country_iso();
 
 -- Phase 3: geotemporal semantic state engine.
 -- Keep this block in sync with db/migration_phase3.sql for fresh databases.

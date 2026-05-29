@@ -17,7 +17,7 @@ from loguru import logger
 import asyncpg
 
 from config import Config
-from db import create_pool, init_scraper_log
+from db import create_pool, init_scraper_log, finish_scraper_log
 from scheduler import SOURCES, _load_source
 
 MAX_CELLS = 2       # celdas máx para fuentes grid-based
@@ -30,6 +30,20 @@ logger.remove()
 logger.add(sys.stderr, level="INFO", format="<level>{level}</level> | {message}")
 logger.add(LOG_FILE, level="DEBUG", rotation="10 MB",
            format="{time:HH:mm:ss} | {level:<7} | {message}")
+
+
+async def _finalize_log_safe(pool, log_id: int, stats: dict):
+    """Cierra un scraper_log que quedó 'running' (timeout/error en smoke)."""
+    try:
+        async with pool.acquire() as conn:
+            # Solo cerrar si sigue 'running' (no pisar un cierre real de source.run).
+            still_running = await conn.fetchval(
+                "SELECT estado = 'running' FROM scraper_log WHERE id = $1", log_id
+            )
+            if still_running:
+                await finish_scraper_log(conn, log_id, stats)
+    except Exception:
+        logger.exception(f"[smoke] no se pudo finalizar log {log_id}")
 
 
 async def smoke_spots(source, pool, config, key: str) -> dict:
@@ -54,9 +68,13 @@ async def smoke_spots(source, pool, config, key: str) -> dict:
         )
         return {"status": "ok", "stats": stats or {}, "elapsed": round(time.time() - t0, 1)}
     except asyncio.TimeoutError:
+        # El run fue cancelado por timeout: source.run no llegó a cerrar el log.
+        # Lo finalizamos a mano para no dejar zombies "running" en scraper_log.
+        await _finalize_log_safe(pool, log_id, {"errores": 1, "detalle": {"smoke": "timeout"}})
         return {"status": "timeout", "stats": {}, "elapsed": SPOTS_TIMEOUT}
     except Exception as e:
         logger.exception(f"[smoke] {key} spots error")
+        await _finalize_log_safe(pool, log_id, {"errores": 1, "detalle": {"smoke": "error", "msg": str(e)[:200]}})
         return {"status": "error", "error": str(e)[:300], "stats": {}, "elapsed": round(time.time() - t0, 1)}
 
 
