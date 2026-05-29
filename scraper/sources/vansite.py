@@ -9,6 +9,17 @@ import httpx
 from sources.base import AbstractSource
 from sources._normalize_helpers import extract_vansite, merge_extra
 
+def _clean_surrogates(s: str) -> str:
+    """Elimina surrogate Unicode aislados que causan UnicodeEncodeError en asyncpg."""
+    if not s:
+        return s
+    try:
+        s.encode("utf-8")
+        return s
+    except UnicodeEncodeError:
+        return s.encode("utf-8", errors="ignore").decode("utf-8")
+
+
 def decode_cache_code(code):
     """Decodifica un código de base-44 (ASCII 48-91) a entero."""
     idx = 0
@@ -165,14 +176,14 @@ async def fetch_and_save_reviews(client: httpx.AsyncClient, pool, spot_id: int, 
                     continue
                 attrs = r.get("~:attributes", {})
                 r_id = str(r.get("~:id", "")).replace("~u", "")
-                r_text = attrs.get("~:content", "")
+                r_text = _clean_surrogates(attrs.get("~:content", ""))
                 r_rating = attrs.get("~:rating")
                 
                 author_id = ""
                 rel_author = r.get("~:relationships", {}).get("~:author", {}).get("~:data", {})
                 if rel_author:
                     author_id = str(rel_author.get("~:id", "")).replace("~u", "")
-                r_author = authors_map.get(author_id, "Vansite User")
+                r_author = _clean_surrogates(authors_map.get(author_id, "Vansite User"))
                 
                 rating_val = None
                 if r_rating is not None:
