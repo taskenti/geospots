@@ -98,7 +98,9 @@ def test_select_recent_beats_old():
 
 
 def test_select_respects_budget():
-    reviews = [_r(i, _days_ago(30 + i), "x" * 300, rating=4) for i in range(20)]
+    # texto informativo (~300 chars); "x"*300 lo descarta review_cleaner por repetitivo
+    long_text = ("sitio tranquilo con buenas vistas al mar y agua potable cerca " * 5)[:300]
+    reviews = [_r(i, _days_ago(30 + i), long_text, rating=4) for i in range(20)]
     selected = select_reviews_for_prompt(reviews, max_tokens=300)
     # 300 tokens / (~75 tokens por review + 20 overhead) → muy pocas
     assert 0 < len(selected) < 20
@@ -124,7 +126,8 @@ def test_select_truncates_long_text():
 
 def test_select_forces_at_least_one_when_budget_tiny():
     # Budget ridículo: aún así debe devolver 1 review (truncada) para no descartar el spot
-    reviews = [_r(1, _days_ago(30), "x" * 400, rating=4)]
+    long_text = ("sitio tranquilo con buenas vistas y agua potable cerca del pueblo " * 6)[:400]
+    reviews = [_r(1, _days_ago(30), long_text, rating=4)]
     selected = select_reviews_for_prompt(reviews, max_tokens=5)
     assert len(selected) == 1
 
@@ -154,6 +157,50 @@ def test_select_uses_texto_fallback():
     selected = select_reviews_for_prompt(reviews, max_tokens=10_000)
     assert len(selected) == 1
     assert "fallback" in selected[0]["texto_limpio"]
+
+
+def test_select_stratifies_across_months():
+    # Spot muy transitado: 60 reviews repartidas en 24 meses (2 por mes).
+    # Con budget que sólo deja entrar ~24 reviews, la selección naive (top recencia)
+    # cubriría ~12 meses; la estratificación round-robin debe estirar la muestra
+    # para abarcar todo el rango (>= ~1 año cubierto desde ambos extremos).
+    # Cada review con texto claramente distinto para que dedup (fuzzy) no las colapse.
+    cuerpos = [
+        "sitio tranquilo con buenas vistas al mar abierto",
+        "parking amplio junto al rio con sombra agradable",
+        "zona de montana fria de noche pero muy silenciosa",
+        "area urbana ruidosa de dia comoda para servicios",
+        "playa cercana ideal para banarse en verano caluroso",
+        "bosque con senderos y fauna pajaros al amanecer",
+    ]
+    reviews = []
+    rid = 0
+    for month in range(24):           # 0 = más reciente, 23 = ~2 años atrás
+        for k in range(2):
+            rid += 1
+            cuerpo = cuerpos[rid % len(cuerpos)]
+            reviews.append(_r(rid, _days_ago(15 + month * 30),
+                              f"{cuerpo} visita {rid} en el mes {month}", rating=4))
+    # Budget para ~20-24 reviews (cada una ~37 tokens incl. overhead).
+    selected = select_reviews_for_prompt(reviews, max_tokens=900, apply_dedup=False)
+    assert len(selected) >= 12
+    fechas = [r["fecha"] for r in selected]
+    span_days = (max(fechas) - min(fechas)).days
+    # Naive recency cubriría ~ len(selected)/2 meses (~5-6 meses con 12 reviews).
+    # La estratificación debe estirar la cobertura a > 1 año.
+    assert span_days > 365, f"cobertura temporal insuficiente: {span_days} días"
+
+
+def test_select_single_month_preserves_weight_order():
+    # Un solo mes (1 bucket) → la estratificación no debe alterar el orden por peso.
+    fecha = _days_ago(20)
+    reviews = [
+        _r(1, fecha, "texto informativo de prueba uno", rating=3),
+        _r(2, fecha, "texto informativo de prueba dos", rating=5),
+        _r(3, fecha, "texto informativo de prueba tres", rating=4),
+    ]
+    selected = select_reviews_for_prompt(reviews, max_tokens=10_000)
+    assert selected[0]["id"] == 2  # rating 5 gana, igual que sin estratificar
 
 
 # ─── has_rich_description / should_enrich ───────────────────────────
@@ -235,7 +282,7 @@ def test_build_prompt_no_reviews_only_descriptions():
     }
     prompt = build_spot_user_prompt(spot, [])
     # v4: prompt headers are now in English
-    assert "none available" in prompt
+    assert "no reviews available" in prompt
     assert "[ES] Aparcamiento" in prompt
 
 
@@ -253,6 +300,52 @@ def test_build_prompt_handles_missing_fields():
     assert "SPOT id=1" in prompt
     # v4: tipo default fallback is now "other" (English) when None
     assert "other" in prompt
+
+
+def test_build_prompt_descriptions_native_plus_english_only():
+    # País ES → solo [ES] + [EN]; [FR]/[DE]/[IT] redundantes se descartan.
+    spot = {
+        "id": 5, "canonical_name": "Test", "tipo": "camping",
+        "country_iso": "ES", "lat": 40.0, "lon": -3.0, "fuentes": ["p4n"],
+        "descripcion_es": "Camping junto al mar mediterraneo.",
+        "descripcion_en": "Seaside campsite.",
+        "descripcion_fr": "Camping au bord de la mer.",
+        "descripcion_de": "Campingplatz am Meer.",
+        "descripcion_it": "Campeggio sul mare.",
+    }
+    prompt = build_spot_user_prompt(spot, [])
+    assert "[ES] Camping junto" in prompt
+    assert "[EN] Seaside" in prompt
+    assert "[FR]" not in prompt
+    assert "[DE]" not in prompt
+    assert "[IT]" not in prompt
+
+
+def test_build_prompt_descriptions_fallback_when_no_native_no_english():
+    # País NO (sin columna nativa) y sin EN → usa la primera descripción disponible.
+    spot = {
+        "id": 6, "canonical_name": "Fjord Spot", "tipo": "otro",
+        "country_iso": "NO", "lat": 60.0, "lon": 5.0, "fuentes": ["p4n"],
+        "descripcion_de": "Stellplatz am Fjord.",
+    }
+    prompt = build_spot_user_prompt(spot, [])
+    assert "[DE] Stellplatz" in prompt
+
+
+def test_build_prompt_emits_subtipo_location_rating():
+    # Certifica que subtipo, municipio/region, master_rating y total_reviews llegan.
+    spot = {
+        "id": 9, "canonical_name": "Camping X", "tipo": "camping",
+        "subtipo": "glamping", "country_iso": "ES",
+        "region": "Andalucia", "municipio": "Tarifa",
+        "lat": 36.0, "lon": -5.6, "fuentes": ["p4n"],
+        "master_rating": 4.3, "total_reviews": 128,
+    }
+    prompt = build_spot_user_prompt(spot, [])
+    assert "camping / glamping" in prompt
+    assert "Tarifa, Andalucia" in prompt
+    assert "4.3/5" in prompt
+    assert "128 total reviews" in prompt
 
 
 # ─── compute_richness (v4d) ──────────────────────────────────────────

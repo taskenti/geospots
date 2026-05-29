@@ -260,11 +260,18 @@ C. If a review explicitly contradicts a STATIC_CONTEXT fact (e.g. STATIC says
   more facts to report, keep it short.
 - tags: 3-8 keywords in lowercase ENGLISH, no semantic duplicates
   (avoid "free" AND "gratis"; pick one).
+  FORBIDDEN in tags: place names (cities, regions, countries: normandy,
+  carcassonne, loire, camargue…), brand names (camping-car-park, acsi,
+  seasonova…), and purely operational details (token-system, card-payment,
+  barrier, dump, services, renovated) — those belong in the summary, not tags.
 - best_for: 1-4 profiles in ENGLISH (couples, families, overlanding, dogs,
   photography, surfers, cyclists, remote-work...).
-- best_season / avoid_season: only emit if you're confident the reviews support
-  it. ENGLISH ("spring", "summer", "autumn", "winter", or "june-august").
-  If in doubt, OMIT (null).
+- best_season / avoid_season: DEFAULT TO null. NEVER guess or fill a plausible
+  season. Emit a value ONLY when a review EXPLICITLY states that a month/season
+  is better or worse (e.g. "too hot in August", "perfect in spring before the
+  crowds"). The absence of seasonal mentions means null — do NOT infer "spring"
+  or any default from climate/geography. ENGLISH ("spring", "summer", "autumn",
+  "winter", or "june-august"). When unsure, null.
 
 ═══ TRICKY INTERPRETATION EXAMPLE (v5 schema) ═══
 
@@ -833,6 +840,36 @@ def _age_days(fecha) -> int | None:
     return max(0, delta)
 
 
+# country_iso → idioma nativo entre los 7 que almacenamos como descripcion_<lang>.
+# Solo se listan los países cuyo idioma SÍ tenemos columna; el resto cae a EN.
+_COUNTRY_TO_DESC_LANG = {
+    "ES": "es",
+    "PT": "pt", "BR": "pt",
+    "FR": "fr", "MC": "fr", "LU": "fr",
+    "DE": "de", "AT": "de", "CH": "de", "LI": "de",
+    "IT": "it", "SM": "it", "VA": "it",
+    "NL": "nl", "BE": "nl",
+    "GB": "en", "UK": "en", "IE": "en", "US": "en", "CA": "en",
+    "AU": "en", "NZ": "en", "MT": "en",
+}
+
+
+def _description_langs_for(country_iso) -> tuple[str, ...]:
+    """Idiomas de descripción a incluir: nativo del país + inglés (sin duplicar).
+
+    Inglés actúa como cobertura universal cuando el idioma nativo no está entre
+    los 7 almacenados (NO/SE/PL/GR/...). Orden: nativo primero, luego EN.
+    """
+    iso = (country_iso or "").strip().upper()
+    native = _COUNTRY_TO_DESC_LANG.get(iso)
+    langs: list[str] = []
+    if native:
+        langs.append(native)
+    if "en" not in langs:
+        langs.append("en")
+    return tuple(langs)
+
+
 def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
     """User prompt for spot-level enrichment v4/v5.
 
@@ -857,15 +894,36 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
     # No rompe el prefix cache porque ya estamos en el sufijo volátil.
     current_date_str = _dt.now(_tz.utc).strftime("%Y-%m-%d")
 
+    # Tipo + subtipo (p.ej. "aire / municipal" vs "camping / glamping")
+    tipo_str = spot.get("tipo") or "other"
+    subtipo = (spot.get("subtipo") or "").strip()
+    if subtipo:
+        tipo_str = f"{tipo_str} / {subtipo}"
+
+    # Localización: municipio + region (mejor que solo el país para que el LLM
+    # infiera clima/estaciones, que es justo lo que más importa en autocaravana).
+    loc_parts = [p for p in (
+        (spot.get("municipio") or "").strip(),
+        (spot.get("region") or spot.get("subregion") or "").strip(),
+    ) if p]
+    location_str = ", ".join(loc_parts) if loc_parts else "?"
+
+    # Rating agregado del spot + nº total de reviews (la muestra del prompt es
+    # parcial; el LLM debe saber sentimiento medio y tamaño real de la muestra).
+    rating = spot.get("master_rating")
+    total_rev = spot.get("total_reviews")
+    rating_str = f"{rating:.1f}/5" if isinstance(rating, (int, float)) else "?"
+
     lines = [
         "=== SPOT DATA (volatile per-spot) ===",
         f"CURRENT_DATE: {current_date_str}",
         f"SPOT id={spot['id']}",
         f'Name: "{(spot.get("canonical_name") or "").strip()}"',
-        f"Type: {spot.get('tipo') or 'other'}",
-        f"Region: {spot.get('region') or '?'}",
+        f"Type: {tipo_str}",
+        f"Location: {location_str}",
         f"Country: {spot.get('country_iso') or '?'}",
         f"Coords: {spot.get('lat'):.4f}, {spot.get('lon'):.4f}",
+        f"Avg rating: {rating_str}" + (f" (from {total_rev} total reviews)" if total_rev else ""),
         f"Sources: {', '.join(fuentes) if fuentes else '?'}",
         "",
     ]
@@ -873,11 +931,26 @@ def build_spot_user_prompt(spot: dict, reviews: list[dict]) -> str:
     # v3/v4: structured SERVICES block (before descriptions)
     lines.extend(_build_servicios_block(spot))
 
+    # Descripciones: solo el idioma nativo del país del spot + inglés (si existe).
+    # El resto de idiomas suele ser la MISMA descripción traducida → redundancia
+    # que se paga íntegra en tokens. EN garantiza cobertura cuando el idioma
+    # nativo no está entre los 7 que almacenamos (NO/SE/PL/GR/...).
+    desc_langs = _description_langs_for(spot.get("country_iso"))
     desc_blocks = []
-    for lang in ("es", "en", "fr", "de", "it", "nl", "pt"):
+    seen_texts: set[str] = set()
+    for lang in desc_langs:
         txt = (spot.get(f"descripcion_{lang}") or "").strip()
-        if txt:
+        if txt and txt[:600] not in seen_texts:
+            seen_texts.add(txt[:600])
             desc_blocks.append(f"[{lang.upper()}] {txt[:600]}")
+    # Fallback: si no hay descripción en idioma país ni EN, usa la primera disponible
+    # para no dejar al LLM sin contexto textual.
+    if not desc_blocks:
+        for lang in ("es", "fr", "de", "it", "nl", "pt"):
+            txt = (spot.get(f"descripcion_{lang}") or "").strip()
+            if txt:
+                desc_blocks.append(f"[{lang.upper()}] {txt[:600]}")
+                break
     if desc_blocks:
         lines.append("DESCRIPTIONS (in original language):")
         lines.extend(desc_blocks)

@@ -15,9 +15,11 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Iterable
 
-# Budget conservador: ~3.500 tokens útiles para reviews+descripciones.
+# Budget para el bloque <REVIEW_EVIDENCE> (SOLO reviews; descripciones y servicios
+# van por encima, fuera de este presupuesto). Subido 3500→5500 (2026-05-29) para dar
+# más densidad de evidencia por spot transitado tras la estratificación temporal.
 # El resto va a system prompt cacheado + user prompt frame.
-DEFAULT_MAX_REVIEW_TOKENS = 3500
+DEFAULT_MAX_REVIEW_TOKENS = 5500
 # Texto por review en el prompt: recortar a este largo (chars).
 REVIEW_TEXT_CHAR_LIMIT = 400
 # Mínimo de reviews para considerar enriquecimiento (también puede aceptarse con descripción rica).
@@ -81,6 +83,20 @@ def _truncate(text: str, max_chars: int = REVIEW_TEXT_CHAR_LIMIT) -> str:
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "…"
+
+
+def _month_bucket(fecha) -> int:
+    """Mes absoluto (año*12+mes) de una review; None → -1 (prioridad mínima).
+
+    Usado para estratificar la selección por tiempo: garantiza que en spots muy
+    transitados la muestra cubra varios meses/estaciones en vez de concentrarse
+    en las últimas semanas (cobertura estacional/climática — clave en camper).
+    """
+    if isinstance(fecha, datetime):
+        return fecha.year * 12 + (fecha.month - 1)
+    if isinstance(fecha, date):
+        return fecha.year * 12 + (fecha.month - 1)
+    return -1
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -314,6 +330,39 @@ def dedup_reviews_by_jaccard(reviews: list[dict], **kwargs) -> tuple[list[dict],
     return dedup_reviews(reviews, **kwargs)
 
 
+def _stratify_temporally(
+    candidates: list[tuple[float, int, int, dict]]
+) -> list[tuple[float, int, int, dict]]:
+    """Reordena candidatos (ya ordenados por peso/rating/len) en round-robin por
+    mes, mes más reciente primero en cada ronda.
+
+    Entrada: lista de tuplas (weight, rating10, len, review_dict), best-first.
+    Salida: misma lista reordenada para repartir la futura selección por budget
+    a lo largo de todos los meses disponibles (cobertura estacional).
+
+    Invariante: NO descarta nada; solo cambia el orden. El recorte por budget
+    posterior es quien decide cuántas entran. Para 1 solo bucket el orden se
+    preserva (mismo comportamiento que antes).
+    """
+    from collections import defaultdict, deque
+
+    buckets: dict[int, deque] = defaultdict(deque)
+    for tup in candidates:
+        buckets[_month_bucket(tup[3].get("fecha"))].append(tup)
+
+    if len(buckets) <= 1:
+        return candidates  # un solo mes (o todas sin fecha) → sin cambios
+
+    # Meses de más reciente a más antiguo; el bucket -1 (sin fecha) queda al final.
+    ordered_keys = sorted(buckets.keys(), reverse=True)
+    ordered: list[tuple[float, int, int, dict]] = []
+    while any(buckets[k] for k in ordered_keys):
+        for k in ordered_keys:
+            if buckets[k]:
+                ordered.append(buckets[k].popleft())
+    return ordered
+
+
 def select_reviews_for_prompt(
     reviews: Iterable[dict],
     max_tokens: int = DEFAULT_MAX_REVIEW_TOKENS,
@@ -357,6 +406,19 @@ def select_reviews_for_prompt(
 
     # Orden estable: por peso, luego rating, luego longitud (todos desc).
     candidates.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
+
+    # ── Estratificación temporal (cobertura estacional) ──────────────────────
+    # Problema medido (200 spots más transitados): tomar las N reviews más
+    # recientes hace que la muestra abarque ~5 meses de mediana (98% < 1 año),
+    # perdiendo la inferencia de estaciones y clima — fundamental en autocaravana.
+    # Solución cost-neutral (mismo budget de tokens): repartir la selección en
+    # round-robin por mes, empezando por el mes más reciente en cada ronda. Así
+    # los meses recientes mantienen prioridad (entran antes en cada ronda) pero
+    # los meses antiguos quedan representados desde la primera ronda → la muestra
+    # se estira para cubrir todo el rango temporal disponible.
+    # Para spots con reviews en 1-2 meses (caso común) el round-robin equivale al
+    # orden por peso original (sin cambio de comportamiento).
+    candidates = _stratify_temporally(candidates)
 
     selected: list[dict] = []
     tokens_used = 0
@@ -509,6 +571,7 @@ async def fetch_spot_for_enrichment(conn, spot_id: int) -> dict | None:
     row = await conn.fetchrow(
         """
         SELECT id, canonical_name, slug, lat, lon, country_iso, tipo, subtipo,
+               region, subregion, municipio,
                fuentes, total_reviews, master_rating,
                descripcion_es, descripcion_en, descripcion_fr, descripcion_de,
                descripcion_it, descripcion_nl, descripcion_pt,

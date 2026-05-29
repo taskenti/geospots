@@ -108,9 +108,12 @@ async def select_candidates(
         )
         return [r["spot_id"] for r in rows]
     if countries:
-        # spots.country_iso se almacena en minúsculas (trigger de clasificación)
+        # BUG-COUNTRY-CASE (2026-05-29): country_iso DEBERÍA estar en minúsculas
+        # (trigger de clasificación), pero ~32.5K filas activas están en MAYÚSCULAS
+        # (FR=30.8K, NO=1.6K…) por filas que no pasaron el trigger. Comparar contra
+        # `lower(s.country_iso)` para no saltarse esas filas (mismo fix que worker.py).
         normalized = [c.lower() for c in countries]
-        country_filter = "AND s.country_iso = ANY($3)"
+        country_filter = "AND lower(s.country_iso) = ANY($3)"
         params = [enrichment_version, limit, normalized]
     else:
         country_filter = ""
@@ -289,6 +292,33 @@ async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
                 latency_ms = int((time.time() - t0) * 1000)
                 stats.consecutive_errors = 0  # reset on success
 
+                # BUG-COST-CAP (2026-05-29): el coste se contabiliza ANTES de
+                # parse/ingest. La llamada LLM YA se pagó en cuanto resp vuelve;
+                # si el ingest falla luego (p.ej. columna ausente) el dinero ya
+                # salió. Si esperásemos al éxito del ingest para acumular coste,
+                # el hard-stop (stats.cost_estimated_usd >= max_cost_usd) nunca
+                # saltaría con ingests rotos → desfalco. Por eso acumulamos aquí
+                # y registramos la métrica en su propia conexión/try, de forma
+                # que un fallo de telemetría tampoco pierda la contabilidad.
+                cost = estimate_cost(resp.model, resp.usage)
+                stats.tokens_input_total += int(resp.usage.get("prompt_token_count", 0))
+                stats.tokens_output_total += int(resp.usage.get("candidates_token_count", 0))
+                stats.cost_estimated_usd += cost
+                try:
+                    async with pool.acquire() as conn:
+                        # T1.8 — métrica per-call. País viene del spot row ya fetchado arriba.
+                        await _record_llm_metric(
+                            conn,
+                            provider=resp.provider, model=resp.model,
+                            spot_id=spot_id,
+                            country=(spot.get("country_iso") or "").upper() or None,
+                            usage=resp.usage,
+                            latency_ms=latency_ms,
+                            pipeline_run_id=pipeline_run_id,
+                        )
+                except Exception as metric_exc:
+                    logger.warning(f"[orchestrator] no se pudo registrar métrica spot={spot_id}: {metric_exc}")
+
                 parsed = parse_enrichment_response(resp.text)
                 async with pool.acquire() as conn:
                     ingest_stats = await ingest_spot_enrichment(
@@ -297,22 +327,8 @@ async def _process_one_spot(pool, spot_id: int, *, provider: str, model: str,
                         llm_model=resp.model,
                         pipeline_run_id=pipeline_run_id,
                     )
-                    # T1.8 — métrica per-call. País viene del spot row ya fetchado arriba.
-                    await _record_llm_metric(
-                        conn,
-                        provider=resp.provider, model=resp.model,
-                        spot_id=spot_id,
-                        country=(spot.get("country_iso") or "").upper() or None,
-                        usage=resp.usage,
-                        latency_ms=latency_ms,
-                        pipeline_run_id=pipeline_run_id,
-                    )
-                cost = estimate_cost(resp.model, resp.usage)
                 stats.spots_succeeded += 1
                 stats.claims_total += ingest_stats.claims_inserted
-                stats.tokens_input_total += int(resp.usage.get("prompt_token_count", 0))
-                stats.tokens_output_total += int(resp.usage.get("candidates_token_count", 0))
-                stats.cost_estimated_usd += cost
                 logger.debug(f"[orchestrator] ok spot={spot_id} claims={ingest_stats.claims_inserted} cost=${cost:.5f}")
                 return
             except ParseError as exc:

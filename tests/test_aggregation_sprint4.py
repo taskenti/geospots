@@ -78,17 +78,32 @@ def main() -> int:
     check("noisesrc:road" in agg["semantic_dsl"],
           f"texto debería entrar al DSL, dio {agg['semantic_dsl']}")
 
-    # ── BUG-27: wind_exposure invertido en DSL ───────────────────────────────
-    # wind alto = MUY expuesto (malo) -> shelter bajo
+    # ── BUG-27 + BUG-POLARITY: polaridad unificada del DSL ────────────────────
+    # Modelo: signo = bueno(+)/malo(-), magnitud = 2*|valor-0.5| (centrado en 0.5).
+    # wind alto = MUY expuesto (malo) -> shelter negativo, magnitud alta
     dsl_windy = generate_spot_dsl({"wind_exposure": {"score": 0.9}})
-    check("shelter:-0.1" in dsl_windy,
-          f"wind alto debería dar shelter bajo, dio {dsl_windy}")
+    check("shelter:-0.8" in dsl_windy,
+          f"wind alto debería dar shelter muy negativo, dio {dsl_windy}")
     dsl_calm = generate_spot_dsl({"wind_exposure": {"score": 0.1}})
-    check("shelter:+0.9" in dsl_calm,
-          f"wind bajo debería dar shelter alto, dio {dsl_calm}")
+    check("shelter:+0.8" in dsl_calm,
+          f"wind bajo debería dar shelter muy positivo, dio {dsl_calm}")
     # consistencia de polaridad con quietness (alto=mejor)
     dsl_quiet = generate_spot_dsl({"quietness": {"score": 0.9}})
-    check("quiet:+0.9" in dsl_quiet, "quietness alto -> +")
+    check("quiet:+0.8" in dsl_quiet, f"quietness alto -> +, dio {dsl_quiet}")
+
+    # Señales de riesgo/molestia "alto=peor": riesgo alto debe leerse NEGATIVO.
+    dsl_theft = generate_spot_dsl({"theft_risk": {"score": 1.0}})
+    check("theft:-1.0" in dsl_theft,
+          f"theft_risk máximo debería ser muy negativo, dio {dsl_theft}")
+    dsl_safe = generate_spot_dsl({"theft_risk": {"score": 0.0}})
+    check("theft:+1.0" in dsl_safe,
+          f"sin theft_risk debería ser muy positivo, dio {dsl_safe}")
+    dsl_noisy = generate_spot_dsl({"noise": {"score": 0.7}})
+    check("noise:-0.4" in dsl_noisy,
+          f"noise alto debería ser negativo, dio {dsl_noisy}")
+    dsl_police = generate_spot_dsl({"police_risk": {"score": 0.8}})
+    check("police:-0.6" in dsl_police,
+          f"police_risk alto debería ser negativo, dio {dsl_police}")
 
     # ── BUG-35: normalización de raw_value booleano ──────────────────────────
     # (réplica de la expresión inline de ingest_v2._insert_claim)

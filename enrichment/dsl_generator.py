@@ -29,10 +29,20 @@ DSL_KEYS = {
     "parking_capacity": "parking",
 }
 
-# BUG-27: señales numéricas donde valor alto = PEOR. El DSL es polaridad
-# "más alto = mejor" (quiet/clean/safe...), así que estas se invierten antes de
-# renderizar para no leerse al revés. wind_exposure se renombra a `shelter`.
-DSL_INVERTED_SIGNALS = {"wind_exposure"}
+# BUG-POLARITY (2026-05-29): el DSL usa polaridad "signo = bueno(+)/malo(-),
+# magnitud = intensidad" centrada en 0.5. Para señales donde valor alto = PEOR
+# (ruido, riesgo, masificación) la contribución a la bondad del spot se invierte
+# (contrib = 0.5 - valor) para que un riesgo alto se lea como negativo. Antes
+# SOLO se invertía wind_exposure → cualquier otra señal de riesgo/molestia se
+# renderizaba con polaridad positiva (`theft:+1.0` leído como "muy seguro"
+# cuando significaba "robo máximo"), envenenando embeddings y /search/semantic.
+# wind_exposure se mapea al concepto positivo `shelter` en DSL_KEYS.
+HIGHER_IS_WORSE = {
+    "noise", "road_noise", "party_noise", "train_noise",
+    "police_risk", "theft_risk", "crowd_level", "wind_exposure",
+}
+# Alias retrocompatible (algún import externo podría referenciarlo).
+DSL_INVERTED_SIGNALS = HIGHER_IS_WORSE
 
 
 def _extract_value(value: object) -> object:
@@ -54,10 +64,14 @@ def generate_spot_dsl(semantic_state: dict) -> str:
             parts.append(f"{abbr}:{'T' if val else 'F'}")
         elif isinstance(val, (int, float)):
             num = float(val)
-            if key in DSL_INVERTED_SIGNALS:
-                num = 1.0 - num  # alto=peor -> invertir para polaridad "alto=mejor"
-            sign = "+" if num >= 0.5 else "-"
-            parts.append(f"{abbr}:{sign}{num:.1f}")
+            # Contribución a la "bondad" del spot, centrada en 0.5.
+            #   señal buena (quiet/beauty/safe...): contrib = valor - 0.5
+            #   señal mala  (noise/theft/police...): contrib = 0.5 - valor
+            # signo = bueno(+)/malo(-); magnitud = intensidad escalada a 0..1.
+            contrib = (0.5 - num) if key in HIGHER_IS_WORSE else (num - 0.5)
+            sign = "+" if contrib >= 0 else "-"
+            mag = min(1.0, abs(contrib) * 2.0)
+            parts.append(f"{abbr}:{sign}{mag:.1f}")
         elif isinstance(val, str) and val:
             safe = val.replace(" ", "_")[:24]
             parts.append(f"{abbr}:{safe}")
