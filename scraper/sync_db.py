@@ -62,7 +62,18 @@ async def main():
             SET spots_totales = (SELECT COUNT(*) FROM source_records sr WHERE sr.source = fc.nombre)
             WHERE fc.nombre IN ('ioverlander', 'park4night', 'portugaleasycamp', 'campspace', 'caramaps', 'stayfree', 'promobil', 'alpacacamping', 'womostell', 'thedyrt', 'campingcarinfos', 'agricamper', 'campendium', 'campingcarpark', 'campy', 'bobilguiden', 'google_maps', 'amigosac', 'freecampsites');
         """)
-        
+
+        # 3. Sincronizar total_records en source_credibility (BUG-34).
+        # Este campo estaba siempre en 0 porque sync_db nunca lo actualizaba.
+        # Cualquier código que lo lea (ej. reporting, futuros scorers) obtenía 0.
+        print("Sincronizando total_records en source_credibility...")
+        await conn.execute("""
+            UPDATE source_credibility sc
+            SET total_records = (
+                SELECT COUNT(*) FROM source_records sr WHERE sr.source = sc.source
+            )
+        """)
+
         print("Sincronización completada con éxito!")
         
     await pool.close()

@@ -138,8 +138,8 @@ async def _insert_observation(conn, claim_id: int, review: dict, obs) -> int:
         INSERT INTO normalized_observations (
             claim_id, spot_id, signal_type, value_num, value_bool, value_text,
             extraction_confidence, source_confidence, reviewer_confidence,
-            observation_weight, observed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            observation_weight, observed_at, date_estimated
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
         """,
         claim_id,
@@ -153,6 +153,7 @@ async def _insert_observation(conn, claim_id: int, review: dict, obs) -> int:
         obs.reviewer_confidence,
         obs.observation_weight,
         obs.observed_at,
+        obs.date_estimated,
     )
 
 
@@ -163,23 +164,27 @@ async def fetch_pending_reviews(conn, batch_size: int,
     Pre-Sprint 4 (T1.4/smoke Andorra) — `countries` filtra por ISO-2 vía
     JOIN a `spots.country_iso`. None = sin filtro (comportamiento legacy).
     Los ISO se comparan en minúsculas (tal como se almacenan en `spots`).
+
+    Sprint 3 / BUG-09: el JOIN a spots ahora es incondicional para exponer
+    `country_iso` al cleaner (prior de idioma por país cuando langdetect
+    tiene baja confianza). Es un JOIN por FK existente, coste despreciable.
     """
+    # JOIN incondicional para tener s.country_iso siempre disponible.
     if countries:
         normalized = [c.lower() for c in countries]
-        country_join = "JOIN spots s ON s.id = r.spot_id"
         country_filter = "AND s.country_iso = ANY($2)"
         params: list = [batch_size, normalized]
     else:
-        country_join = ""
         country_filter = ""
         params = [batch_size]
 
     sql = f"""
     SELECT r.id, r.texto, r.texto_original, r.source, r.spot_id, r.fecha,
+           s.country_iso,
            COALESCE(sc.review_quality, 1.0) AS source_confidence,
            COALESCE(st.temperature, 'cold') AS temperature
     FROM reviews r
-    {country_join}
+    JOIN spots s ON s.id = r.spot_id
     LEFT JOIN source_credibility sc ON sc.source = r.source
     LEFT JOIN spot_temperature st ON st.id = r.spot_id
     WHERE COALESCE(r.llm_processed, FALSE) = FALSE
@@ -309,7 +314,10 @@ async def process_review(
     llm_calls: list[int] | None = None,
 ) -> dict:
     raw_text = review.get("texto_original") or review.get("texto")
-    cleaned = clean_review_full(raw_text)
+    # Sprint 3 / BUG-09: prior por país en la detección de idioma. Si la review
+    # viene de un código de país conocido, el cleaner lo usa como tie-breaker
+    # cuando langdetect tiene baja confianza (textos cortos romance, etc.).
+    cleaned = clean_review_full(raw_text, country_iso=review.get("country_iso"))
     if not cleaned.informativo:
         if not dry_run:
             await conn.execute(
@@ -342,7 +350,10 @@ async def process_review(
         claims,
         source_confidence=review.get("source_confidence", 1.0),
         reviewer_confidence=1.0,
-        observed_at=review.get("fecha") or datetime.now(timezone.utc),
+        # Sprint 3 (BUG-10/17): pasamos `fecha` cruda (puede ser None). El
+        # normalizer la resuelve a `now` PERO marca date_estimated=True, así una
+        # review sin fecha no recibe recency boost ni "gana" a evidencia datada.
+        observed_at=review.get("fecha"),
     )
     review_dsl = generate_review_dsl(claims)
     if dry_run:

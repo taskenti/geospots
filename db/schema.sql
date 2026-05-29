@@ -655,6 +655,12 @@ CREATE TABLE IF NOT EXISTS extracted_claims (
 CREATE INDEX IF NOT EXISTS idx_ec_spot_signal ON extracted_claims(spot_id, signal_type);
 CREATE INDEX IF NOT EXISTS idx_ec_review ON extracted_claims(review_id);
 CREATE INDEX IF NOT EXISTS idx_ec_extractor ON extracted_claims(extractor_name, extractor_version);
+-- BUG-37/30: impide duplicar claims al re-enriquecer spot-level (orchestrator_v2).
+-- Solo extractores '%_spot_v2' (NO scraped_facts_v1, que es inmutable y multi-fuente).
+-- extractor_version fuera de la clave -> v4 y v6 colisionan (segunda inserción ignorada).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ec_orchestrator_claim
+    ON extracted_claims (spot_id, signal_type, extractor_name, COALESCE(review_id, -1))
+    WHERE extractor_name IN ('gemini_spot_v2', 'deepseek_spot_v2');
 
 CREATE TABLE IF NOT EXISTS normalized_observations (
     id BIGSERIAL PRIMARY KEY,
@@ -669,6 +675,9 @@ CREATE TABLE IF NOT EXISTS normalized_observations (
     reviewer_confidence REAL NOT NULL DEFAULT 1.0,
     observation_weight REAL NOT NULL,
     observed_at TIMESTAMPTZ NOT NULL,
+    -- Sprint 3 (BUG-10/17/22/31): fecha NO real (sin fecha / scrape-time /
+    -- futura saneada). El agregador no aplica recency boost a estas.
+    date_estimated BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

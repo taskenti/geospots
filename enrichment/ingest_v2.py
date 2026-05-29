@@ -21,6 +21,7 @@ Diseño:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -54,6 +55,11 @@ class IngestStats:
     # v6 (T1.4 + T1.4b)
     alerts_upserted: int = 0
     spot_function_set: bool = False
+    # Sprint 5 (BUG-37/30): claims omitidos por ya existir (re-enriquecimiento)
+    claims_skipped_duplicate: int = 0
+    # Sprint 5 (BUG-23): review_claims descartados por no estar anclados a la
+    # review citada (ecos de STATIC_CONTEXT / hechos de servicios re-emitidos)
+    claims_dropped_ungrounded: int = 0
     spot_geo_updated: bool = False
     # T2.6
     relations_upserted: int = 0
@@ -69,35 +75,96 @@ def _extractor_version() -> str:
 
 
 async def _resolve_observed_at(conn, review_id: int | None,
-                               fallback: datetime | None = None) -> datetime:
-    """Si el claim cita review_id, usamos su fecha; si no, fallback/NOW."""
+                               fallback: datetime | None = None) -> tuple[datetime, bool]:
+    """Devuelve (observed_at, date_estimated).
+
+    Sprint 3 (BUG-10/17): si el claim cita un review_id con fecha real →
+    (fecha, False). Si no hay review_id, o la review no tiene fecha, la fecha
+    no es de publicación real → (fallback/NOW, True) para que el agregador no le
+    aplique recency boost ni la haga "ganar" a evidencia datada.
+    """
     if review_id is not None:
         row = await conn.fetchrow("SELECT fecha FROM reviews WHERE id = $1", review_id)
         if row and row["fecha"]:
             fecha = row["fecha"]
             if hasattr(fecha, "year") and not hasattr(fecha, "hour"):
                 # date → datetime
-                return datetime(fecha.year, fecha.month, fecha.day, tzinfo=timezone.utc)
+                return datetime(fecha.year, fecha.month, fecha.day, tzinfo=timezone.utc), False
             if fecha.tzinfo is None:
-                return fecha.replace(tzinfo=timezone.utc)
-            return fecha
-    return fallback or datetime.now(timezone.utc)
+                return fecha.replace(tzinfo=timezone.utc), False
+            return fecha, False
+    return fallback or datetime.now(timezone.utc), True
+
+
+# ── BUG-23: anclaje de review_claims al texto real de la review ──────────────
+_GROUNDING_TOKEN_RE = re.compile(r"[\wáéíóúüñàèìòùçâêîôûäöëï]{4,}")
+_GROUNDING_MIN_OVERLAP = 0.34  # fracción mínima de palabras significativas del
+                               # excerpt que deben aparecer en la review citada
+
+
+async def _fetch_review_texts(conn, review_ids: list[int]) -> dict[int, str]:
+    """Mapa {review_id: texto} para los ids citados (dedup interno)."""
+    uniq = sorted({rid for rid in review_ids if rid is not None})
+    if not uniq:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT id, COALESCE(texto_limpio, texto, texto_original, '') AS texto
+        FROM reviews WHERE id = ANY($1::bigint[])
+        """,
+        uniq,
+    )
+    return {r["id"]: (r["texto"] or "") for r in rows}
+
+
+def _excerpt_grounded(excerpt: str | None, review_text: str | None) -> bool:
+    """¿El excerpt del claim está fundamentado en el texto de la review?
+
+    True  -> el claim parece anclado a la review (se conserva).
+    False -> eco de STATIC_CONTEXT / review inexistente (se descarta).
+
+    Conservador para no matar claims legítimos: si el excerpt está vacío no
+    podemos evaluar anclaje por texto → se conserva. Si la review citada no
+    existe → no anclado. Si existe, exige solapamiento mínimo de palabras
+    significativas (tolera paráfrasis leve).
+    """
+    if not excerpt or not excerpt.strip():
+        return True
+    if review_text is None:
+        return False  # cita una review que no existe → no anclado
+    ex_tokens = _GROUNDING_TOKEN_RE.findall(excerpt.lower())
+    if not ex_tokens:
+        return True
+    rev_tokens = set(_GROUNDING_TOKEN_RE.findall(review_text.lower()))
+    if not rev_tokens:
+        return False
+    present = sum(1 for t in ex_tokens if t in rev_tokens)
+    return (present / len(ex_tokens)) >= _GROUNDING_MIN_OVERLAP
 
 
 async def _insert_claim(conn, spot_id: int, claim: ValidatedClaim,
-                       provider: str, pipeline_run_id: str) -> int:
+                       provider: str, pipeline_run_id: str) -> int | None:
+    # BUG-37/30: idempotente. El índice único uq_ec_orchestrator_claim impide
+    # duplicar el mismo claim al re-enriquecer (v4 -> v6). ON CONFLICT DO NOTHING
+    # preserva el claim original (audit trail) y devuelve NULL; el llamante
+    # entonces NO inserta una observación duplicada.
     return await conn.fetchval(
         """
         INSERT INTO extracted_claims (
             review_id, spot_id, signal_type, raw_value, extraction_confidence,
             extractor_name, extractor_version, pipeline_run_id, excerpt
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (spot_id, signal_type, extractor_name, COALESCE(review_id, -1))
+            WHERE extractor_name IN ('gemini_spot_v2', 'deepseek_spot_v2')
+            DO NOTHING
         RETURNING id
         """,
         claim.review_id,  # puede ser NULL para claims que vienen de descriptions
         spot_id,
         claim.signal,
-        str(claim.value),
+        # BUG-35: bool de Python -> "True"/"False" rompía downstream que espera
+        # raw_value en minúsculas ("true"/"false"). Normalizamos aquí.
+        "true" if claim.value is True else "false" if claim.value is False else str(claim.value),
         claim.confidence,
         _extractor_name(provider),
         _extractor_version(),
@@ -112,14 +179,14 @@ async def _insert_observation(conn, claim_id: int, spot_id: int, obs) -> int:
         INSERT INTO normalized_observations (
             claim_id, spot_id, signal_type, value_num, value_bool, value_text,
             extraction_confidence, source_confidence, reviewer_confidence,
-            observation_weight, observed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            observation_weight, observed_at, date_estimated
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
         """,
         claim_id, spot_id, obs.signal_type,
         obs.value_num, obs.value_bool, obs.value_text,
         obs.extraction_confidence, obs.source_confidence, obs.reviewer_confidence,
-        obs.observation_weight, obs.observed_at,
+        obs.observation_weight, obs.observed_at, obs.date_estimated,
     )
 
 
@@ -346,6 +413,16 @@ async def ingest_spot_enrichment(
         pipeline_run_id=pipeline_run_id,
     )
 
+    # BUG-23: el LLM re-emite hechos de <STATIC_CONTEXT> (servicios) como
+    # review_claims con un review_id plausible, duplicando lo que ya aporta
+    # scraped_facts_v1 (558 claims: dog_friendly, water_working, dump_station,
+    # electricity_working…). Filtro de anclaje: un review_claim debe estar
+    # FUNDAMENTADO en el texto de la review que cita. Si su excerpt no aparece
+    # (ni mínimamente) en esa review, es un eco de STATIC_CONTEXT → se descarta.
+    review_texts = await _fetch_review_texts(
+        conn, [c.review_id for c in parsed.claims if c.review_id is not None]
+    )
+
     async with conn.transaction():
         # 1. Claims → observations
         for claim in parsed.claims:
@@ -354,18 +431,34 @@ async def ingest_spot_enrichment(
                 logger.warning(f"[ingest_v2] signal desconocido tras parser: {claim.signal} (skip)")
                 continue
 
-            observed_at = await _resolve_observed_at(conn, claim.review_id)
+            if claim.review_id is not None and not _excerpt_grounded(
+                claim.excerpt, review_texts.get(claim.review_id)
+            ):
+                stats.claims_dropped_ungrounded += 1
+                logger.debug(
+                    f"[ingest_v2] claim descartado (eco STATIC_CONTEXT / sin anclaje): "
+                    f"{claim.signal} review={claim.review_id}"
+                )
+                continue
+
+            observed_at, date_estimated = await _resolve_observed_at(conn, claim.review_id)
             obs = normalize_claim(
                 {"signal": claim.signal, "value": claim.value, "confidence": claim.confidence},
                 source_confidence=source_confidence,
                 reviewer_confidence=1.0,
                 observed_at=observed_at,
+                date_estimated=date_estimated,
             )
             if obs is None:
                 logger.debug(f"[ingest_v2] claim no normalizable: {claim.signal}={claim.value}")
                 continue
 
             claim_id = await _insert_claim(conn, spot_id, claim, provider, pipeline_run_id)
+            if claim_id is None:
+                # BUG-37/30: claim ya existía (re-enriquecimiento). No duplicamos
+                # ni el claim ni su observación.
+                stats.claims_skipped_duplicate += 1
+                continue
             stats.claims_inserted += 1
             await _insert_observation(conn, claim_id, spot_id, obs)
             stats.observations_inserted += 1

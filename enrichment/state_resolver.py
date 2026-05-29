@@ -246,13 +246,28 @@ def compute_decayed_confidence(
     last_decay_at: datetime | None,
     detected_at: datetime,
     current_ts: datetime,
+    valid_from: date | None = None,
 ) -> tuple[float, float]:
-    """Aplica decay 0.85^n donde n = meses desde `last_decay_at` (o `detected_at`
-    si nunca se ha aplicado).
+    """Aplica decay 0.85^n donde n = meses desde el ancla.
+
+    Sprint 3 (BUG-07): el ancla inicial es `valid_from` (cuándo EMPEZÓ el evento),
+    NO `detected_at` (cuándo lo ingestamos). Antes, un evento de 2015 detectado en
+    2026 decaía desde 2026 → months≈0 → se mantenía "fresco" años. Anclando a
+    valid_from, ese mismo evento arranca ya con ~130 meses de decay y se resuelve.
+    `detected_at` queda solo como fallback si no hay valid_from.
+
+    En ejecuciones posteriores `last_decay_at` toma precedencia (decay incremental
+    idempotente: solo cuentan los meses transcurridos desde el último decay).
 
     Returns (new_confidence, months_elapsed).
     """
-    anchor = last_decay_at or detected_at
+    if last_decay_at is not None:
+        anchor = last_decay_at
+    elif valid_from is not None:
+        anchor = datetime(valid_from.year, valid_from.month, valid_from.day,
+                          tzinfo=current_ts.tzinfo)
+    else:
+        anchor = detected_at
     months = _months_between(anchor, current_ts)
     if months <= 0:
         return current_confidence, 0.0
@@ -310,6 +325,7 @@ async def apply_decay(conn, alert_row: dict, current_ts: datetime | None = None)
         alert_row["last_decay_at"],
         alert_row["detected_at"],
         current_ts,
+        valid_from=alert_row.get("valid_from"),
     )
 
     # Round defensive (NUMERIC(3,2) en DB)

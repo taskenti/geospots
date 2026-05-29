@@ -71,6 +71,27 @@ def _age_days(observed_at: datetime, now: datetime) -> float:
     return max(0.0, (now - observed_at).total_seconds() / 86400.0)
 
 
+def _max_real_obs_date(rows: Iterable[dict]) -> datetime | None:
+    """Máxima `observed_at` (tz-aware) entre observaciones con FECHA REAL.
+
+    Ignora observaciones con `date_estimated=True` (BUG-11): una review sin fecha
+    no debe "reabrir" un cierre — su fecha es un placeholder (now), no actividad
+    real posterior.
+    """
+    best: datetime | None = None
+    for row in rows:
+        if bool(row.get("date_estimated", False)):
+            continue
+        dt = row.get("observed_at")
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if best is None or dt > best:
+            best = dt
+    return best
+
+
 def decayed_weight(weight: float, observed_at: datetime, half_life_days: int, now: datetime | None = None) -> float:
     """Decay por half-life puro: weight · 0.5^(Δt/half_life). Sin recency boost.
 
@@ -88,17 +109,74 @@ def decayed_weight(weight: float, observed_at: datetime, half_life_days: int, no
 
 
 def observation_weight_at(weight: float, observed_at: datetime, half_life_days: int,
-                          now: datetime | None = None) -> float:
+                          now: datetime | None = None,
+                          date_estimated: bool = False) -> float:
     """Peso final de una observación (T2.3): decay half-life × recency boost.
 
     Espejo de la fórmula del plan:
         w_final = base_weight · 2^(-Δt/half_life) · recency_boost(Δt)
     (`base_weight` ya viene como source_confidence·extraction_confidence·… desde
     `normalized_observations.observation_weight`).
+
+    Sprint 3 (BUG-10/17/22/31): NO se aplica recency boost cuando la fecha es
+    estimada (review sin fecha / hecho scrapeado / futura saneada) ni cuando la
+    fecha cae en el futuro respecto a `now`. Sin esta guarda una evidencia sin
+    fecha real "gana" a una review datada por parecer fresca.
     """
     now = now or datetime.now(timezone.utc)
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
     decayed = decayed_weight(weight, observed_at, half_life_days, now)
+    is_future = (observed_at - now).total_seconds() > 0
+    if date_estimated or is_future:
+        return decayed  # boost neutro (×1.0)
     return decayed * recency_boost(_age_days(observed_at, now))
+
+
+# ── Confianza: helpers centralizados (Sprint 4 — BUG-06 / BUG-25) ────────────
+# Antes había DOS fórmulas de confianza divergentes (en aggregate_observations
+# full-recompute y en update_semantic_state incremental). El audit las marcó como
+# bug porque podían dar números distintos para el mismo estado. Se centralizan
+# aquí para que ambos caminos sean idénticos por construcción.
+
+# BUG-06: confianza booleana = acuerdo × volumen.
+#   acuerdo  = |true - false| / support  (0 = empate, 1 = unanimidad)
+#   volumen  = min(1, support / SAT)     (penaliza pocas observaciones)
+# El bug era usar solo el acuerdo: 1 sola review "true" daba confidence=1.0.
+BOOL_CONFIDENCE_SATURATION = 3.0
+
+
+def boolean_confidence(true_support: float, false_support: float) -> float:
+    """Confianza de una señal booleana: acuerdo entre observaciones × volumen.
+
+    Una única observación (support≈1) nunca debería dar confianza máxima; el
+    factor de volumen lo evita. A partir de ~3 observaciones concordantes el
+    volumen satura a 1.0 y la confianza la marca el acuerdo.
+    """
+    support = true_support + false_support
+    if support <= 0:
+        return 0.0
+    agreement = abs(true_support - false_support) / support
+    volume = min(1.0, support / BOOL_CONFIDENCE_SATURATION)
+    return agreement * volume
+
+
+# BUG-25: consenso global = saturación logarítmica del peso total.
+# El bug era `min(1, total_weight / (total_observations*2))`: dividir por el
+# número de observaciones hacía que MÁS evidencia BAJASE el consenso (no
+# monótono). Aquí el consenso crece monótonamente con el peso acumulado.
+CONSENSUS_SATURATION_WEIGHT = 12.0
+
+
+def consensus_confidence(total_weight: float) -> float:
+    """Consenso global del spot: monótono creciente con el peso total acumulado.
+
+    log1p(w)/log1p(SAT) → 0 sin evidencia, ~1 cuando el peso total alcanza SAT.
+    A diferencia de la fórmula vieja, añadir observaciones nunca reduce el valor.
+    """
+    if total_weight <= 0:
+        return 0.0
+    return min(1.0, math.log1p(total_weight) / math.log1p(CONSENSUS_SATURATION_WEIGHT))
 
 
 def semantic_distance(a: dict | None, b: dict | None, signal_types: dict[str, SignalType] | None = None) -> float:
@@ -125,6 +203,22 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
     for row in rows:
         buckets.setdefault(row["signal_type"], []).append(row)
 
+    # BUG-11: un spot marcado "cerrado" debe poder REABRIRSE. Si hay actividad
+    # (observaciones de cualquier OTRA señal) fechada DESPUÉS del último reporte
+    # de cierre, la gente sigue usando/reseñando el sitio → el cierre está
+    # obsoleto y se descarta. Solo se consideran fechas reales (no estimadas).
+    closure_rows = buckets.get("spot_closed", [])
+    if closure_rows:
+        latest_closure = _max_real_obs_date(
+            r for r in closure_rows if bool(r.get("value_bool"))
+        )
+        latest_activity = _max_real_obs_date(
+            r for sig, rs in buckets.items() if sig != "spot_closed" for r in rs
+        )
+        if (latest_closure is not None and latest_activity is not None
+                and latest_activity > latest_closure):
+            buckets.pop("spot_closed", None)
+
     signals_data: dict[str, dict] = {}
     total_weight = 0.0
     total_observations = 0
@@ -134,10 +228,14 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
             continue
         weighted_values = []
         bool_support = {True: 0.0, False: 0.0}
+        text_support: dict[str, float] = {}
         support = 0.0
         for row in obs_rows:
             observed_at = row["observed_at"]
-            weight = observation_weight_at(float(row["observation_weight"]), observed_at, stype.half_life_days)
+            weight = observation_weight_at(
+                float(row["observation_weight"]), observed_at, stype.half_life_days,
+                date_estimated=bool(row.get("date_estimated", False)),
+            )
             if weight <= 0:
                 continue
             support += weight
@@ -147,17 +245,32 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
                 bool_support[bool(row["value_bool"])] += weight
             elif stype.value_type == "numeric" and row["value_num"] is not None:
                 weighted_values.append((float(row["value_num"]), weight))
+            elif stype.value_type == "text":
+                cat = row.get("value_text")
+                if cat:
+                    text_support[str(cat)] = text_support.get(str(cat), 0.0) + weight
 
         if support <= 0:
             continue
         if stype.value_type == "boolean":
             score_value = bool_support[True] >= bool_support[False]
-            confidence = abs(bool_support[True] - bool_support[False]) / support
+            confidence = boolean_confidence(bool_support[True], bool_support[False])
             signals_data[signal] = {
                 "score": score_value,
                 "weight_support": round(support, 6),
                 "n_observations": len(obs_rows),
                 "confidence": round(confidence, 6),
+            }
+        elif stype.value_type == "text" and text_support:
+            # BUG-16: moda ponderada — la categoría con más peso acumulado gana.
+            # Surface en signals_data para que entre al DSL (las columnas
+            # noise_sources/parking_capacity las materializa v2_materializer aparte).
+            dominant = max(text_support.items(), key=lambda kv: kv[1])[0]
+            signals_data[signal] = {
+                "score": dominant,
+                "weight_support": round(support, 6),
+                "n_observations": len(obs_rows),
+                "confidence": round(text_support[dominant] / support, 6),
             }
         elif weighted_values:
             score = sum(value * weight for value, weight in weighted_values) / support
@@ -177,7 +290,7 @@ def aggregate_observations(rows: Iterable[dict], signal_types: dict[str, SignalT
         materialized[column] = signals_data.get(signal, {}).get("score")
     for signal, column in MATERIALIZED_V2_BOOL.items():
         materialized[column] = signals_data.get(signal, {}).get("score")
-    consensus = min(1.0, total_weight / max(1.0, total_observations * 2.0))
+    consensus = consensus_confidence(total_weight)
     return {
         "signals_data": signals_data,
         "semantic_dsl": generate_spot_dsl(signals_data),
@@ -339,7 +452,7 @@ def needs_recompute(signal_half_lives: Iterable[int], days_since_last_aggregate:
 async def recompute_spot_state(conn, spot_id: int, snapshot_threshold: float = 0.15) -> dict:
     rows = await conn.fetch(
         """
-        SELECT signal_type, value_num, value_bool, value_text, observation_weight, observed_at
+        SELECT signal_type, value_num, value_bool, value_text, observation_weight, observed_at, date_estimated
         FROM normalized_observations
         WHERE spot_id = $1
         """,
@@ -471,6 +584,7 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
         observation.observation_weight,
         observation.observed_at,
         stype.half_life_days,
+        date_estimated=bool(getattr(observation, "date_estimated", False)),
     )
 
     if stype.value_type == "boolean":
@@ -482,7 +596,7 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
             old_false += obs_weight
         support = old_true + old_false
         score = old_true >= old_false
-        confidence = abs(old_true - old_false) / support if support else 0.0
+        confidence = boolean_confidence(old_true, old_false)
     else:
         old_score = float(old_entry.get("score", 0.0) or 0.0)
         support = old_support + obs_weight
@@ -517,7 +631,7 @@ async def update_semantic_state(conn, spot_id: int, observation: object | None =
     semantic_dsl = generate_spot_dsl(signals_data)
     total_observations = (row["total_observations"] if row else 0) + 1
     weight_support = float(row["weight_support"] if row else 0.0) + obs_weight
-    consensus = min(1.0, weight_support / max(1.0, total_observations * 2.0))
+    consensus = consensus_confidence(weight_support)
     snapshot_baseline = _json_object(row["last_snapshot_data"]) if row else {}
     if not snapshot_baseline:
         snapshot_baseline = previous_signals

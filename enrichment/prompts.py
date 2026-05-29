@@ -65,7 +65,9 @@ NUMERIC (0.0-1.0):
 BOOLEAN:
   sea_view             sea view
   mountain_view        mountain view
-  lake_nearby          lake/river nearby
+  lake_nearby          standing water nearby: lake/pond/reservoir/laguna/loch
+                       (NOT rivers/streams — "río"/"river"/"rivière"/"Fluss"
+                        do NOT count; mention those in tags/summary instead)
   shade_morning        morning shade
   shade_afternoon      afternoon shade
   overnight_safe       overnight stay possible without issues

@@ -534,14 +534,14 @@ async def _insert_observation(conn, claim_id: int, spot_id: int, obs) -> int:
         INSERT INTO normalized_observations (
             claim_id, spot_id, signal_type, value_num, value_bool, value_text,
             extraction_confidence, source_confidence, reviewer_confidence,
-            observation_weight, observed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            observation_weight, observed_at, date_estimated
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
         """,
         claim_id, spot_id,
         obs.signal_type, obs.value_num, obs.value_bool, obs.value_text,
         obs.extraction_confidence, obs.source_confidence, obs.reviewer_confidence,
-        obs.observation_weight, obs.observed_at,
+        obs.observation_weight, obs.observed_at, obs.date_estimated,
     )
 
 
@@ -569,6 +569,11 @@ async def process_spot(conn, spot_id: int, pipeline_run_id: str,
 
             source = sr["source"]
             source_conf = float(sr.get("source_confidence") or 0.7)
+            # Sprint 3 (BUG-22): `last_seen` es el timestamp de ingesta del
+            # scraper, NO la fecha de publicación del hecho. Anclar el decay a
+            # esa fecha hacía que TODA señal scrapeada pareciera "recién vista" y
+            # ganara a reviews datadas reales (fast-decay: agua/elec/ducha 60d).
+            # La marcamos estimada → sin recency boost y con peso penalizado.
             observed_at = sr.get("last_seen") or datetime.now(timezone.utc)
 
             claims = extract_claims_from_source_record(norm, source)
@@ -582,6 +587,7 @@ async def process_spot(conn, spot_id: int, pipeline_run_id: str,
                     reviewer_confidence=1.0,
                     observed_at=observed_at,
                     signal_types=STATIC_SIGNALS,
+                    date_estimated=True,  # BUG-22: last_seen no es fecha de publicación
                 )
                 if obs is None:
                     continue

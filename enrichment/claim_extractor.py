@@ -288,13 +288,18 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "no se permite pernoctar", "no se permite dormir",
     )),
     # ── SPOT CLOSED ──────────────────────────────────────────────────────────────
+    # BUG-03: "construction"/"obras" eliminados — una obra CERCA no es un spot
+    # cerrado (1.368 FP). La obra es transitoria (1-6 meses) y, si fuese real,
+    # las reviews posteriores la "reabren" (BUG-11). Los cierres permanentes
+    # específicos siguen aquí; los términos de obra concretos viven en el léxico
+    # multilingüe (solo modulan confianza de un claim ya existente, no lo crean).
     ("spot_closed", "true", 0.88, (
         "closed", "cerrado", "fermé", "geschlossen",
         "permanently closed", "cerrado permanentemente",
         "ya no existe", "no longer exists", "no longer open",
         "spot closed", "parking cerrado", "zona cerrada",
         "gates locked", "barrera cerrada", "acceso bloqueado",
-        "blocked access", "construction", "obras",
+        "blocked access",
     )),
     # ── CROWD LEVEL ──────────────────────────────────────────────────────────────
     ("crowd_level", "0.85", 0.78, (
@@ -454,6 +459,48 @@ NEEDLE_EXCLUSIONS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# BUG-08: cierre PARCIAL de un servicio (WC, restaurante, ducha, piscina…) NO es
+# cierre del spot. Los needles GENÉRICOS de cierre ("closed"/"cerrado"/"fermé"/
+# "geschlossen") se suprimen cuando en su misma cláusula aparece un sustantivo de
+# servicio. Los needles específicos ("permanently closed", "barrera cerrada"…)
+# no pasan por este filtro y disparan siempre.
+_GENERIC_CLOSURE_NEEDLES = frozenset({"closed", "cerrado", "fermé", "ferme", "geschlossen"})
+_FACILITY_TOKENS = frozenset({
+    # EN
+    "toilet", "toilets", "wc", "shower", "showers", "restaurant", "bar", "cafe",
+    "shop", "store", "kiosk", "reception", "office", "pool", "kitchen", "snack",
+    "restroom", "restrooms", "bathroom", "laundry",
+    # ES
+    "baño", "ba.os", "baños", "aseo", "aseos", "ducha", "duchas", "restaurante",
+    "kiosco", "quiosco", "supermercado", "chiringuito", "recepción", "recepcion",
+    "piscina", "tienda", "lavandería", "lavanderia", "servicio", "servicios",
+    # FR
+    "toilettes", "sanitaires", "douche", "douches", "piscine", "accueil",
+    "réception", "magasin", "boulangerie",
+    # DE
+    "toilette", "toiletten", "dusche", "duschen", "sanitär", "sanitaer",
+    "rezeption", "kiosk", "schwimmbad", "küche", "kueche", "waschraum",
+})
+
+
+def _is_partial_facility_closure(text: str, start: int, window_tokens: int = 5) -> bool:
+    """¿El match de cierre genérico se refiere solo a un servicio (no al spot)?
+
+    Mira los tokens de la misma cláusula (antes y después del match) buscando un
+    sustantivo de servicio. "the toilets were closed" -> True (parcial);
+    "the whole area is closed" -> False (cierre real).
+    """
+    last_punct = -1
+    for p in _CLAUSE_PUNCT:
+        last_punct = max(last_punct, text.rfind(p, 0, start))
+    next_punct = len(text)
+    for p in _CLAUSE_PUNCT:
+        idx = text.find(p, start)
+        if idx != -1:
+            next_punct = min(next_punct, idx)
+    clause = text[last_punct + 1:next_punct]
+    return any(tok in _FACILITY_TOKENS for tok in _TOKEN_RE.findall(clause))
+
 
 # ── Negación separada (Sprint 2 / BUG-04,15,28,29) ───────────────────────────
 # Las negaciones por PREFIJO (unruhig, unsafe, unsicher) ya las resuelve el
@@ -518,9 +565,14 @@ def _needle_matches(needle: str, lowered: str) -> bool:
             work = work.replace(ex, " ")
     # Si el needle ya es negativo de por sí, no aplicar chequeo de negación.
     skip_neg = _needle_has_negation_token(needle)
+    # BUG-08: cierre genérico ("closed"/"cerrado"/…) se ignora si la cláusula
+    # habla solo de un servicio (WC, ducha, restaurante…), no del spot.
+    check_partial = needle in _GENERIC_CLOSURE_NEEDLES
     if _is_wordlike(needle):
         for m in _word_pattern(needle).finditer(work):
             if skip_neg or not _is_negated(work, m.start()):
+                if check_partial and _is_partial_facility_closure(work, m.start()):
+                    continue
                 return True
         return False
     # substring (needles con dígitos/símbolos)
@@ -541,11 +593,33 @@ def _excerpt(text: str, needle: str, window: int = 80) -> str:
     return text[start:end].strip()
 
 
+# BUG-36: "agua cortada por la helada" / "frozen pipes" es estacional y
+# transitorio, no un fallo permanente del punto de agua. Si el texto trae
+# contexto de helada, NO emitimos water_working=false (sería ruido que penaliza
+# el spot para siempre por una ola de frío puntual).
+_FREEZE_CONTEXT_TOKENS = (
+    "helada", "heladas", "helado", "congelad", "hiela", "por el frío", "por el frio",
+    "frozen", "freeze", "freezing", "frost", "iced", "ice",
+    "gefroren", "gefrier", "frost", "vereist",
+    "gelé", "gelée", "gel ", "givre", "congelé",
+    "ghiacc", "gelo", "congelat",
+    "invierno", "winter", "hiver", "inverno",
+)
+
+
+def _has_freeze_context(lowered: str) -> bool:
+    return any(tok in lowered for tok in _FREEZE_CONTEXT_TOKENS)
+
+
 def extract_claims_regex(text: str) -> list[dict]:
     lowered = text.lower()
+    freeze_ctx = _has_freeze_context(lowered)
     claims: list[ExtractedClaim] = []
     seen: set[tuple[str, str]] = set()
     for signal, value, confidence, needles in PATTERNS:
+        # BUG-36: agua "no funciona" por helada estacional -> no es fallo real
+        if signal == "water_working" and value == "false" and freeze_ctx:
+            continue
         for needle in needles:
             if _needle_matches(needle, lowered):
                 key = (signal, value)

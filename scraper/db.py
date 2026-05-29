@@ -425,15 +425,15 @@ async def insert_observation(conn: asyncpg.Connection, claim_id: int,
         INSERT INTO normalized_observations (
             claim_id, spot_id, signal_type, value_num, value_bool, value_text,
             extraction_confidence, source_confidence, reviewer_confidence,
-            observation_weight, observed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            observation_weight, observed_at, date_estimated
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
     """,
         claim_id, review["spot_id"], observation.signal_type,
         observation.value_num, observation.value_bool, observation.value_text,
         observation.extraction_confidence, observation.source_confidence,
         observation.reviewer_confidence, observation.observation_weight,
-        observation.observed_at
+        observation.observed_at, getattr(observation, "date_estimated", False)
     )
 
 
