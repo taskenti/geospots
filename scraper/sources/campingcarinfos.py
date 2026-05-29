@@ -202,7 +202,7 @@ class CampingcarInfosSource(AbstractSource):
                 logger.error(f"[campingcarinfos] Fallo en descarga: {e}")
                 return None
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Override completo: descarga global, parseo y procesado en batch."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -301,6 +301,7 @@ class CampingcarInfosSource(AbstractSource):
                         f"[campingcarinfos] {i+1}/{len(raw_items)} | "
                         f"new={stats['nuevos']} upd={stats['actualizados']} err={stats['errores']}"
                     )
+                    await self.update_job_progress(pool, job_id, i + 1, len(raw_items), stats)
 
         async with pool.acquire() as conn:
             await finish_scraper_log(conn, log_id, stats)

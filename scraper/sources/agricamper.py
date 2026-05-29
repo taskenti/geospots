@@ -151,7 +151,7 @@ class AgricamperSource(AbstractSource):
         }
         return merge_extra(norm, extract_agricamper(raw))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config
@@ -225,6 +225,7 @@ class AgricamperSource(AbstractSource):
             processed += 1
             if processed % 100 == 0:
                 logger.info(f"[agricamper] Procesados {processed}/{len(fiches)} spots...")
+                await self.update_job_progress(pool, job_id, processed, len(fiches), stats)
 
         # Finalizar ejecución
         async with pool.acquire() as conn:

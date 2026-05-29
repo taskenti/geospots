@@ -220,7 +220,7 @@ class BobilguidenSource(AbstractSource):
         norm.update(desc_fields)
         return merge_extra(norm, extract_bobilguiden(raw))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, upsert_review,
@@ -329,6 +329,7 @@ class BobilguidenSource(AbstractSource):
             processed += 1
             if processed % 200 == 0:
                 logger.info(f"[bobilguiden] Procesados {processed}/{len(places)} spots...")
+                await self.update_job_progress(pool, job_id, processed, len(places), stats)
 
         # Finalizar ejecución
         async with pool.acquire() as conn:

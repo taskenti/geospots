@@ -157,7 +157,7 @@ class CamperstopSource(AbstractSource):
         }
         return merge_extra(norm, extract_camperstop(raw))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config,
@@ -188,7 +188,7 @@ class CamperstopSource(AbstractSource):
             if data and isinstance(data, list):
                 logger.info(f"[CAMPERSTOP] Descarga completada: {len(data)} spots obtenidos. Procesando...")
                 
-                for raw in data:
+                for idx, raw in enumerate(data, 1):
                     norm = self.normalize(raw)
                     if not norm:
                         continue
@@ -216,6 +216,9 @@ class CamperstopSource(AbstractSource):
                     except Exception as e:
                         logger.error(f"[CAMPERSTOP] Error spot '{norm.get('nombre')}': {e}")
                         stats["errores"] += 1
+
+                    if idx % 200 == 0:
+                        await self.update_job_progress(pool, job_id, idx, len(data), stats)
             else:
                 logger.warning("[CAMPERSTOP] No se obtuvieron datos o el formato es incorrecto.")
 

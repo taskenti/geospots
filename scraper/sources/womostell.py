@@ -211,7 +211,7 @@ class WomoStellplatzSource(AbstractSource):
             logger.error(f"[womostell] Error normalizing place {raw.get('place_id')}: {e}")
             return None
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Full database pull via Turso SQL pipeline API."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -297,6 +297,7 @@ class WomoStellplatzSource(AbstractSource):
                         stats["errores"] += 1
 
                 offset += self.BATCH_SIZE
+                await self.update_job_progress(pool, job_id, min(offset, total), total, stats)
 
         async with pool.acquire() as conn:
             await finish_scraper_log(conn, log_id, stats)

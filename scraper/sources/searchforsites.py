@@ -346,7 +346,7 @@ class SearchForSitesSource(AbstractSource):
         }
         return merge_extra(norm, extract_searchforsites(raw))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config,
@@ -371,7 +371,7 @@ class SearchForSitesSource(AbstractSource):
         countries_to_use = [c for c in db_countries if c in sfs_supported] if db_countries else COUNTRIES
 
         async with httpx.AsyncClient(headers=HEADERS) as client:
-            for country in countries_to_use:
+            for ci, country in enumerate(countries_to_use, 1):
                 for loc_type in LOCATION_TYPES:
                     payload = {
                         "browse": "true",
@@ -434,6 +434,8 @@ class SearchForSitesSource(AbstractSource):
                             await asyncio.sleep(0.2)
 
                     await asyncio.sleep(self.rate_limit)
+
+                await self.update_job_progress(pool, job_id, ci, len(countries_to_use), stats)
 
         async with pool.acquire() as conn:
             await finish_scraper_log(conn, log_id, stats)

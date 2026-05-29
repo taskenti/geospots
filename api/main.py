@@ -1028,4 +1028,57 @@ async def admin_enrichment_run(country_iso: str, limit: int = Query(None)):
     return {"message": f"Enrichment batch for {country_iso} launched in background."}
 
 
+@app.post("/admin/enrichment/run_worker/{country_iso}")
+async def admin_enrichment_run_worker(
+    country_iso: str,
+    mode: str = Query("hybrid"),
+    max_llm_calls: int = Query(None),
+    batch_size: int = Query(1000, ge=1, le=200000),
+):
+    """Lanza el WORKER (review-level) con toggle de modo Híbrido/Solo-LLM.
+
+    A diferencia de /run (orchestrator_v2, spot-level), aquí aplica el toggle
+    ENRICHMENT_MODE (Opción A/B):
+      - hybrid    : regex + LLM selectivo (barato).
+      - llm_only  : TODA review >= ENRICHMENT_LLM_MIN_CHARS va al LLM (caro).
+      - regex_only: sin LLM (coste 0).
+
+    SEGURIDAD (restricción de presupuesto, no negociable): para cualquier modo
+    con LLM, `max_llm_calls` es OBLIGATORIO y se traslada como --max-llm-calls
+    (CAPA 4 del worker: el batch ABORTA al alcanzarlo). El worker NUNCA se lanza
+    sin tope de gasto.
+    """
+    country_iso = country_iso.upper()
+    if mode not in ("hybrid", "llm_only", "regex_only"):
+        raise HTTPException(400, f"mode inválido: {mode}")
+    needs_llm = mode != "regex_only"
+    if needs_llm and (max_llm_calls is None or max_llm_calls <= 0):
+        raise HTTPException(
+            400,
+            "max_llm_calls > 0 es OBLIGATORIO para modos con LLM (tope de gasto duro).",
+        )
+
+    cmd = [
+        "python", "-m", "enrichment.worker",
+        "--country", country_iso,
+        "--mode", mode,
+        "--batch-size", str(batch_size),
+    ]
+    if needs_llm:
+        cmd += ["--enable-llm", "--max-llm-calls", str(max_llm_calls)]
+
+    try:
+        subprocess.Popen(cmd, start_new_session=True)
+        logger.info(f"[api] Launched worker enrichment for {country_iso}: {' '.join(cmd)}")
+    except Exception as exc:
+        logger.error(f"[api] Failed to launch worker for {country_iso}: {exc}")
+        raise HTTPException(500, f"Error al lanzar el worker: {exc}")
+
+    return {
+        "message": f"Worker ({mode}) for {country_iso} launched in background.",
+        "cmd": " ".join(cmd),
+        "cap": max_llm_calls if needs_llm else 0,
+    }
+
+
 app.mount("/pwa", StaticFiles(directory="/pwa"), name="pwa")

@@ -275,7 +275,7 @@ class CamperContactSource(AbstractSource):
         # v4d: extras del detalle (terrain completo + amenity_pricing)
         return merge_extra(norm, extract_campercontact_detail(poi))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Pipeline completo: grid → fetch → normalize → store → Phase 2 (enrichment & reviews)."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -358,6 +358,9 @@ class CamperContactSource(AbstractSource):
                     f"[{self.name}] {min(i+LOTE, len(cells))}/{len(cells)} | "
                     f"uniq={len(seen_ids)} new={stats['nuevos']} "
                     f"upd={stats['actualizados']} err={stats['errores']}"
+                )
+                await self.update_job_progress(
+                    pool, job_id, min(i + LOTE, len(cells)), len(cells), stats
                 )
 
         # Finalizar logs en BD

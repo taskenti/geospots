@@ -234,7 +234,7 @@ class Park4NightSource(AbstractSource):
             logger.error(f"[{self.name}] Error parsing review for spot {spot_id}: {e}")
             return None
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Adaptive global crawler using queue-based quadtree subdivision."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -391,6 +391,7 @@ class Park4NightSource(AbstractSource):
                         f"total_queries={total_queries} | queue_backlog={queue.qsize()} | "
                         f"uniq_spots={len(seen_ids)} nuevos={stats['nuevos']} upd={stats['actualizados']} err={stats['errores']}"
                     )
+                    await self.update_job_progress(pool, job_id, processed_count, total_initial, stats)
             
             reporter_task = asyncio.create_task(progress_reporter())
             

@@ -288,7 +288,7 @@ FUENTES EXTERNAS (20+ scrapers)
 - **`fuentes[]`** en `spots` es el array de fuentes que conocen el spot — es la fuente de verdad para multi-fuente
 - **Logging**: `loguru` en todo el proyecto. El scheduler loga cada lote de 20 celdas.
 - **Retries**: `tenacity` con exponential backoff en P4N y OSM
-- **Progreso de Tareas**: La firma de la clase base es `async def download_reviews(self, pool, config, job_id: int = None) -> dict:`. Si un scraper sobreescribe este método, debe respetar el `job_id` para evitar errores `TypeError` y, si procesa lotes muy grandes, debería usarlo para inyectar en `scraper_jobs.progress` el número de ítems procesados.
+- **Progreso de Tareas**: El scheduler invoca SIEMPRE `source.run(pool, config, log_id, job_id=job_id)` y `source.download_reviews(pool, config, job_id=job_id)`. **Toda fuente que sobreescriba `run()` o `download_reviews()` DEBE aceptar `job_id: int = None`** o reventará con `TypeError` y el job terminará con `errores:1` sin scrapear nada. Para reportar progreso al panel admin, llamar a `self.update_job_progress(pool, job_id, processed, total, stats)` (helper de `AbstractSource`) dentro del bucle principal; usa `total=0` si el total es desconocido (paginación). El test `tests/test_source_signatures.py` verifica esta convención para las 30 fuentes y falla si alguna nueva la rompe.
 
 ---
 
@@ -389,10 +389,22 @@ review.texto → clean → regex → [si texto ≥120 chars y <3 claims] LLM v1
 
 **Cuándo usar:** siempre. Es el pipeline principal. Genera las señales que alimentan el filtrado de búsqueda (`/search`) y la búsqueda semántica vectorial.
 
-**Enrutamiento (lógica corregida 2026-05-28):**
-- Texto < 120 chars → solo regex, nunca LLM
-- Texto ≥ 120 chars + regex ≥ 3 claims → solo regex (cobertura suficiente)
+**Enrutamiento (lógica corregida 2026-05-28; Opción B añadida 2026-05-29):**
+- Texto < 120 chars → solo regex, nunca LLM (salvo mención ambigua)
+- Texto ≥ 120 chars + regex ≥ 3 claims → solo regex (cobertura suficiente, salvo ambigua)
 - Texto ≥ 120 chars + regex 0-2 claims → LLM para complementar
+- **Mención de señal de polaridad ambigua (`police_risk`) → fuerza LLM** (Opción B,
+  Sprint 8). El regex es ciego a la polaridad (*"police fait des rondes"* = seguridad,
+  no riesgo), así que `police_risk` NO se emite por regex; su mención escala al LLM vía
+  `claim_extractor.text_mentions_ambiguous_signal()`. `overnight_safe` se resuelve por
+  polaridad dentro del regex (prohibición anula mención positiva). Tests:
+  `tests/test_polarity_sprint8.py`.
+
+**Opción A — LLM-only (objetivo de producción):** plan completo en
+`docs/fase-3-llm-only-plan.md`. Generaliza la Opción B: si la polaridad importa,
+decídela con el LLM. Coste ~$182 batch completo / ~$24 España con DeepSeek (vs ~$113 /
+~$10.5 híbrido). Ejecutar SOLO con el hard-cap de presupuesto activo y probado. Es lo
+que se hará si GeoSpots pasa a producción o genera ingresos.
 
 #### Pipeline B — `orchestrator_v2` (spot-level) ← ACTIVO / APROBADO
 

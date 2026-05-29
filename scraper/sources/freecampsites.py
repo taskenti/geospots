@@ -17,6 +17,21 @@ class FreeCampsitesSource(AbstractSource):
     grid_step = 1.0
     dedup_radius_m = 150.0
 
+    # Circuit breaker: tras N fallos de conexión consecutivos asumimos que el
+    # servidor dejó de aceptar conexiones (throttling por IP) y cortamos en seco.
+    # Sin esto, cada celda muerta consume ~21s (2 reintentos × 8s timeout + backoff)
+    # durante horas. Igual que el patrón de osm.py.
+    CIRCUIT_THRESHOLD = 8
+    CONN_ERROR_TYPES = (
+        "ConnectError", "ConnectTimeout", "ReadTimeout",
+        "PoolTimeout", "WriteTimeout", "ReadError",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._conn_failures = 0
+        self._circuit_open = False
+
     # Mapeo nombre país (en raw_data.country) -> ISO2 lowercase. La fuente
     # cubre principalmente Norteamérica + algunos países LATAM.
     COUNTRY_NAME_TO_ISO = {
@@ -84,6 +99,11 @@ class FreeCampsitesSource(AbstractSource):
 
     async def fetch_cell(self, client, tl_lat, tl_lon, br_lat, br_lon) -> list[dict]:
         """Query freecampsites mobile endpoint using the cell center coordinates with retry on 429/errors."""
+        # Circuit breaker abierto: el servidor dejó de aceptar conexiones.
+        # Devolvemos [] al instante en vez de gastar ~21s/celda durante horas.
+        if self._circuit_open:
+            return []
+
         lat = round((tl_lat + br_lat) / 2.0, 5)
         lon = round((tl_lon + br_lon) / 2.0, 5)
 
@@ -108,6 +128,10 @@ class FreeCampsitesSource(AbstractSource):
                     await asyncio.sleep(wait_time)
                     continue
 
+                # Conexión exitosa (cualquier respuesta HTTP): el servidor responde,
+                # reseteamos el contador de fallos de conexión.
+                self._conn_failures = 0
+
                 if r.status_code != 200:
                     logger.warning(f"[freecampsites] HTTP {r.status_code} at ({lat},{lon})")
                     return []
@@ -122,6 +146,19 @@ class FreeCampsitesSource(AbstractSource):
 
             except Exception as e:
                 exc_type = type(e).__name__
+                # Solo los errores de conexión cuentan para el circuit breaker.
+                # Un JSONDecodeError u otro fallo de parseo no implica throttling.
+                if exc_type in self.CONN_ERROR_TYPES:
+                    self._conn_failures += 1
+                    if self._conn_failures >= self.CIRCUIT_THRESHOLD and not self._circuit_open:
+                        self._circuit_open = True
+                        logger.error(
+                            f"[freecampsites] Circuit breaker ABIERTO tras "
+                            f"{self._conn_failures} fallos de conexión consecutivos "
+                            f"({exc_type}). El servidor no acepta conexiones (throttling IP). "
+                            f"Las celdas restantes devolverán [] de inmediato."
+                        )
+                        return []
                 if attempt < retries - 1:
                     wait_time = backoff * (2 ** attempt)
                     logger.warning(

@@ -38,6 +38,8 @@ class TheDyrtSource(AbstractSource):
         page = 1
         page_size = 500
 
+        max_5xx_retries = 3
+        attempt = 0
         while True:
             params = {
                 "filter[search][drive_time]": "any",
@@ -58,7 +60,26 @@ class TheDyrtSource(AbstractSource):
                     logger.warning("[thedyrt] Rate limit (429) hit. Esperando 60s...")
                     await asyncio.sleep(60)
                     continue
+                # 502/503/504 son errores de gateway transitorios: reintentar la
+                # MISMA página con backoff en vez de abortar la celda (antes un 502
+                # rompía el bucle y perdía el resto de páginas de la celda).
+                if resp.status_code in (502, 503, 504):
+                    attempt += 1
+                    if attempt > max_5xx_retries:
+                        logger.error(
+                            f"[thedyrt] HTTP {resp.status_code} en page {page} cell {bbox} "
+                            f"tras {max_5xx_retries} reintentos. Abandonando celda."
+                        )
+                        break
+                    wait = 5 * (2 ** (attempt - 1))
+                    logger.warning(
+                        f"[thedyrt] HTTP {resp.status_code} en page {page} cell {bbox}. "
+                        f"Reintento {attempt}/{max_5xx_retries} en {wait}s..."
+                    )
+                    await asyncio.sleep(wait)
+                    continue
                 resp.raise_for_status()
+                attempt = 0  # página servida con éxito: resetear contador de gateway
                 data = resp.json()
                 items = data.get("data", [])
                 if not items:

@@ -123,7 +123,7 @@ class AlpacaCampingSource(AbstractSource):
             logger.error(f"[alpacacamping] Error normalizing item: {e}")
             return None
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Global scan utilizing pagination on a wide bounding box query."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -203,6 +203,8 @@ class AlpacaCampingSource(AbstractSource):
                     except Exception as e:
                         logger.error(f"[alpacacamping] Error saving spot {sid}: {e}")
                         stats["errores"] += 1
+
+                await self.update_job_progress(pool, job_id, len(seen_ids), 0, stats)
 
                 if len(hits) < 200:
                     break

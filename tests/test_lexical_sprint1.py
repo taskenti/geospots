@@ -7,7 +7,10 @@ BUG-20 (security), y seguro/inseguro.
 Ejecutar:  python -m tests.test_lexical_sprint1
 """
 
-from enrichment.claim_extractor import extract_claims_regex
+from enrichment.claim_extractor import (
+    extract_claims_regex,
+    text_mentions_ambiguous_signal,
+)
 
 
 def _has(claims, signal, value=None) -> bool:
@@ -55,7 +58,6 @@ def main() -> int:
         ("magnifique spot au bord du lac", "lake_nearby", "true", "lac real (FR)"),
         ("we felt very safe here all night", "safety", "0.85", "safe real"),
         ("estaba lleno de autocaravanas, muy concurrido", "crowd_level", "0.85", "lleno real"),
-        ("nos multaron por aparcar de noche", "police_risk", "0.85", "multa real"),
         ("le sol était très sale partout", "cleanliness", "0.15", "sale FR real"),
         ("muy windy, viento intenso toda la noche", "wind_exposure", "0.85", "windy real"),
     ]
@@ -63,6 +65,17 @@ def main() -> int:
         claims = extract_claims_regex(text)
         check(_has(claims, signal, value),
               f"TP perdido [{desc}]: '{text}' → falta {signal}={value}")
+
+    # ── Opción B (Sprint 8): police_risk YA NO es salida del regex ───────────
+    # La multa real ("multa real") antes se esperaba como police_risk=0.85 por
+    # regex. Ahora police_risk es una señal de polaridad ambigua: el regex no la
+    # emite; en su lugar la mención fuerza el escalado al LLM, que decide la
+    # polaridad. Verificamos el nuevo contrato:
+    multa = "nos multaron por aparcar de noche"
+    check(not _has(extract_claims_regex(multa), "police_risk"),
+          "Opción B: police_risk ya NO debe emitirse por regex (va al LLM)")
+    check(text_mentions_ambiguous_signal(multa),
+          "Opción B: mención de multa debe forzar escalado al LLM")
 
     if failures:
         print(f"FALLOS ({len(failures)}):")

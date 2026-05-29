@@ -194,7 +194,7 @@ class WelcomeToMyGardenSource(AbstractSource):
         res.update(desc_fields)
         return merge_extra(res, extract_wtmg(raw))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot, upsert_review,
             upsert_source_record, finish_scraper_log, update_fuente_config,
@@ -309,6 +309,9 @@ class WelcomeToMyGardenSource(AbstractSource):
                         stats["errores"] += 1
 
                 page += 1
+                await self.update_job_progress(
+                    pool, job_id, stats["nuevos"] + stats["actualizados"], 0, stats
+                )
                 await asyncio.sleep(self.rate_limit)
 
         async with pool.acquire() as conn:

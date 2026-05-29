@@ -313,7 +313,7 @@ class RoadsurferSource(AbstractSource):
         # placeSituations); si solo hay raw de Phase 1, devolverá poco.
         return merge_extra(res, extract_roadsurfer(detail or raw))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config,
@@ -427,7 +427,8 @@ class RoadsurferSource(AbstractSource):
                         stats["errores"] += 1
 
                 logger.info(f"[ROADSURFER] Offset {offset}: procesados {len(spots)} spots.")
-                
+                await self.update_job_progress(pool, job_id, len(seen_ids), 0, stats)
+
                 if nuevos_en_pagina == 0 or len(spots) < size:
                     break
                     

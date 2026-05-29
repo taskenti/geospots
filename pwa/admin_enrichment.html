@@ -108,6 +108,44 @@
             font-size: 0.82rem;
         }
         .stat-chip span { color: #00d4ff; font-weight: 600; }
+
+        .worker-bar {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            background: rgba(123,47,247,0.06);
+            border: 1px solid rgba(123,47,247,0.25);
+            border-radius: 10px;
+            padding: 0.7rem 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.82rem;
+        }
+        .worker-bar-title { font-weight: 600; color: #c4a7ff; }
+        .worker-bar label { display: flex; align-items: center; gap: 0.4rem; color: #888; }
+        .worker-bar select, .worker-bar input {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #eee;
+            padding: 0.25rem 0.45rem;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            outline: none;
+        }
+        .worker-bar input[type="number"] { width: 5.5rem; }
+        .worker-hint { color: #f59e0b; font-size: 0.74rem; }
+        .btn-worker {
+            background: rgba(34,197,94,0.12);
+            border: 1px solid rgba(34,197,94,0.35);
+            color: #4ade80;
+            padding: 0.25rem 0.6rem;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.72rem;
+            white-space: nowrap;
+            transition: background 0.15s;
+        }
+        .btn-worker:hover { background: rgba(34,197,94,0.25); color: #fff; }
         
         .continent-group {
             margin-bottom: 2rem;
@@ -237,6 +275,24 @@
 
 <div class="stats-bar" id="stats-bar">
     <div class="loading"><span class="spinner"></span> Cargando estado API...</div>
+</div>
+
+<div class="worker-bar" id="worker-bar">
+    <div class="worker-bar-title">⚙️ Worker (review-level)</div>
+    <label>Modo
+        <select id="worker-mode" title="Híbrido=Opción B (regex+LLM selectivo); Solo-LLM=Opción A (toda review al LLM); Regex=sin LLM">
+            <option value="hybrid" selected>Híbrido (B) — barato</option>
+            <option value="llm_only">Solo-LLM (A) — caro</option>
+            <option value="regex_only">Regex — sin LLM</option>
+        </select>
+    </label>
+    <label>Tope LLM
+        <input type="number" id="worker-cap" value="200" min="1" step="50" title="Tope DURO de llamadas LLM por batch. El batch ABORTA al alcanzarlo.">
+    </label>
+    <label>Batch
+        <input type="number" id="worker-batch" value="1000" min="1" step="100" title="Reviews a leer por ejecución.">
+    </label>
+    <span class="worker-hint">El batch se detiene al llegar al tope LLM (sin gasto descontrolado).</span>
 </div>
 
 <div id="countries-wrap">
@@ -402,9 +458,8 @@ function renderCountries(countries) {
             const estCost = isReady ? `~€${(c.eligible_spots * COST_PER_SPOT).toFixed(2)}` : '—';
             const selId = `limit-${c.country_iso}`;
             
-            const action = isReady 
+            const v2Action = isReady
                 ? `
-                <div class="action-group">
                     <select id="${selId}">
                         <option value="100">100 spots</option>
                         <option value="500">500 spots</option>
@@ -412,9 +467,17 @@ function renderCountries(countries) {
                         <option value="0">TODOS</option>
                     </select>
                     <button class="btn-run" onclick="runEnrichment('${c.country_iso}')">▶ Lanzar V2</button>
-                </div>
                 `
-                : `<button class="btn" disabled>Al día</button>`;
+                : `<button class="btn" disabled>V2 al día</button>`;
+            // El worker (review-level) usa el toggle global de modo + tope LLM.
+            // Siempre disponible: procesa reviews pendientes (llm_processed=FALSE),
+            // independiente del estado de V2 (orchestrator spot-level).
+            const action = `
+                <div class="action-group">
+                    ${v2Action}
+                    <button class="btn-worker" onclick="runWorker('${c.country_iso}')"
+                        title="Lanza el worker review-level con el modo/tope elegido arriba">▶ Worker</button>
+                </div>`;
                 
             return `
             <tr>
@@ -531,6 +594,45 @@ async function runEnrichment(countryIso) {
         if (limit > 0) url += `?limit=${limit}`;
         await H.post(url);
         toast(`Batch para ${info.name} lanzado con éxito en background.`, 'success');
+        setTimeout(loadAll, 2000);
+    } catch(e) {
+        toast(`Error: ${e.message}`, 'error');
+    }
+}
+
+const MODE_LABELS = {
+    hybrid: 'Híbrido (B)',
+    llm_only: 'Solo-LLM (A)',
+    regex_only: 'Regex (sin LLM)'
+};
+
+async function runWorker(countryIso) {
+    const mode = document.getElementById('worker-mode').value;
+    const cap = parseInt(document.getElementById('worker-cap').value, 10);
+    const batch = parseInt(document.getElementById('worker-batch').value, 10) || 1000;
+    const info = getCountryInfo(countryIso);
+    const needsLlm = mode !== 'regex_only';
+
+    if (needsLlm && (!cap || cap <= 0)) {
+        toast('Define un "Tope LLM" (>0) antes de lanzar el worker.', 'error');
+        return;
+    }
+
+    const modeLabel = MODE_LABELS[mode] || mode;
+    const capMsg = needsLlm
+        ? `tope ${fmtNum(cap)} llamadas LLM (el batch ABORTA al alcanzarlo)`
+        : 'sin LLM (coste 0)';
+    if (!confirm(
+        `¿Lanzar WORKER en modo ${modeLabel} para ${info.name} (${countryIso})?\n` +
+        `Lee hasta ${fmtNum(batch)} reviews · ${capMsg}.`
+    )) return;
+
+    try {
+        toast(`Lanzando worker (${modeLabel}) para ${info.name}...`);
+        let url = `/admin/enrichment/run_worker/${countryIso}?mode=${mode}&batch_size=${batch}`;
+        if (needsLlm) url += `&max_llm_calls=${cap}`;
+        await H.post(url);
+        toast(`Worker (${modeLabel}) para ${info.name} lanzado en background.`, 'success');
         setTimeout(loadAll, 2000);
     } catch(e) {
         toast(`Error: ${e.message}`, 'error');

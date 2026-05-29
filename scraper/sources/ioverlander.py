@@ -302,7 +302,7 @@ class IOverlanderSource(AbstractSource):
         logger.info(f"KMZ: {total} puntos procesados, {fuera} fuera de coordenadas, {len(items)} para importar")
         return items
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Override completo: lee KMZ offline, no usa API. Optimizado en transacciones y conexiones."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -423,6 +423,7 @@ class IOverlanderSource(AbstractSource):
                         f"[ioverlander] {i+1}/{len(raw_items)} | "
                         f"new={stats['nuevos']} upd={stats['actualizados']} err={stats['errores']}"
                     )
+                    await self.update_job_progress(pool, job_id, i + 1, len(raw_items), stats)
 
 
         # Cross-reference warnings: marcar spots de OTRAS fuentes que estén a menos de 100m de un prohibido/cerrado de iOverlander

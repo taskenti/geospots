@@ -427,7 +427,7 @@ class FurgovwSource(AbstractSource):
         except Exception:
             pass
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         """Override: API global + RSS reviews."""
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
@@ -506,6 +506,7 @@ class FurgovwSource(AbstractSource):
                         f"[furgovw] {idx+1}/{len(raw_data)} | "
                         f"new={stats['nuevos']} upd={stats['actualizados']} err={stats['errores']}"
                     )
+                    await self.update_job_progress(pool, job_id, idx + 1, len(raw_data), stats)
 
             # Fase 2: RSS reviews
             logger.info(f"[furgovw] Descargando reviews RSS ({len(topic_to_spot)} topics mapeados)...")

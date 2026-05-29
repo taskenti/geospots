@@ -163,7 +163,13 @@ async def fetch_pending_reviews(conn, batch_size: int,
 
     Pre-Sprint 4 (T1.4/smoke Andorra) — `countries` filtra por ISO-2 vía
     JOIN a `spots.country_iso`. None = sin filtro (comportamiento legacy).
-    Los ISO se comparan en minúsculas (tal como se almacenan en `spots`).
+
+    BUG-COUNTRY-CASE (2026-05-29): `spots.country_iso` está almacenado en CASO
+    MIXTO (p.ej. 'fr' y 'FR' coexisten — FR mayúsculas son ~510K reviews, fr
+    minúsculas ~121K). El filtro antiguo `s.country_iso = ANY(lowercased)` casaba
+    solo las filas en minúsculas → al correr `--country FR` se procesaba ~1/5 de
+    Francia silenciosamente. Fix: comparación case-insensitive en AMBOS lados con
+    `lower(s.country_iso)`. (Normalizar el dato en `spots` queda como follow-up.)
 
     Sprint 3 / BUG-09: el JOIN a spots ahora es incondicional para exponer
     `country_iso` al cleaner (prior de idioma por país cuando langdetect
@@ -172,7 +178,7 @@ async def fetch_pending_reviews(conn, batch_size: int,
     # JOIN incondicional para tener s.country_iso siempre disponible.
     if countries:
         normalized = [c.lower() for c in countries]
-        country_filter = "AND s.country_iso = ANY($2)"
+        country_filter = "AND lower(s.country_iso) = ANY($2)"
         params: list = [batch_size, normalized]
     else:
         country_filter = ""
@@ -214,6 +220,7 @@ async def _extract_claims_with_retry(
     semaphore: asyncio.Semaphore,
     consecutive_errors: list[int],   # mutable contador compartido [n]
     llm_calls: list[int] | None = None,   # mutable [hechas, cap]; None = sin cap
+    mode: str = "hybrid",            # hybrid | llm_only | regex_only (Opción A/B)
 ) -> list[dict]:
     """Llama a extract_claims con control de concurrencia y backoff exponencial.
 
@@ -225,21 +232,32 @@ async def _extract_claims_with_retry(
       para que process_pending_reviews aborte el batch.
     """
     # Regex no necesita semáforo — es local y gratuito.
-    from .claim_extractor import extract_claims_regex
+    from .claim_extractor import (
+        extract_claims_regex,
+        resolve_enrichment_mode,
+        should_escalate_to_llm,
+        text_mentions_ambiguous_signal,
+    )
     from .multilingual_lexicon import apply_lexicon_blend
     regex_result = extract_claims_regex(text)
     n_regex = len(regex_result)
 
-    # Misma lógica de escalado que extract_claims():
-    # - Texto < 120 chars → nunca LLM independientemente de los claims.
-    # - Texto ≥ 120 chars + regex ≥ 3 claims → cobertura suficiente, no escalar.
-    # - Texto ≥ 120 chars + regex 0-2 claims → LLM para complementar.
-    # - use_llm=False → solo regex siempre.
-    # En los paths regex-only aplicamos el blend léxico aquí (extract_claims no
-    # se invoca en estas ramas, así que sería el único punto sin reponderar).
-    if not use_llm or len(text) < 120:
-        return apply_lexicon_blend(text, regex_result)
-    if n_regex >= 3:
+    # use_llm=False es un override duro (coste 0); si no, manda el modo elegido.
+    effective_mode = "regex_only" if not use_llm else resolve_enrichment_mode(mode)
+
+    # Opción B (Sprint 8): si el texto menciona una señal de polaridad ambigua
+    # (police_risk), forzamos el escalado al LLM aunque el texto sea corto o el
+    # regex tenga cobertura suficiente — el regex no emite esa señal y es la
+    # única vía de capturarla con polaridad correcta. Menciones raras (~3%).
+    force_llm = use_llm and text_mentions_ambiguous_signal(text)
+
+    # Decisión de escalado: punto único compartido con extract_claims() para que
+    # ambos caminos sean coherentes (corolario CLAUDE.md). En los paths
+    # regex-only aplicamos el blend léxico aquí (extract_claims no se invoca en
+    # estas ramas, así que sería el único punto sin reponderar).
+    # El tope duro de llamadas (CAPA 4, más abajo) se aplica SIEMPRE, también en
+    # llm_only — un batch nunca puede gastar de forma ilimitada.
+    if not should_escalate_to_llm(text, n_regex, force_llm, effective_mode):
         return apply_lexicon_blend(text, regex_result)
 
     # LLM path — necesita semáforo.
@@ -312,6 +330,7 @@ async def process_review(
     semaphore: asyncio.Semaphore | None = None,
     consecutive_errors: list[int] | None = None,
     llm_calls: list[int] | None = None,
+    mode: str = "hybrid",
 ) -> dict:
     raw_text = review.get("texto_original") or review.get("texto")
     # Sprint 3 / BUG-09: prior por país en la detección de idioma. Si la review
@@ -340,11 +359,13 @@ async def process_review(
     if semaphore is not None and consecutive_errors is not None:
         claims = await _extract_claims_with_retry(
             cleaned.texto_limpio, review, use_llm, semaphore,
-            consecutive_errors, llm_calls=llm_calls,
+            consecutive_errors, llm_calls=llm_calls, mode=mode,
         )
     else:
         # Fallback sin throttling (tests, dry-run rápido)
-        claims = await extract_claims(cleaned.texto_limpio, review, use_gemini=use_llm)
+        claims = await extract_claims(
+            cleaned.texto_limpio, review, use_gemini=use_llm, mode=mode,
+        )
 
     observations = normalize_claims(
         claims,
@@ -396,6 +417,7 @@ async def process_pending_reviews(
     concurrency: int | None = None,
     countries: list[str] | None = None,
     max_llm_calls: int | None = None,
+    mode: str = "hybrid",
 ) -> dict:
     pipeline_run_id = str(uuid.uuid4())
     stats = {
@@ -421,7 +443,7 @@ async def process_pending_reviews(
 
     total = len(pending)
     logger.info(
-        f"[enrichment] Iniciando batch: {total} reviews | "
+        f"[enrichment] Iniciando batch: {total} reviews | mode={mode} | "
         f"concurrency={concurrency} | inter_delay={_INTER_REQUEST_DELAY}s | "
         f"provider={os.environ.get('ENRICHMENT_PROVIDER','gemini')} | "
         f"run={pipeline_run_id[:8]}"
@@ -438,6 +460,7 @@ async def process_pending_reviews(
                     semaphore=semaphore,
                     consecutive_errors=consecutive_errors,
                     llm_calls=llm_calls,
+                    mode=mode,
                 )
             stats["reviews"] += 1
             stats["informative"] += int(result["informativo"])
@@ -525,10 +548,30 @@ async def main_async(argv: list[str] | None = None) -> int:
              "Cuando se alcanza, el batch aborta. Empieza bajo (50–200) y sube cuando "
              "confíes en el comportamiento.",
     )
+    parser.add_argument(
+        "--mode", type=str, default=None,
+        choices=["hybrid", "llm_only", "regex_only"],
+        help="Modo de enriquecimiento (default: ENRICHMENT_MODE env o 'hybrid'). "
+             "hybrid=Opción B (regex+LLM selectivo); llm_only=Opción A (toda review "
+             ">= ENRICHMENT_LLM_MIN_CHARS al LLM); regex_only=sin LLM. "
+             "En llm_only el tope --max-llm-calls es imprescindible (escala TODO).",
+    )
     args = parser.parse_args(argv)
 
     # ─── Capas 2/3/4: validación dura ANTES de tocar la DB ───
+    from .claim_extractor import resolve_enrichment_mode
+    mode = resolve_enrichment_mode(args.mode)
     use_llm = bool(args.enable_llm)
+
+    # regex_only nunca llama al LLM: silenciamos --enable-llm para coherencia.
+    if mode == "regex_only":
+        use_llm = False
+    # llm_only/hybrid sin --enable-llm degradan a regex puro (coste 0): avisar.
+    if mode in ("hybrid", "llm_only") and not use_llm:
+        logger.warning(
+            f"[enrichment] mode={mode} pero --enable-llm está OFF: se ejecutará "
+            "SOLO regex (coste 0). Pasa --enable-llm para activar el LLM."
+        )
 
     countries: list[str] | None = None
     if args.country:
@@ -554,6 +597,7 @@ async def main_async(argv: list[str] | None = None) -> int:
         "[enrichment] ┌─ Safety summary ─────────────────────────────"
     )
     logger.info(f"[enrichment] │ LLM enabled       : {use_llm}")
+    logger.info(f"[enrichment] │ Mode              : {mode}")
     logger.info(f"[enrichment] │ Scope             : {scope}")
     logger.info(f"[enrichment] │ Batch size        : {args.batch_size}")
     logger.info(f"[enrichment] │ Max LLM calls     : {args.max_llm_calls if use_llm else 'n/a (LLM off)'}")
@@ -573,6 +617,7 @@ async def main_async(argv: list[str] | None = None) -> int:
             concurrency=args.concurrency,
             countries=countries,
             max_llm_calls=args.max_llm_calls if use_llm else None,
+            mode=mode,
         )
         logger.info(f"[enrichment] stats={stats}")
     finally:

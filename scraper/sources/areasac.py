@@ -184,7 +184,7 @@ class AreasACSource(AbstractSource):
         }
         return self.normalize(res)
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config
@@ -346,6 +346,9 @@ class AreasACSource(AbstractSource):
                 logger.info(
                     f"[{self.name}] Progreso: {min(i+LOTE_SIZE, len(spots_to_fetch))}/{len(spots_to_fetch)} | "
                     f"Nuevos: {stats['nuevos']} | Actualizados: {stats['actualizados']} | Errores: {stats['errores']}"
+                )
+                await self.update_job_progress(
+                    pool, job_id, min(i + LOTE_SIZE, len(spots_to_fetch)), len(spots_to_fetch), stats
                 )
 
         async with pool.acquire() as conn:

@@ -401,7 +401,7 @@ class StayFreeSource(AbstractSource):
 
         return all_items
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, upsert_review, finish_scraper_log, update_fuente_config,
@@ -552,6 +552,9 @@ class StayFreeSource(AbstractSource):
                         f"uniq={len(seen_ids)} new={stats['nuevos']} "
                         f"upd={stats['actualizados']} err={stats['errores']}"
                     )
+                    await self.update_job_progress(
+                        pool, job_id, min(i + LOTE, len(cells)), len(cells), stats
+                    )
 
             if os.path.exists(PROGRESS_FILE):
                 try:
@@ -562,7 +565,7 @@ class StayFreeSource(AbstractSource):
         else:
             # Flujo API Publica (Fallback)
             async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=25) as client:
-                for country in COUNTRIES:
+                for ci, country in enumerate(COUNTRIES, 1):
                     logger.info(f"[{self.name}] Procesando pais {country}...")
                     items = await self._fetch_country(client, country)
                     logger.info(f"[{self.name}] {country}: {len(items)} spots descargados")
@@ -602,6 +605,7 @@ class StayFreeSource(AbstractSource):
                             logger.error(f"[{self.name}] Error '{norm.get('nombre')}': {e}")
                             stats["errores"] += 1
 
+                    await self.update_job_progress(pool, job_id, ci, len(COUNTRIES), stats)
                     await asyncio.sleep(self.rate_limit)
 
         # Finalizar logs en BD

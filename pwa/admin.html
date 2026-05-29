@@ -753,7 +753,13 @@ async function refreshWorkerStatus() {
                 if (j.progress) {
                     try {
                         const p = (typeof j.progress === 'string') ? JSON.parse(j.progress) : j.progress;
-                        if (p.total_cells) {
+                        if (p.total) {
+                            pct = Math.round((p.processed / p.total) * 100);
+                            progressText = `${pct}% (${p.processed}/${p.total})`;
+                        } else if (p.processed) {
+                            progressText = `${p.processed} procesados…`;
+                            pct = 50;
+                        } else if (p.total_cells) {
                             pct = Math.round((p.processed_cells / p.total_cells) * 100);
                             progressText = `${pct}% (${p.processed_cells}/${p.total_cells} celdas)`;
                         } else if (p.total_spots) {

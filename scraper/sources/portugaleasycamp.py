@@ -20,7 +20,7 @@ class PortugalEasyCampSource(AbstractSource):
         # En este scraper, toda la normalización se hace directamente en run()
         return raw
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config
@@ -138,6 +138,7 @@ class PortugalEasyCampSource(AbstractSource):
                 
                 if (i + 1) % 10 == 0:
                     logger.info(f"[portugaleasycamp] Progreso: {i+1}/{len(urls)}...")
+                    await self.update_job_progress(pool, job_id, i + 1, len(urls), stats)
 
         # Finalizar ejecución
         async with pool.acquire() as conn:

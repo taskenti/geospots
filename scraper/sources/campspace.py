@@ -333,7 +333,7 @@ class CampspaceSource(AbstractSource):
 
         return reviews_list
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config,
@@ -402,6 +402,7 @@ class CampspaceSource(AbstractSource):
                         logger.error(f"[CAMPSPACE] Error spot '{norm.get('nombre')}': {e}")
                         stats["errores"] += 1
 
+                await self.update_job_progress(pool, job_id, len(seen_ids), 0, stats)
                 await asyncio.sleep(self.rate_limit)
 
         # 2. Fase 2: Enriquecimiento asíncrono y de reviews

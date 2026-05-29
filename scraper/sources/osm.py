@@ -312,7 +312,7 @@ class OSMSource(AbstractSource):
         logger.info(f"[osm] Generados {len(puntos)} puntos mundiales activos para Overpass.")
         return puntos
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (find_spot_cercano, crear_spot, enriquecer_spot,
                         upsert_source_record, finish_scraper_log, update_fuente_config)
         inicio = datetime.now(timezone.utc)
@@ -387,6 +387,9 @@ class OSMSource(AbstractSource):
                 await asyncio.gather(*[procesar(lat, lon) for lat, lon in batch])
                 logger.info(f"[osm] {min(i+LOTE, len(puntos))}/{len(puntos)} | "
                             f"uniq={len(seen_ids)} new={stats['nuevos']} err={stats['errores']}")
+                await self.update_job_progress(
+                    pool, job_id, min(i + LOTE, len(puntos)), len(puntos), stats
+                )
 
         async with pool.acquire() as conn:
             await finish_scraper_log(conn, log_id, stats)

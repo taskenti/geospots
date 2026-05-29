@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from dataclasses import dataclass
 
@@ -74,8 +75,10 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
     ("police_risk", "0.85", 0.9, (
         # BUG-02: "fine" (adjetivo inglés "todo bien") generaba 89.9% FP.
         # Sustituido por formas inequívocas de "multa".
-        "policia", "police", "multa", "fined", "got a fine", "got fined",
+        "policia", "police", "multa", "multas",   # NEW-BUG-B: "multas" plural ES
+        "fined", "got a fine", "got fined",
         "we were fined", "parking fine", "police fine", "received a fine",
+        "parking fines", "fines for parking", "fines for staying",  # NEW-BUG-B: EN plural
         "verboten", "expuls", "evicted",
         "kicked out", "nos echaron", "nos multaron", "cops", "guardia civil",
         "gendarm", "carabinieri", "moved on", "asked us to leave",
@@ -286,6 +289,19 @@ PATTERNS: list[tuple[str, str, float, tuple[str, ...]]] = [
         "prohibido dormir", "no dormir", "no se puede dormir",
         "not allowed to sleep", "interdit de dormir", "schlafen verboten",
         "no se permite pernoctar", "no se permite dormir",
+        # NEW-BUG-A: "prohibited/not allowed" viene DESPUÉS del needle "overnight",
+        # por lo que _is_negated (solo mira hacia atrás) no lo captura.
+        # Capturamos las frases completas como needles negativos directos.
+        "overnight parking prohibited", "overnight parking is prohibited",
+        "overnight parking not allowed", "overnight parking is not allowed",
+        "parking overnight prohibited", "parking overnight is prohibited",
+        "not allowed to park overnight", "not allowed to stay overnight",
+        "overnight not permitted", "overnight is not permitted",
+        "overnight is prohibited", "prohibited overnight parking",
+        "fines for staying overnight", "fined for staying overnight",
+        # pernoctar prohibido (ES — el orden inverso al needle "pernoctar")
+        "pernoctar está prohibido", "pernoctar esta prohibido",
+        "pernoctar no está permitido", "pernoctar no esta permitido",
     )),
     # ── SPOT CLOSED ──────────────────────────────────────────────────────────────
     # BUG-03: "construction"/"obras" eliminados — una obra CERCA no es un spot
@@ -470,16 +486,20 @@ _FACILITY_TOKENS = frozenset({
     "toilet", "toilets", "wc", "shower", "showers", "restaurant", "bar", "cafe",
     "shop", "store", "kiosk", "reception", "office", "pool", "kitchen", "snack",
     "restroom", "restrooms", "bathroom", "laundry",
+    "supermarket", "grocery", "bakery",  # NEW-BUG-D: locales externos que no son el spot
     # ES
     "baño", "ba.os", "baños", "aseo", "aseos", "ducha", "duchas", "restaurante",
     "kiosco", "quiosco", "supermercado", "chiringuito", "recepción", "recepcion",
     "piscina", "tienda", "lavandería", "lavanderia", "servicio", "servicios",
+    "panadería", "panaderia",  # NEW-BUG-D: ES
     # FR
     "toilettes", "sanitaires", "douche", "douches", "piscine", "accueil",
     "réception", "magasin", "boulangerie",
+    "supermarché", "épicerie",  # NEW-BUG-D: FR
     # DE
     "toilette", "toiletten", "dusche", "duschen", "sanitär", "sanitaer",
     "rezeption", "kiosk", "schwimmbad", "küche", "kueche", "waschraum",
+    "supermarkt", "bäckerei", "baeckerei",  # NEW-BUG-D: DE
 })
 
 
@@ -611,12 +631,118 @@ def _has_freeze_context(lowered: str) -> bool:
     return any(tok in lowered for tok in _FREEZE_CONTEXT_TOKENS)
 
 
+# ── Opción B (Sprint 8): señales de polaridad ambigua ────────────────────────
+# El regex es CIEGO a la polaridad contextual. Caso canónico (reportado por el
+# usuario 2026-05-29):
+#   "Parfait, superbe et propre. La police fait quelques rondes."
+#   → el regex ve "police" y emite police_risk=0.85 (riesgo), cuando en realidad
+#     las rondas policiales son un indicador POSITIVO de seguridad.
+# El regex no puede distinguir "police fined us" (riesgo real) de "police does
+# rounds" (tranquilidad). Por eso `police_risk` NO se emite por regex: su sola
+# mención fuerza el escalado al LLM, que sí entiende el contexto/polaridad.
+#
+# `overnight_safe` NO está aquí a propósito: sus needles positivos ("overnight",
+# "slept", "pernocta") aparecen en el 40-60% de las reviews camper; forzarlas al
+# LLM sería LLM-only encubierto y reventaría el presupuesto. Su único FP real
+# (prohibición + mención positiva en la misma review) se resuelve dentro del
+# regex por polaridad (ver final de extract_claims_regex), a coste cero.
+#
+# El plan LLM-only completo (Opción A) está documentado en
+# docs/fase-3-llm-only-plan.md y en CLAUDE.md.
+_AMBIGUOUS_POLARITY_SIGNALS = frozenset({"police_risk"})
+
+
+# ── Modo de enriquecimiento (Opción A / B / regex) ───────────────────────────
+# Toggle global de la decisión de escalado al LLM. UN solo punto de verdad
+# (should_escalate_to_llm) usado por extract_claims (path sin throttling) y por
+# worker._extract_claims_with_retry (path con semáforo/cap), para que ambos
+# caminos sean coherentes (corolario CLAUDE.md).
+#
+#   hybrid      (Opción B, default): regex primero; escala al LLM solo si el
+#               texto es sustancial (>=120) y el regex no cubrió (n<3), o si hay
+#               mención de señal ambigua (police). Coste bajo (~62% escala).
+#   llm_only    (Opción A): TODA review con texto >= ENRICHMENT_LLM_MIN_CHARS va
+#               al LLM (ignora la cobertura regex). Mayor calidad, mayor coste.
+#   regex_only  : nunca LLM (coste 0). Equivale a use_gemini=False.
+#
+# IMPORTANTE: el modo solo decide SI se escala. El tope duro de llamadas
+# (max_llm_calls / CAPA 4 en el worker) se aplica SIEMPRE, también en llm_only —
+# un batch jamás puede gastar de forma ilimitada.
+_VALID_MODES = frozenset({"hybrid", "llm_only", "regex_only"})
+_DEFAULT_LLM_MIN_CHARS = int(os.environ.get("ENRICHMENT_LLM_MIN_CHARS", "30"))
+
+
+def resolve_enrichment_mode(mode: str | None = None) -> str:
+    """Normaliza el modo: arg explícito > ENRICHMENT_MODE env > 'hybrid'."""
+    raw = (mode or os.environ.get("ENRICHMENT_MODE", "hybrid")).strip().lower()
+    if raw not in _VALID_MODES:
+        logger.warning(
+            f"[enrichment] ENRICHMENT_MODE desconocido '{raw}'; usando 'hybrid'. "
+            f"Válidos: {sorted(_VALID_MODES)}"
+        )
+        return "hybrid"
+    return raw
+
+
+def should_escalate_to_llm(
+    text: str,
+    n_regex: int,
+    force_llm: bool,
+    mode: str,
+    llm_min_chars: int | None = None,
+) -> bool:
+    """Punto único de decisión de escalado al LLM (usado por ambos paths).
+
+    - regex_only → nunca.
+    - llm_only   → sí, si len(text) >= llm_min_chars (umbral bajo, ~30).
+    - hybrid     → fuerza si force_llm (mención ambigua); si no, escala solo
+                   cuando texto >=120 y regex no cubrió (n<3).
+    """
+    if llm_min_chars is None:
+        llm_min_chars = _DEFAULT_LLM_MIN_CHARS
+    if mode == "regex_only":
+        return False
+    if mode == "llm_only":
+        return len(text) >= llm_min_chars
+    # hybrid (Opción B)
+    if force_llm:
+        return True
+    if len(text) < 120:
+        return False
+    if n_regex >= 3:
+        return False
+    return True
+
+
+def text_mentions_ambiguous_signal(text: str) -> bool:
+    """¿El texto menciona alguna señal de polaridad ambigua (police_risk)?
+
+    Si devuelve True, el caller DEBE escalar al LLM aunque el regex tuviera
+    cobertura suficiente (n>=3) o el texto fuese corto (<120): el regex no emite
+    estas señales, así que la única forma de capturarlas con la polaridad
+    correcta es el LLM. Reutiliza los mismos needles que PATTERNS para detectar
+    "mención" (presencia), no polaridad.
+    """
+    lowered = text.lower()
+    for signal, value, confidence, needles in PATTERNS:
+        if signal not in _AMBIGUOUS_POLARITY_SIGNALS:
+            continue
+        for needle in needles:
+            if _needle_matches(needle, lowered):
+                return True
+    return False
+
+
 def extract_claims_regex(text: str) -> list[dict]:
     lowered = text.lower()
     freeze_ctx = _has_freeze_context(lowered)
     claims: list[ExtractedClaim] = []
     seen: set[tuple[str, str]] = set()
     for signal, value, confidence, needles in PATTERNS:
+        # Opción B: señales de polaridad ambigua NO se emiten por regex; van solo
+        # vía LLM (ver _AMBIGUOUS_POLARITY_SIGNALS y text_mentions_ambiguous_signal).
+        if signal in _AMBIGUOUS_POLARITY_SIGNALS:
+            continue
         # BUG-36: agua "no funciona" por helada estacional -> no es fallo real
         if signal == "water_working" and value == "false" and freeze_ctx:
             continue
@@ -628,7 +754,22 @@ def extract_claims_regex(text: str) -> list[dict]:
                 seen.add(key)
                 claims.append(ExtractedClaim(signal, value, confidence, _excerpt(text, needle)))
                 break
-    return [claim.as_dict() for claim in claims]
+    result = [claim.as_dict() for claim in claims]
+
+    # Opción B / NEW-BUG-A: resolución de polaridad de overnight_safe a coste cero.
+    # Una prohibición explícita (value="false", p.ej. "overnight parking
+    # prohibited") anula la mención positiva ("overnight"/"slept") emitida por el
+    # needle suelto en la MISMA review. _is_negated solo mira hacia atrás, así que
+    # no captura "overnight ... prohibited"; aquí lo resolvemos post-hoc.
+    has_overnight_false = any(
+        c["signal"] == "overnight_safe" and c["value"] == "false" for c in result
+    )
+    if has_overnight_false:
+        result = [
+            c for c in result
+            if not (c["signal"] == "overnight_safe" and c["value"] == "true")
+        ]
+    return result
 
 
 def _parse_json_response(text: str, extractor_name: str) -> list[dict]:
@@ -679,30 +820,38 @@ async def extract_claims_llm(text: str) -> list[dict]:
 extract_claims_gemini = extract_claims_llm
 
 
-async def extract_claims(text: str, review: dict | None = None, use_gemini: bool = True) -> list[dict]:
+async def extract_claims(
+    text: str,
+    review: dict | None = None,
+    use_gemini: bool = True,
+    mode: str | None = None,
+) -> list[dict]:
     """`use_gemini` mantiene el nombre por compat; activa el fallback LLM
     (sea Gemini o DeepSeek según ENRICHMENT_PROVIDER).
 
-    Lógica de escalado al LLM:
-    - Texto < 120 chars: nunca al LLM (demasiado corto para extraer algo útil).
-    - Texto ≥ 120 chars + regex ≥ 3 claims: cobertura suficiente, no escalar.
-    - Texto ≥ 120 chars + regex 0-2 claims: escalar al LLM para capturar señales
-      que las keywords no cubren (texto descriptivo, idiomas menos comunes, etc.).
-    - use_gemini=False: solo regex siempre.
+    `mode` (hybrid | llm_only | regex_only) controla la decisión de escalado.
+    Si es None se resuelve desde ENRICHMENT_MODE (default 'hybrid'). El escalado
+    en sí lo decide should_escalate_to_llm() — punto único compartido con
+    worker._extract_claims_with_retry para que ambos caminos sean coherentes.
+
+    Recordatorio: en llm_only TODA review >= ENRICHMENT_LLM_MIN_CHARS escala al
+    LLM, pero el tope duro de llamadas se aplica fuera (worker CAPA 4).
     """
     regex_claims = extract_claims_regex(text)
     n_regex = len(regex_claims)
 
+    mode = resolve_enrichment_mode(mode)
     if not use_gemini:
-        return _blend_lexicon(text, regex_claims)
-    # Texto demasiado corto: nunca al LLM independientemente de los claims.
-    if len(text) < 120:
-        return _blend_lexicon(text, regex_claims)
-    # Cobertura suficiente con regex solo.
-    if n_regex >= 3:
+        # use_gemini=False es un override duro: regex puro, coste 0.
+        mode = "regex_only"
+
+    # Opción B / mención ambigua: el regex no emite police_risk; su presencia
+    # fuerza el escalado al LLM (única vía de capturarla con polaridad correcta).
+    force_llm = text_mentions_ambiguous_signal(text)
+
+    if not should_escalate_to_llm(text, n_regex, force_llm, mode):
         return _blend_lexicon(text, regex_claims)
 
-    # Texto sustancial (≥120 chars) con 0-2 claims regex: escalar al LLM.
     llm_claims = await extract_claims_llm(text)
     if not llm_claims:
         return _blend_lexicon(text, regex_claims)

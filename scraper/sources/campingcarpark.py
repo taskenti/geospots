@@ -180,7 +180,7 @@ class CampingCarParkSource(AbstractSource):
         }
         return merge_extra(norm, extract_campingcarpark(raw))
 
-    async def run(self, pool, config, log_id: int) -> dict:
+    async def run(self, pool, config, log_id: int, job_id: int = None) -> dict:
         from db import (
             find_spot_cercano, crear_spot, enriquecer_spot,
             upsert_source_record, finish_scraper_log, update_fuente_config
@@ -288,6 +288,9 @@ class CampingCarParkSource(AbstractSource):
                 logger.info(
                     f"[campingcarpark] Batch {i // BATCH + 1} done "
                     f"({min(i + BATCH, len(location_ids))}/{len(location_ids)})"
+                )
+                await self.update_job_progress(
+                    pool, job_id, min(i + BATCH, len(location_ids)), len(location_ids), stats
                 )
 
         async with pool.acquire() as conn:

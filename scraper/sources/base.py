@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from loguru import logger
 import asyncio
+import json
 
 
 class AbstractSource(ABC):
@@ -233,19 +234,12 @@ class AbstractSource(ABC):
                     f"upd={stats['actualizados']} err={stats['errores']}"
                 )
 
-                if job_id:
-                    try:
-                        async with pool.acquire() as conn:
-                            await conn.execute(
-                                "UPDATE scraper_jobs SET progress = $1::jsonb WHERE id = $2",
-                                json.dumps({
-                                    "processed_cells": min(i+LOTE, len(cells)),
-                                    "total_cells": len(cells),
-                                    "stats": stats
-                                }), job_id
-                            )
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] Error actualizando progreso: {e}")
+                await self.update_job_progress(
+                    pool, job_id,
+                    processed=min(i + LOTE, len(cells)),
+                    total=len(cells),
+                    stats=stats,
+                )
 
         async with pool.acquire() as conn:
             await finish_scraper_log(conn, log_id, stats)
@@ -254,6 +248,31 @@ class AbstractSource(ABC):
         dur = (datetime.now(timezone.utc) - inicio).total_seconds()
         logger.info(f"[{self.name}] Completado en {dur:.0f}s | {stats}")
         return stats
+
+    async def update_job_progress(self, pool, job_id, processed, total, stats=None) -> None:
+        """Persiste progreso en scraper_jobs.progress de forma segura.
+
+        No-op si job_id es None (ejecución fuera de la cola). Usa default=str
+        en json.dumps porque stats contiene datetimes (iniciado_en) que de otro
+        modo romperían la serialización. Cualquier fuente que sobreescriba run()
+        debería llamar a este helper en su bucle principal para alimentar la
+        barra de progreso del panel admin.
+        """
+        if not job_id:
+            return
+        try:
+            payload = {
+                "processed": processed,
+                "total": total,
+                "stats": stats or {},
+            }
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE scraper_jobs SET progress = $1::jsonb WHERE id = $2",
+                    json.dumps(payload, default=str), job_id,
+                )
+        except Exception as e:
+            logger.warning(f"[{self.name}] Error actualizando progreso: {e}")
 
     async def download_reviews(self, pool, config, job_id: int = None) -> dict:
         """Descarga de comentarios desacoplada para esta fuente."""
