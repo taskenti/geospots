@@ -5,7 +5,8 @@
 > aplicado abajo, es que falta ejecutarlo contra la DB / configurar el entorno.
 >
 > Plan de diseño completo: `docs/plan-verdad-geoespacial.md`.
-> Última actualización: 2026-05-30 (Sprints 0, 1, 2 y 3 en código; aplicados y
+> Sprint 4 (PBF local) ✅ — España al 100% (52K spots) en 4 min, modo local.
+> Última actualización: 2026-05-30 (Sprints 0, 1, 2, 3 y 4 en código; aplicados y
 > validados contra la DB real excepto Sprint 1/Google que requiere API key).
 
 ## ✅ VALIDACIÓN 2026-05-30 (contra DB real)
@@ -29,18 +30,30 @@
 - ⏸ **Sprint 1 (Google) NO validado**: `.env` sin `GOOGLE_MAPS_API_KEY`. Endpoints
   responden (presupuesto a $0). Pendiente de configurar clave + billing.
 
-### geo_osm — acumulación progresiva (en curso)
+### ✅ Sprint 4 — PBF local (RESUELTO; sustituye a Overpass para bulk)
 
-**Estado 2026-05-30:** 292 spots ES con contexto OSM real.
-- Run de 300 spots: 283 OK / 17 errores (94%), 30 min. ~560 spots/hora con `rate=3s`.
-- Overpass público con `rate=3s` es estable. Mirror kumi (10% éxito) descartado.
-- **Crons activos** (IDs: a9783df7, 966b302d, b56c6d33): 3 runs/día a las 7:23 / 13:47
-  / 21:11. ~850 spots/día → cobertura ES completa (~52K) en ~60 días.
-- Los crons viven en la sesión de Claude (7 días máx). Relanzar con:
-  `CronCreate cron="23 7 * * *" / "47 13 * * *" / "11 21 * * *"` + mismo prompt.
-- **Sprint 4 (PBF local)**: alternativa para cubrir ES en una tarde (900 MB descarga,
-  ~3 GB en disco, ~2 GB RAM durante import). Abordarlo cuando `rate=3s` deje de ser
-  suficiente o se quiera cubrir Francia/Alemania en escala.
+**España al 100% — 52.072 spots con contexto OSM en 4 min (0 errores), modo local.**
+- `osm_pois`: 101.949 POIs ES importados del PBF (agua 42.947, farmacia 17.611,
+  súper 17.525, mirador 11.641, gasolinera 11.537, vaciado 688).
+- `geo_context.py` ahora tiene **modo local** (KNN sobre `osm_pois`) + fallback
+  Overpass. `GEO_OSM_MODE=auto` elige local si hay datos del país.
+- Overpass queda solo como fallback/piloto. Los **3 crons de Overpass se ELIMINARON**
+  (eran crons de sesión de Claude, no sobrevivían — decisión errónea, corregida).
+- POIs viven en `osm_pois`, tabla SEPARADA de `spots`. NUNCA son spots. Solo se
+  consultan para calcular distancias en `spot_geo`. Verificado: ningún `tipo` de spot
+  es farmacia/agua/súper/mirador/vaciado.
+
+**Pasos para otro país (FR/IT/DE…):**
+```bash
+# 1. Descargar PBF de Geofabrik (ej. francia)
+#    https://download.geofabrik.de/europe/france-latest.osm.pbf → C:\geospots\data\
+# 2. Import (MSYS_NO_PATHCONV=1 evita que Git Bash mangle /data)
+MSYS_NO_PATHCONV=1 docker compose exec -T scraper python -m jobs.import_osm_pbf --country fr
+# 3. Geo local del país (auto-detecta osm_pois)
+docker compose exec -T -e GEO_OSM_COUNTRY=fr scraper python scheduler.py --geo_osm
+```
+Requisitos en container (ya en Dockerfile/requirements tras rebuild): `libexpat1` + `osmium`.
+El .pbf se puede borrar tras importar (regenerable).
 
 ---
 

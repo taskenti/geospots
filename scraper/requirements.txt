@@ -8,3 +8,4 @@ beautifulsoup4>=4.12.0
 langdetect>=1.0.9
 google-genai>=1.0.0
 langdetect
+osmium>=4.0.0
