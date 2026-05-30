@@ -11,8 +11,12 @@ from typing import Any
 
 from loguru import logger
 
-EMBEDDING_MODEL = "text-embedding-004"
-GOOGLE_EMBEDDING_MODEL = "models/text-embedding-004"
+# text-embedding-004 fue retirado de la API. gemini-embedding-001 es el GA actual;
+# nativo 3072 dims pero soporta output_dimensionality → 768 (columna vector(768)).
+# Usamos cosine (<=>) en pgvector, invariante a la magnitud, así que no hace falta
+# normalizar al truncar dimensiones.
+EMBEDDING_MODEL = "gemini-embedding-001"
+GOOGLE_EMBEDDING_MODEL = "models/gemini-embedding-001"
 EMBEDDING_DIMS = 768
 
 # Intent/respuesta de búsqueda semántica: provider y modelo vienen de ENV
@@ -160,7 +164,7 @@ def _score_from_signal(signals_data: dict, signal: str) -> Any:
 # T1.6 — schema version: bumpar SOLO cuando cambie construir_texto_para_embedding
 # o cuando cambie el modelo de embeddings. Cualquier cambio aquí invalida TODOS
 # los fingerprints y dispara reembedding en la próxima ejecución del cron.
-EMBEDDING_SCHEMA_VERSION = "v1"
+EMBEDDING_SCHEMA_VERSION = "v2"  # v2: contexto de proximidad (Canal A) en el texto
 
 
 def compute_fingerprint(state_row: dict, *, schema_version: str = EMBEDDING_SCHEMA_VERSION) -> str:
@@ -309,6 +313,23 @@ def construir_texto_para_embedding(spot: dict, state: dict) -> str:
     if servicios:
         partes.append(f"Servicios: {', '.join(servicios)}")
 
+    # Canal A — contexto de proximidad (nearby_osm 1a + nearby_spots 1b). Ordenado
+    # por distancia, cap a 10 para no diluir el embedding. _NEARBY_LABELS/_fmt_km
+    # son globals resueltos en runtime (definidos más abajo en el módulo).
+    geo_parts: list[str] = []
+    for blob_key in ("nearby_osm", "nearby_spots"):
+        d = _json_object(spot.get(blob_key))
+        items = sorted(
+            ((c, v) for c, v in d.items() if isinstance(v, (int, float))),
+            key=lambda kv: kv[1],
+        )
+        for cat, km in items:
+            dist = _fmt_km(km)
+            if dist:
+                geo_parts.append(f"{_NEARBY_LABELS.get(cat, cat)} a {dist}")
+    if geo_parts:
+        partes.append("Cerca: " + ", ".join(geo_parts[:10]))
+
     if state.get("semantic_dsl"):
         partes.append(f"DSL: {state['semantic_dsl']}")
 
@@ -320,19 +341,38 @@ def _embedding_values(embedding_obj: Any) -> list[float]:
     return [float(v) for v in values]
 
 
-async def embed_texts(texts: list[str]) -> list[list[float]]:
+async def embed_texts(texts: list[str], task_type: str | None = None,
+                      chunk: int = 100) -> list[list[float]]:
+    """Embeddings con gemini-embedding-001 a EMBEDDING_DIMS.
+
+    task_type: 'RETRIEVAL_DOCUMENT' para spots almacenados, 'RETRIEVAL_QUERY' para
+    la query de búsqueda (mejor recuperación). Trocea en sub-lotes (`chunk`) para
+    no exceder límites por llamada.
+    """
     if not texts:
         return []
     client = _google_client()
+    from google.genai import types
 
-    def _call():
-        result = client.models.embed_content(model=GOOGLE_EMBEDDING_MODEL, contents=texts)
+    cfg_kwargs: dict = {"output_dimensionality": EMBEDDING_DIMS}
+    if task_type:
+        cfg_kwargs["task_type"] = task_type
+    config = types.EmbedContentConfig(**cfg_kwargs)
+
+    def _call(sub: list[str]):
+        result = client.models.embed_content(
+            model=GOOGLE_EMBEDDING_MODEL, contents=sub, config=config
+        )
         return [_embedding_values(item) for item in result.embeddings]
 
-    return await asyncio.to_thread(_call)
+    out: list[list[float]] = []
+    for i in range(0, len(texts), chunk):
+        out.extend(await asyncio.to_thread(_call, texts[i:i + chunk]))
+    return out
 
 
-async def fetch_embedding_candidates(conn, batch_size: int, stale_only: bool = False) -> list[dict]:
+async def fetch_embedding_candidates(conn, batch_size: int, stale_only: bool = False,
+                                     country: str | None = None) -> list[dict]:
     # T1.6: semantic_fingerprint reemplaza el comparador `updated_at > created_at`.
     #   - stale_only=False → spots sin embedding (se.spot_id IS NULL).
     #   - stale_only=True  → spots cuyo fingerprint actual != el que generó su embedding.
@@ -347,6 +387,8 @@ async def fetch_embedding_candidates(conn, batch_size: int, stale_only: bool = F
         )
     else:
         stale_clause = "AND se.spot_id IS NULL"
+    country_clause = "AND s.country_iso = $2" if country else ""
+    params: list[Any] = [batch_size] + ([country.lower()] if country else [])
     rows = await conn.fetch(
         f"""
         SELECT s.id, s.canonical_name, s.tipo, s.region, s.country_iso,
@@ -357,24 +399,27 @@ async def fetch_embedding_candidates(conn, batch_size: int, stale_only: bool = F
                sss.stealth_score, sss.signals_data,
                sss.summary_es, sss.summary_en, sss.tags, sss.best_for,
                sss.best_season, sss.semantic_dsl,
-               sss.active_alert_types, sss.semantic_fingerprint
+               sss.active_alert_types, sss.semantic_fingerprint,
+               sg.nearby_osm, sg.nearby_spots
         FROM spots s
         JOIN spot_semantic_state sss ON sss.spot_id = s.id
         LEFT JOIN spot_embeddings se ON se.spot_id = s.id
+        LEFT JOIN spot_geo sg ON sg.spot_id = s.id
         WHERE s.activo = TRUE
           AND sss.total_observations > 0
           {stale_clause}
+          {country_clause}
         ORDER BY s.total_reviews DESC NULLS LAST, s.id
         LIMIT $1
         """,
-        batch_size,
+        *params,
     )
     return [dict(r) for r in rows]
 
 
-async def generar_embeddings_batch(pool, batch_size: int = 100) -> dict:
+async def generar_embeddings_batch(pool, batch_size: int = 100, country: str | None = None) -> dict:
     async with pool.acquire() as conn:
-        spots = await fetch_embedding_candidates(conn, batch_size, stale_only=False)
+        spots = await fetch_embedding_candidates(conn, batch_size, stale_only=False, country=country)
     if not spots:
         return {"processed": 0, "model": EMBEDDING_MODEL}
 
@@ -384,7 +429,7 @@ async def generar_embeddings_batch(pool, batch_size: int = 100) -> dict:
         spot.get("semantic_fingerprint") or compute_fingerprint(spot)
         for spot in spots
     ]
-    embeddings = await embed_texts(texts)
+    embeddings = await embed_texts(texts, task_type="RETRIEVAL_DOCUMENT")
     async with pool.acquire() as conn:
         async with conn.transaction():
             for spot, values, text, fp in zip(spots, embeddings, texts, fingerprints):
@@ -409,9 +454,9 @@ async def generar_embeddings_batch(pool, batch_size: int = 100) -> dict:
     return {"processed": len(spots), "model": EMBEDDING_MODEL}
 
 
-async def regenerar_embeddings_stale(pool, batch_size: int = 100) -> dict:
+async def regenerar_embeddings_stale(pool, batch_size: int = 100, country: str | None = None) -> dict:
     async with pool.acquire() as conn:
-        stale = await fetch_embedding_candidates(conn, batch_size, stale_only=True)
+        stale = await fetch_embedding_candidates(conn, batch_size, stale_only=True, country=country)
     if not stale:
         return {"processed": 0, "model": EMBEDDING_MODEL}
     texts = [construir_texto_para_embedding(spot, spot) for spot in stale]
@@ -419,7 +464,7 @@ async def regenerar_embeddings_stale(pool, batch_size: int = 100) -> dict:
         spot.get("semantic_fingerprint") or compute_fingerprint(spot)
         for spot in stale
     ]
-    embeddings = await embed_texts(texts)
+    embeddings = await embed_texts(texts, task_type="RETRIEVAL_DOCUMENT")
     async with pool.acquire() as conn:
         async with conn.transaction():
             for spot, values, text, fp in zip(stale, embeddings, texts, fingerprints):
@@ -523,7 +568,7 @@ async def buscar_spots(
 ) -> tuple[list[dict], dict]:
     intent = await extraer_intencion(query, use_gemini=use_gemini_intent)
     semantic_query = intent.get("semantic_query") or query
-    query_embedding = vector_literal((await embed_texts([semantic_query]))[0])
+    query_embedding = vector_literal((await embed_texts([semantic_query], task_type="RETRIEVAL_QUERY"))[0])
 
     where_parts = [
         "s.activo = TRUE",
