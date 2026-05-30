@@ -521,11 +521,15 @@ async def buscar_spots(
             sss.police_risk_score, sss.stealth_score, sss.crowd_level_score,
             sss.overnight_safe, sss.semantic_dsl,
             sss.summary_es, sss.tags, sss.best_for,
+            sg.dist_drinking_water_km, sg.dist_dump_station_km,
+            sg.dist_supermarket_km, sg.dist_fuel_km,
+            sg.dist_pharmacy_km, sg.dist_viewpoint_km,
             1 - (se.embedding <=> $1::vector) AS similarity,
             ST_Distance(s.geog, ST_SetSRID(ST_MakePoint($3, $2), 4326)::geography) / 1000 AS dist_km
         FROM spots s
         JOIN spot_embeddings se ON se.spot_id = s.id
         JOIN spot_semantic_state sss ON sss.spot_id = s.id
+        LEFT JOIN spot_geo sg ON sg.spot_id = s.id
         WHERE {where_clause}
         ORDER BY similarity DESC
         LIMIT ${idx}
@@ -535,21 +539,47 @@ async def buscar_spots(
     return [dict(r) for r in rows], intent
 
 
+_GEO_LABELS = [
+    ("dist_drinking_water_km", "agua"), ("dist_dump_station_km", "vaciado"),
+    ("dist_supermarket_km", "super"), ("dist_fuel_km", "gasolinera"),
+    ("dist_pharmacy_km", "farmacia"), ("dist_viewpoint_km", "mirador"),
+]
+
+
+def _entorno_str(s: dict) -> str:
+    """Contexto de proximidad legible para el prompt (Canal C). Distancia en
+    LÍNEA RECTA por ahora; pendiente sustituir por distancia por carretera donde
+    aplique (ver docs/diseno-distancias-y-contexto.md)."""
+    parts: list[str] = []
+    for col, label in _GEO_LABELS:
+        v = s.get(col)
+        if v is not None:
+            parts.append(f"{label} {int(v*1000)}m" if v < 1 else f"{label} {v:.1f}km")
+    return "; ".join(parts)
+
+
 async def generar_respuesta_busqueda(query: str, spots: list[dict]) -> str:
     if not spots:
         return ""
     from .llm_provider import call_llm_sync
-    contexto = "\n".join(
-        (
+
+    def _line(i: int, s: dict) -> str:
+        base = (
             f"#{i + 1} {s['canonical_name']} ({s['tipo']}, {float(s['dist_km']):.1f}km, "
             f"sim={float(s['similarity']):.2f}): {s.get('semantic_dsl') or 'N/A'}"
         )
-        for i, s in enumerate(spots[:10])
-    )
+        entorno = _entorno_str(s)
+        if entorno:
+            base += f" | entorno: {entorno}"
+        return base
+
+    contexto = "\n".join(_line(i, s) for i, s in enumerate(spots[:10]))
     prompt = (
         f'El usuario busca: "{query}"\n\n'
-        f"Top spots encontrados (DSL semantico):\n{contexto}\n\n"
-        "Recomienda los mejores. Se conciso y directo. Usa el nombre del spot y la distancia."
+        f"Top spots encontrados (DSL semantico + entorno cercano):\n{contexto}\n\n"
+        "Recomienda los mejores. Se conciso y directo. Usa el nombre del spot y la "
+        "distancia. Si el usuario pide servicios cercanos (agua, super, vaciado, etc.) "
+        "y aparecen en 'entorno', mencionalos con su distancia."
     )
     resp = await asyncio.to_thread(
         call_llm_sync, prompt, system_prompt="", response_format="text",
