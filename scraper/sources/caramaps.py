@@ -145,6 +145,68 @@ def clean_surrogates(text: str) -> str:
     return "".join(c for c in text if not (0xD800 <= ord(c) <= 0xDFFF))
 
 
+DETAIL_URL = "https://admin.caramaps.com/api/revisions/{uuid}"
+
+
+def _clean_str(v) -> str | None:
+    if v is None:
+        return None
+    s = clean_surrogates(str(v)).strip()
+    return s or None
+
+
+def extract_caramaps_detail(detail: dict) -> dict:
+    """Enriquecimiento desde /api/revisions/{uuid} (campos ausentes en la lista).
+
+    La lista que descarga run() NO trae nº de plazas, teléfono, web propia ni
+    puntos de carga. El detalle sí (medido: nbCarPlace ~100%, contacto ~13%).
+    Devuelve un dict listo para enriquecer_spot (COALESCE: no pisa lo existente).
+    """
+    if not isinstance(detail, dict):
+        return {}
+    out: dict = {}
+
+    # nº de plazas (poblado en ~100% de los spots, valores reales 2-50)
+    nb = detail.get("nbCarPlace")
+    try:
+        if nb is not None and int(nb) > 0:
+            out["num_plazas"] = int(nb)
+    except (TypeError, ValueError):
+        pass
+
+    ci = detail.get("contactInformation") or {}
+    if isinstance(ci, dict):
+        tel = _clean_str(ci.get("telephone")) or _clean_str(ci.get("telephone2"))
+        if tel:
+            out["telefono"] = tel[:60]
+        email = _clean_str(ci.get("email")) or _clean_str(ci.get("email2"))
+        if email:
+            out["email"] = email[:120]
+        website = _clean_str(ci.get("website"))
+        # web real del establecimiento (no el permalink caramaps). enriquecer_spot
+        # hace COALESCE → solo aterriza donde ninguna otra fuente puso web.
+        if website and website.startswith("http"):
+            out["web"] = website[:300]
+
+    # Servicios extra (deep-merge en servicios_extras)
+    extras: dict = {}
+    try:
+        ev = detail.get("nbChargingPoint")
+        if ev is not None and int(ev) > 0:
+            # ev_charging NO es columna de spots (es un signal_type); guardar solo
+            # en servicios_extras para no romper el UPDATE de enriquecer_spot.
+            extras["ev_charging_points"] = int(ev)
+    except (TypeError, ValueError):
+        pass
+    floor = _clean_str((detail.get("floorType") or {}).get("code") if isinstance(detail.get("floorType"), dict) else detail.get("floorType"))
+    if floor:
+        extras["floor_type"] = floor[:40]
+    if extras:
+        out["servicios_extras"] = extras
+
+    return out
+
+
 class CaramapsSource(AbstractSource):
     name = "caramaps"
     rate_limit = 0.3
@@ -269,31 +331,44 @@ class CaramapsSource(AbstractSource):
         return merge_extra(norm, extract_caramaps(raw))
 
     async def download_reviews(self, pool, config, job_id: int = None) -> dict:
-        from db import upsert_review
+        from db import upsert_review, enriquecer_spot
         import httpx
 
         stats = {
             "nuevos": 0,
             "actualizados": 0,
             "reviews_nuevas": 0,
+            "detalles": 0,
             "errores": 0
         }
 
-        logger.info(f"[{self.name}] Buscando spots con reviews pendientes...")
+        # Selecciona spots con reviews O detalle pendientes. El detalle
+        # (/api/revisions/{uuid}) aporta num_plazas, teléfono, web real y EV que la
+        # lista de run() no trae. La mayoría de spots ya tienen reviews_fetched=true
+        # pero details_fetched=NULL → este pass los enriquece con el detalle.
+        logger.info(f"[{self.name}] Buscando spots con reviews/detalle pendientes...")
         async with pool.acquire() as conn:
             review_jobs = await conn.fetch("""
-                SELECT 
-                    sr.spot_id, 
-                    sr.source_id, 
-                    sr.raw_data->'pointOfInterest'->>'uuid' AS poi_uuid
+                SELECT
+                    sr.spot_id,
+                    sr.source_id,
+                    sr.raw_data->'pointOfInterest'->>'uuid' AS poi_uuid,
+                    sr.raw_data->>'uuid' AS rev_uuid,
+                    (sr.normalized_data->>'reviews_fetched') IS NOT NULL AS reviews_done,
+                    (sr.normalized_data->>'details_fetched') IS NOT NULL AS details_done
                 FROM source_records sr
                 WHERE sr.source = 'caramaps'
-                  AND sr.raw_data->'pointOfInterest'->>'uuid' IS NOT NULL
-                  AND (sr.normalized_data->>'reviews_fetched') IS NULL
+                  AND (
+                    ( sr.raw_data->'pointOfInterest'->>'uuid' IS NOT NULL
+                      AND (sr.normalized_data->>'reviews_fetched') IS NULL )
+                    OR
+                    ( sr.raw_data->>'uuid' IS NOT NULL
+                      AND (sr.normalized_data->>'details_fetched') IS NULL )
+                  )
                 ORDER BY sr.spot_id DESC;
             """)
 
-        logger.info(f"[{self.name}] {len(review_jobs)} spots con reviews pendientes.")
+        logger.info(f"[{self.name}] {len(review_jobs)} spots con reviews/detalle pendientes.")
         if not review_jobs:
             return stats
 
@@ -313,6 +388,41 @@ class CaramapsSource(AbstractSource):
                 spot_id = job["spot_id"]
                 sid = job["source_id"]
                 poi_uuid = job["poi_uuid"]
+
+                # --- Fase de detalle: enriquecer con /api/revisions/{uuid} ---
+                if not job.get("details_done") and job.get("rev_uuid"):
+                    try:
+                        await asyncio.sleep(self.rate_limit)
+                        dresp = await client.get(
+                            DETAIL_URL.format(uuid=job["rev_uuid"]), timeout=20
+                        )
+                        if dresp.status_code == 200:
+                            detail_norm = extract_caramaps_detail(dresp.json())
+                            async with pool.acquire() as conn:
+                                async with conn.transaction():
+                                    if detail_norm:
+                                        await enriquecer_spot(conn, spot_id, detail_norm, self.name)
+                                    await conn.execute("""
+                                        UPDATE source_records
+                                        SET normalized_data = normalized_data || '{"details_fetched": true}'::jsonb
+                                        WHERE source = 'caramaps' AND source_id = $1
+                                    """, sid)
+                            stats["detalles"] += 1
+                        elif dresp.status_code == 404:
+                            async with pool.acquire() as conn:
+                                await conn.execute("""
+                                    UPDATE source_records
+                                    SET normalized_data = normalized_data || '{"details_fetched": true}'::jsonb
+                                    WHERE source = 'caramaps' AND source_id = $1
+                                """, sid)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Error detalle spot {sid}: {e}")
+                        stats["errores"] += 1
+
+                # Si las reviews ya estaban hechas, no re-descargarlas
+                if job.get("reviews_done") or not poi_uuid:
+                    job_queue.task_done()
+                    continue
 
                 page = 1
                 items_per_page = 50
