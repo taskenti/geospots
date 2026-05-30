@@ -48,6 +48,18 @@ def test_domain_aggregator_returns_none():
     # Dominios de agregador agruparían spots NO relacionados → None.
     assert extract_domain("https://www.park4night.com/es/place/12345") is None
     assert extract_domain("https://campercontact.com/x") is None
+    # Detectados en auditoría dedup (2026-05-30): agregadores no excluidos antes.
+    assert extract_domain("https://www.campendium.com/x") is None
+    assert extract_domain("https://womo-stellplatz.eu/x") is None
+    assert extract_domain("https://furgovw.org/x") is None
+
+def test_domain_non_identity_platforms_none():
+    # Plataformas genéricas / organismos multi-sitio: web válida pero NO identidad.
+    assert extract_domain("https://www.facebook.com/campingx") is None
+    assert extract_domain("https://m.facebook.com/campingx") is None
+    assert extract_domain("https://instagram.com/campingx") is None
+    assert extract_domain("https://www.fs.usda.gov/recarea/123") is None
+    assert extract_domain("https://www.koa.com/campgrounds/x") is None
 
 def test_domain_invalid_or_empty():
     assert extract_domain(None) is None

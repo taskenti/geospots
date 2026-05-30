@@ -5,7 +5,29 @@
 > aplicado abajo, es que falta ejecutarlo contra la DB / configurar el entorno.
 >
 > Plan de diseño completo: `docs/plan-verdad-geoespacial.md`.
-> Última actualización: 2026-05-30 (Sprints 0, 1, 2 y 3 en código).
+> Última actualización: 2026-05-30 (Sprints 0, 1, 2 y 3 en código; aplicados y
+> validados contra la DB real excepto Sprint 1/Google que requiere API key).
+
+## ✅ VALIDACIÓN 2026-05-30 (contra DB real)
+
+- Migraciones aplicadas: google_api, provenance, entity_keys, geo_osm (idempotentes, OK).
+- **Backfill claves**: 82.699 telefono_norm + 59.807 web_domain (osm_id=0, no hay
+  source_records osm).
+- **Reconciliar**: 142K spots multifuente → **93,2% cobertura provenance**
+  (132.547 spots). Conflictos detectados: tipo 41.844, web 41.418, telefono 14.777…
+- **geo_osm** (piloto ES, batch 8): 4 spots con contexto OSM real (p.ej. agua 67m,
+  súper 167m). Overpass público devolvió 504/429 en los otros 4 → backoff los manejó.
+- **Ficha `/spot/264928`**: bloques `provenance` (con confidence/sources/conflict) y
+  `geo` (OSM) servidos correctamente.
+- **Endpoints admin**: coverage/provenance, conflicts/count, coverage/geo, dedup/audit,
+  google/budget → OK (tras `docker compose restart api` para recargar código).
+- 🐛 **Bug encontrado y reparado por la auditoría**: `extract_domain`/`_limpiar_web` no
+  excluían varios agregadores (campendium.com 32K spots, womo-stellplatz.eu 21K,
+  furgovw.org, nomady.camp) ni plataformas genéricas (facebook, fs.usda.gov, koa…).
+  Se añadieron a `EXCLUDED_DOMAINS` + nuevo `NON_IDENTITY_DOMAINS`. Tras re-backfill,
+  el mayor grupo de web_domain bajó de 32.324 a 78 spots.
+- ⏸ **Sprint 1 (Google) NO validado**: `.env` sin `GOOGLE_MAPS_API_KEY`. Endpoints
+  responden (presupuesto a $0). Pendiente de configurar clave + billing.
 
 ---
 
@@ -175,6 +197,7 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
 
 | Commit | Contenido |
 |---|---|
+| `8353aea` | Fix (validación): exclusión de agregadores/plataformas en web_domain + backfill keyset robusto. |
 | `116108e` | Sprint 3: motor geoespacial OSM (piloto Overpass) + ficha con contexto. |
 | `c82d743` | Sprint 2: entity resolution (claves normalizadas + anclas + auditoría + backfill). |
 | `d212dd5` | Sprints 0-1 + ficha viajero (spot.html) + plan + este runbook. (Agrupado con cleanup_dedup_shells.py por un add concurrente.) |

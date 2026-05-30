@@ -121,8 +121,8 @@ async def find_spot_cercano(conn: asyncpg.Connection, lat: float, lon: float,
     return None
 
 
-# Dominios de agregadores: NO son la web oficial de un spot. Se usan tanto para
-# limpiar `web` como para evitar que `web_domain` agrupe spots NO relacionados.
+# Dominios de agregadores: NO son la web oficial de un spot (son listados en una
+# plataforma). Se usan tanto para limpiar `web` como para `web_domain`.
 EXCLUDED_DOMAINS = [
     "campercontact.com", "park4night.com", "caramaps.com", "stayfree.app",
     "campspace.com", "vansite.eu", "searchforsites.co.uk", "alpacacamping.de",
@@ -130,6 +130,23 @@ EXCLUDED_DOMAINS = [
     "campernight.com", "bobilguiden.no", "camperstop.com", "campingcarpark.com",
     "agricamper.it", "roadsurfer.com", "campy.app", "campy.nl", "agricamper.com",
     "thedyrt.com",
+    # Añadidos tras auditoría dedup (2026-05-30): agregadores/fuentes que estaban
+    # filtrándose como web_domain (campendium 32K spots, womostell 21K, etc.).
+    "campendium.com", "womo-stellplatz.eu", "furgovw.org", "nomady.camp",
+    "aireparkreservation.com",
+]
+
+# Dominios que SÍ pueden ser la web válida de un spot (no se quitan de _limpiar_web)
+# pero NO sirven como CLAVE DE IDENTIDAD: plataformas genéricas que agruparían
+# miles de spots no relacionados. Solo los usa extract_domain (web_domain).
+NON_IDENTITY_DOMAINS = [
+    "facebook.com", "instagram.com", "sites.google.com", "linktr.ee",
+    "wixsite.com", "google.com/maps", "goo.gl", "maps.app.goo.gl",
+    # Organismos / cadenas multi-sitio: web legítima pero NO identifican un único
+    # spot (gestionan cientos/miles). Detectados en la auditoría dedup.
+    "fs.usda.gov", "blm.gov", "recreation.gov", "nps.gov", "bcparks.ca",
+    "caravanclub.co.uk", "campingandcaravanningclub.co.uk", "koa.com",
+    "trafikverket.se",
 ]
 
 
@@ -180,6 +197,10 @@ def extract_domain(url: str | None) -> str | None:
     if not s or "." not in s:
         return None
     for domain in EXCLUDED_DOMAINS:
+        if domain in s:
+            return None
+    # Plataformas genéricas: válidas como web pero inútiles como clave de identidad.
+    for domain in NON_IDENTITY_DOMAINS:
         if domain in s:
             return None
     return s

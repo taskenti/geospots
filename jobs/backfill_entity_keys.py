@@ -45,43 +45,42 @@ async def run_backfill(batch_size: int = 20000, dry_run: bool = False) -> dict:
     pool = await asyncpg.create_pool(dsn=_dsn(), min_size=1, max_size=4)
     try:
         # ── telefono_norm + web_domain (cálculo en Python) ──
-        offset = 0
+        # Paginación KEYSET por id (no OFFSET): el predicado no depende de las
+        # columnas que escribimos, así que no se saltan filas ni hay bucle
+        # infinito con teléfonos no normalizables. Recalcula siempre (regenerable).
+        last_id = 0
+        seen = 0
         while True:
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
                     """
                     SELECT id, telefono, web
                     FROM spots
-                    WHERE (telefono IS NOT NULL AND telefono_norm IS NULL)
-                       OR (web IS NOT NULL AND web_domain IS NULL)
+                    WHERE (telefono IS NOT NULL OR web IS NOT NULL) AND id > $1
                     ORDER BY id
-                    LIMIT $1 OFFSET $2
+                    LIMIT $2
                     """,
-                    batch_size, offset,
+                    last_id, batch_size,
                 )
             if not rows:
                 break
-            updates = []
-            for r in rows:
-                tn = normalize_phone(r["telefono"])
-                wd = extract_domain(r["web"])
-                if tn or wd:
-                    updates.append((r["id"], tn, wd))
+            last_id = rows[-1]["id"]
+            seen += len(rows)
+            # Recalcula SIEMPRE todas las filas candidatas (incluido escribir NULL):
+            # así un re-run limpia valores obsoletos (p.ej. dominios recién excluidos).
+            updates = [
+                (r["id"], normalize_phone(r["telefono"]), extract_domain(r["web"]))
+                for r in rows
+            ]
             if updates and not dry_run:
                 async with pool.acquire() as conn:
                     await conn.executemany(
-                        """
-                        UPDATE spots SET
-                            telefono_norm = COALESCE($2, telefono_norm),
-                            web_domain    = COALESCE($3, web_domain)
-                        WHERE id = $1
-                        """,
+                        "UPDATE spots SET telefono_norm = $2, web_domain = $3 WHERE id = $1",
                         updates,
                     )
             stats["telefono_norm"] += sum(1 for _, tn, _ in updates if tn)
             stats["web_domain"] += sum(1 for _, _, wd in updates if wd)
-            offset += batch_size
-            logger.info(f"[backfill] procesados {offset} spots | {stats}")
+            logger.info(f"[backfill] vistos {seen} (last_id={last_id}) | {stats}")
 
         # ── osm_id (un UPDATE join, barato) ──
         if not dry_run:
