@@ -10,58 +10,254 @@
             font-family: 'Inter', system-ui, sans-serif;
             background: #0a0a0f;
             color: #e0e0e0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             min-height: 100vh;
+            padding: 2rem 1rem;
         }
-        .container {
-            text-align: center;
-            padding: 2rem;
-        }
+        .container { max-width: 680px; margin: 0 auto; }
         h1 {
-            font-size: 3rem;
+            font-size: 2.6rem;
             background: linear-gradient(135deg, #00d4ff, #7b2ff7);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.3rem;
         }
-        .subtitle {
+        .subtitle { color: #888; font-size: 1rem; margin-bottom: 2rem; }
+
+        /* ── Cards ── */
+        .card {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: .08em; color: #555; margin-bottom: 0.9rem; }
+
+        /* ── Status row ── */
+        .status-row { display: flex; align-items: center; gap: 0.5rem; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: #444; flex-shrink: 0; }
+        .dot.ok { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+        .dot.err { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
+        .status-label { font-size: 0.95rem; color: #ccc; }
+        .stats-text { margin-left: auto; font-size: 0.8rem; color: #555; }
+
+        /* ── Provider toggle ── */
+        .provider-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+        .provider-row label { font-size: 0.85rem; color: #888; min-width: 70px; }
+        .toggle-group { display: flex; gap: 0; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); }
+        .toggle-btn {
+            padding: 0.45rem 1.1rem;
+            font-size: 0.85rem;
+            cursor: pointer;
+            border: none;
+            background: rgba(255,255,255,0.05);
             color: #888;
-            font-size: 1.1rem;
-            margin-bottom: 2rem;
+            transition: background 0.15s, color 0.15s;
+            white-space: nowrap;
         }
-        .status {
-            display: inline-block;
-            background: rgba(0, 212, 255, 0.1);
-            border: 1px solid rgba(0, 212, 255, 0.3);
-            border-radius: 12px;
-            padding: 1rem 2rem;
-            font-size: 0.9rem;
+        .toggle-btn:hover { background: rgba(255,255,255,0.1); color: #ccc; }
+        .toggle-btn.active-deepseek { background: #1a3a5c; color: #4fc3f7; font-weight: 600; }
+        .toggle-btn.active-gemini  { background: #1a3a2a; color: #69f0ae; font-weight: 600; }
+        .toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* ── Config fields ── */
+        .cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.5rem; }
+        .cfg-field label { display: block; font-size: 0.72rem; color: #555; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: .06em; }
+        .cfg-field input {
+            width: 100%; padding: 0.4rem 0.6rem;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px; color: #ccc; font-size: 0.88rem;
         }
-        .status span { color: #00d4ff; }
-        #stats { margin-top: 1rem; color: #666; }
+        .cfg-field input:focus { outline: none; border-color: rgba(0,212,255,0.4); }
+        .save-btn {
+            margin-top: 0.8rem; padding: 0.45rem 1.2rem;
+            background: rgba(0,212,255,0.12); border: 1px solid rgba(0,212,255,0.3);
+            border-radius: 7px; color: #00d4ff; font-size: 0.85rem; cursor: pointer;
+            transition: background 0.15s;
+        }
+        .save-btn:hover { background: rgba(0,212,255,0.22); }
+        .save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* ── Toast ── */
+        #toast {
+            position: fixed; bottom: 1.5rem; right: 1.5rem;
+            background: #1e1e2e; border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 10px; padding: 0.7rem 1.2rem;
+            font-size: 0.85rem; color: #ccc;
+            opacity: 0; transform: translateY(8px);
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none; max-width: 300px;
+        }
+        #toast.show { opacity: 1; transform: translateY(0); }
+        #toast.ok  { border-color: rgba(46,204,113,0.4); color: #2ecc71; }
+        #toast.err { border-color: rgba(231,76,60,0.4);  color: #e74c3c; }
+
+        .updated-by { font-size: 0.75rem; color: #444; margin-top: 0.6rem; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>GeoSpots</h1>
-        <p class="subtitle">Motor geoespacial semántico para vanlife</p>
-        <div class="status">
-            Estado: <span id="status">Conectando...</span>
-            <div id="stats"></div>
+<div class="container">
+    <h1>GeoSpots</h1>
+    <p class="subtitle">Motor geoespacial semántico para vanlife</p>
+
+    <div style="display:flex; gap:1rem; margin-bottom:1.5rem; font-size:0.9rem;">
+        <a href="spot.html" style="color:#00d4ff; text-decoration:none;">🧭 Ficha viajero</a>
+        <a href="admin.html" style="color:#888; text-decoration:none;">⚙ Admin scrapers</a>
+    </div>
+
+    <!-- Estado de la API -->
+    <div class="card">
+        <h2>Estado</h2>
+        <div class="status-row">
+            <div class="dot" id="dot"></div>
+            <span class="status-label" id="status">Conectando…</span>
+            <span class="stats-text" id="stats"></span>
         </div>
     </div>
-    <script>
-        fetch('/health', { headers: { 'X-API-Key': 'clave_secreta_inventada_por_ti_123' } })
-            .then(r => r.json())
-            .then(d => {
-                document.getElementById('status').textContent = d.status === 'ok' ? 'Online' : 'Error';
-                document.getElementById('stats').textContent = `${d.spots.toLocaleString()} spots activos · v${d.version}`;
-            })
-            .catch(() => {
-                document.getElementById('status').textContent = 'Offline';
+
+    <!-- Provider toggle -->
+    <div class="card">
+        <h2>Provider LLM</h2>
+        <div class="provider-row">
+            <label>Activo</label>
+            <div class="toggle-group">
+                <button class="toggle-btn" id="btn-deepseek" onclick="setProvider('deepseek')">DeepSeek</button>
+                <button class="toggle-btn" id="btn-gemini"   onclick="setProvider('gemini')">Gemini</button>
+            </div>
+            <span id="provider-updated" class="updated-by"></span>
+        </div>
+    </div>
+
+    <!-- Ajustes avanzados -->
+    <div class="card">
+        <h2>Ajustes de enrichment</h2>
+        <div class="cfg-grid">
+            <div class="cfg-field">
+                <label>Modelo override</label>
+                <input id="cfg-model" type="text" placeholder="(default del provider)">
+            </div>
+            <div class="cfg-field">
+                <label>Concurrencia</label>
+                <input id="cfg-concurrency" type="number" min="1" max="100" placeholder="8">
+            </div>
+            <div class="cfg-field">
+                <label>Max cost default (USD)</label>
+                <input id="cfg-maxcost" type="number" min="0.01" step="0.5" placeholder="2.0">
+            </div>
+        </div>
+        <button class="save-btn" id="save-btn" onclick="saveSettings()">Guardar ajustes</button>
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+    const API_KEY = localStorage.getItem('gs_api_key') || prompt('API Key (dejar vacío si no hay):') || '';
+    if (API_KEY) localStorage.setItem('gs_api_key', API_KEY);
+
+    const headers = { 'Content-Type': 'application/json', 'X-API-Key': API_KEY };
+
+    function toast(msg, type = 'ok') {
+        const el = document.getElementById('toast');
+        el.textContent = msg;
+        el.className = `show ${type}`;
+        clearTimeout(el._t);
+        el._t = setTimeout(() => el.className = '', 2800);
+    }
+
+    async function loadStatus() {
+        try {
+            const r = await fetch('/health', { headers });
+            const d = await r.json();
+            document.getElementById('dot').className = `dot ${d.status === 'ok' ? 'ok' : 'err'}`;
+            document.getElementById('status').textContent = d.status === 'ok' ? 'Online' : 'Error';
+            document.getElementById('stats').textContent =
+                `${(d.spots||0).toLocaleString()} spots · v${d.version||'?'}`;
+        } catch {
+            document.getElementById('dot').className = 'dot err';
+            document.getElementById('status').textContent = 'Offline';
+        }
+    }
+
+    async function loadConfig() {
+        try {
+            const r = await fetch('/admin/config', { headers });
+            if (!r.ok) return;
+            const cfg = await r.json();
+
+            const provider = cfg.enrichment_provider?.value || 'deepseek';
+            renderProviderToggle(provider);
+
+            const updAt = cfg.enrichment_provider?.updated_at
+                ? new Date(cfg.enrichment_provider.updated_at).toLocaleString('es', {dateStyle:'short', timeStyle:'short'})
+                : '';
+            const updBy = cfg.enrichment_provider?.updated_by || '';
+            document.getElementById('provider-updated').textContent =
+                updAt ? `Actualizado ${updAt} por ${updBy}` : '';
+
+            document.getElementById('cfg-model').value       = cfg.enrichment_model?.value || '';
+            document.getElementById('cfg-concurrency').value = cfg.enrichment_concurrency?.value || '';
+            document.getElementById('cfg-maxcost').value     = cfg.enrichment_max_cost_default?.value || '';
+        } catch (e) {
+            console.warn('No se pudo cargar config:', e);
+        }
+    }
+
+    function renderProviderToggle(active) {
+        const btnDS = document.getElementById('btn-deepseek');
+        const btnGM = document.getElementById('btn-gemini');
+        btnDS.className = `toggle-btn${active === 'deepseek' ? ' active-deepseek' : ''}`;
+        btnGM.className = `toggle-btn${active === 'gemini'   ? ' active-gemini'   : ''}`;
+    }
+
+    async function setProvider(p) {
+        document.getElementById('btn-deepseek').disabled = true;
+        document.getElementById('btn-gemini').disabled   = true;
+        try {
+            const r = await fetch(`/admin/config/enrichment_provider`, {
+                method: 'PUT', headers,
+                body: JSON.stringify({ value: p, updated_by: 'pwa' }),
             });
-    </script>
+            if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+            renderProviderToggle(p);
+            const now = new Date().toLocaleString('es', {dateStyle:'short', timeStyle:'short'});
+            document.getElementById('provider-updated').textContent = `Actualizado ${now} por pwa`;
+            toast(`Provider → ${p} ✓`);
+        } catch (e) {
+            toast(`Error: ${e.message}`, 'err');
+        } finally {
+            document.getElementById('btn-deepseek').disabled = false;
+            document.getElementById('btn-gemini').disabled   = false;
+        }
+    }
+
+    async function saveSettings() {
+        const btn = document.getElementById('save-btn');
+        btn.disabled = true;
+        const updates = [
+            { key: 'enrichment_model',           value: document.getElementById('cfg-model').value.trim() },
+            { key: 'enrichment_concurrency',      value: document.getElementById('cfg-concurrency').value.trim() },
+            { key: 'enrichment_max_cost_default', value: document.getElementById('cfg-maxcost').value.trim() },
+        ].filter(u => u.value !== '');
+
+        try {
+            await Promise.all(updates.map(u =>
+                fetch(`/admin/config/${u.key}`, {
+                    method: 'PUT', headers,
+                    body: JSON.stringify({ value: u.value, updated_by: 'pwa' }),
+                }).then(r => { if (!r.ok) throw new Error(`${u.key}: ${r.status}`); })
+            ));
+            toast('Ajustes guardados ✓');
+        } catch (e) {
+            toast(`Error: ${e.message}`, 'err');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    loadStatus();
+    loadConfig();
+</script>
 </body>
 </html>

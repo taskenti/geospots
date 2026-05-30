@@ -16,7 +16,7 @@
 | **campspace** | `campspace.com` | JSON REST | BBox estándar | Mensual | Activo | Europa |
 | **roadsurfer** | `roadsurfer.com` | JSON REST | BBox estándar | Mensual | Activo | Europa |
 | **vansite** | `vansite.fr` | JSON REST | BBox estándar | Mensual | Activo | Francia |
-| **caramaps** | `www.caramaps.com` | JSON REST | BBox estándar | Mensual | Activo | Francia/Europa |
+| **caramaps** | `admin.caramaps.com` (ElasticSearch + **/revisions/{uuid}** detalle) | JSON REST | BBox estándar + detalle por spot | Mensual | Activo **(reviews + detalle)** | Francia/Europa |
 | **stayfree** | `app.stayfree.eu` | JSON REST | BBox estándar | Mensual | Activo (requiere XSRF) |Europa |
 | **promobil** | `www.promobil.de` | JSON REST | BBox estándar | Mensual | Activo | DACH |
 | **camperstop** | `www.camperstop.com` | JSON REST | BBox estándar | Mensual | Activo | Europa |

@@ -332,7 +332,8 @@ class CamperContactSource(AbstractSource):
                                 async with conn.transaction():
                                     existente = await find_spot_cercano(
                                         conn, norm["lat"], norm["lon"],
-                                        self.dedup_radius_m
+                                        self.dedup_radius_m,
+                                        source=self.name, source_id=sid,
                                     )
 
                                     if existente:

@@ -65,6 +65,16 @@ CREDIBILITY = {
 
 CONFLICT_FIELDS = ["gratuito", "precio_info", "agua_potable", "electricidad", "num_plazas", "tipo"]
 
+# Campos de alto valor / dinámicos cuya procedencia persistimos en
+# spot_field_provenance (Sprint 0). Restringido a propósito para mantener
+# buena relación señal/ruido y una tabla manejable (~2-3M filas en spots
+# multifuente). Omitimos descripciones largas y atributos casi inmutables.
+PROVENANCE_FIELDS = {
+    "web", "telefono", "direccion_formateada", "tipo", "gratuito",
+    "precio_aprox", "agua_potable", "electricidad",
+    "vaciado_negras", "vaciado_grises",
+}
+
 DB_TO_NORM_KEY = {
     "canonical_name": "nombre",
     "master_rating": "rating_promedio",
@@ -119,36 +129,62 @@ def _vote_key(v) -> str:
     return str(v)
 
 
-def _reconciliar_campo(records: dict, campo: str, credibility: dict[str, float]):
-    """Devuelve (valor, fuente) reconciliado, o (KEEP_EXISTING, None) si empate.
+def _reconciliar_campo_full(records: dict, campo: str, credibility: dict[str, float]):
+    """Reconcilia un campo devolviendo valor + procedencia en una sola pasada.
+
+    Devuelve la tupla:
+        (valor, witness, supporting_sources, confidence, margin, conflict)
+
+      - valor: el valor reconciliado, o KEEP_EXISTING (empate técnico), o None.
+      - witness: fuente "representativa" del ganador (mejor ranked). None si
+        no hay ganador o si empate técnico.
+      - supporting_sources: todas las fuentes que respaldan el valor ganador.
+      - confidence: confianza del DATO.
+          · voto ponderado → cuota de peso del ganador (winner_w / total).
+          · rank-first      → base_score de la fuente ganadora.
+      - margin: margen de consenso (winner_w - second_w)/total. None en rank-first.
+      - conflict: hubo > 1 valor distinto entre las fuentes.
 
     Estrategia:
-      - Para campos en WEIGHTED_VOTE_FIELDS: voto ponderado por credibilidad.
-        Empate técnico (margen < TIE_MARGIN) → KEEP_EXISTING.
-      - Para los demás (descripciones, nombre, etc.): rank-first sobre la
-        lista CREDIBILITY (comportamiento histórico, que para texto es lo
-        que tiene sentido — no votamos prosa).
+      - Campos en WEIGHTED_VOTE_FIELDS → voto ponderado; empate (< TIE_MARGIN)
+        → KEEP_EXISTING (no se toca la columna).
+      - Resto (descripciones, nombre, contacto…) → rank-first sobre CREDIBILITY
+        (no se vota prosa ni teléfonos; gana la fuente más fiable que lo tenga).
     """
     norm_key = DB_TO_NORM_KEY.get(campo, campo)
 
-    # ── Texto / nombre / descripciones: rank-first (comportamiento histórico) ──
+    # ── Texto / nombre / contacto: rank-first ──
     if campo not in WEIGHTED_VOTE_FIELDS:
+        val_to_sources: dict[str, list[str]] = defaultdict(list)
+        for source, data in records.items():
+            v = data.get(norm_key)
+            if v is not None:
+                val_to_sources[_vote_key(v)].append(source)
+        conflict = len(val_to_sources) > 1
+
+        winner_val, winner_src = None, None
         for fuente in CREDIBILITY.get(campo, []):
-            data = records.get(fuente, {})
-            val = data.get(norm_key)
-            if val is not None:
-                return val, fuente
-        for fuente, data in records.items():
-            val = data.get(norm_key)
-            if val is not None:
-                return val, fuente
-        return None, None
+            v = records.get(fuente, {}).get(norm_key)
+            if v is not None:
+                winner_val, winner_src = v, fuente
+                break
+        if winner_val is None:  # fallback: cualquier fuente con el valor
+            for fuente, data in records.items():
+                v = data.get(norm_key)
+                if v is not None:
+                    winner_val, winner_src = v, fuente
+                    break
+        if winner_val is None:
+            return None, None, [], 0.0, None, False
+
+        supporting = val_to_sources.get(_vote_key(winner_val), [winner_src])
+        confidence = float(credibility.get(winner_src, 0.5))
+        return winner_val, winner_src, supporting, confidence, None, conflict
 
     # ── Voto ponderado ──
     votes: dict[str, float] = defaultdict(float)
-    # Por cada bucket de voto, guardamos un (source, original_value) representativo
-    # para poder devolver el tipo Python original.
     witnesses: dict[str, tuple[str, object]] = {}
+    sources_by_val: dict[str, list[str]] = defaultdict(list)
 
     rank = CREDIBILITY.get(campo, [])
     rank_pos = {src: i for i, src in enumerate(rank)}  # menor = más preferente
@@ -160,25 +196,34 @@ def _reconciliar_campo(records: dict, campo: str, credibility: dict[str, float])
         weight = credibility.get(source, 0.5)
         key = _vote_key(val)
         votes[key] += weight
-        # Witness: el primero por rank-position (más alto del ranking hardcoded)
+        sources_by_val[key].append(source)
         cur = witnesses.get(key)
         if cur is None or rank_pos.get(source, 1e9) < rank_pos.get(cur[0], 1e9):
             witnesses[key] = (source, val)
 
     if not votes:
-        return None, None
+        return None, None, [], 0.0, None, False
 
     total = sum(votes.values())
     sorted_votes = sorted(votes.items(), key=lambda kv: kv[1], reverse=True)
     winner_key, winner_w = sorted_votes[0]
     second_w = sorted_votes[1][1] if len(sorted_votes) > 1 else 0.0
     margin = (winner_w - second_w) / total if total > 0 else 1.0
+    confidence = winner_w / total if total > 0 else 1.0
+    conflict = len(sorted_votes) > 1
 
     if margin < TIE_MARGIN:
-        return KEEP_EXISTING, None
+        return KEEP_EXISTING, None, sources_by_val[winner_key], confidence, margin, conflict
 
     src, val = witnesses[winner_key]
-    return val, src
+    return val, src, sources_by_val[winner_key], confidence, margin, conflict
+
+
+def _reconciliar_campo(records: dict, campo: str, credibility: dict[str, float]):
+    """Compat: devuelve solo (valor, witness). Wrapper de _reconciliar_campo_full
+    para no romper llamantes/tests que esperan la tupla de 2 elementos."""
+    val, witness, *_ = _reconciliar_campo_full(records, campo, credibility)
+    return val, witness
 
 
 def _detectar_conflictos(records: dict) -> list[dict]:
@@ -324,6 +369,7 @@ async def job_reconciliar(pool) -> dict:
     stats = {
         "procesados": 0, "actualizados": 0, "conflictos_total": 0,
         "overrides_creados": 0, "empates_tecnicos": 0, "errores": 0,
+        "provenance_escritos": 0,
     }
 
     async with pool.acquire() as conn:
@@ -359,8 +405,10 @@ async def job_reconciliar(pool) -> dict:
                     records[r["source"]] = nd
 
                 updates = {}
+                provenance_rows = []
                 for campo in CREDIBILITY:
-                    val, _src = _reconciliar_campo(records, campo, credibility)
+                    val, _witness, supporting, confidence, margin, conflict = \
+                        _reconciliar_campo_full(records, campo, credibility)
                     if val is KEEP_EXISTING:
                         stats["empates_tecnicos"] += 1
                         continue
@@ -373,6 +421,12 @@ async def job_reconciliar(pool) -> dict:
                         if val is None:
                             continue
                     updates[campo] = val
+                    if campo in PROVENANCE_FIELDS:
+                        provenance_rows.append((
+                            spot_id, campo, str(val)[:500], float(confidence),
+                            (float(margin) if margin is not None else None),
+                            list(supporting or []), bool(conflict),
+                        ))
 
                 conflictos = _detectar_conflictos(records)
 
@@ -396,6 +450,25 @@ async def job_reconciliar(pool) -> dict:
                     await conn.execute(query, *vals)
                     stats["actualizados"] += 1
                     stats["conflictos_total"] += len(conflictos)
+
+                # Persistir procedencia/confianza por campo (Sprint 0).
+                # La metadata ya está calculada arriba; aquí solo se escribe.
+                if provenance_rows:
+                    await conn.executemany("""
+                        INSERT INTO spot_field_provenance
+                          (spot_id, field, winning_value, confidence,
+                           consensus_margin, supporting_sources,
+                           conflict_detected, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                        ON CONFLICT (spot_id, field) DO UPDATE SET
+                          winning_value      = EXCLUDED.winning_value,
+                          confidence         = EXCLUDED.confidence,
+                          consensus_margin   = EXCLUDED.consensus_margin,
+                          supporting_sources = EXCLUDED.supporting_sources,
+                          conflict_detected  = EXCLUDED.conflict_detected,
+                          updated_at         = NOW()
+                    """, provenance_rows)
+                    stats["provenance_escritos"] += len(provenance_rows)
 
                 # Overrides temporales (paso PR11)
                 stats["overrides_creados"] += await compute_temporal_overrides(conn, spot_id)

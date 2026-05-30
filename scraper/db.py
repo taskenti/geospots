@@ -27,7 +27,42 @@ async def create_pool(config: Config) -> asyncpg.Pool:
 # ═══════════════════════════════════════════════════════════════
 
 async def find_spot_cercano(conn: asyncpg.Connection, lat: float, lon: float,
-                             radio_metros: float = 100, nombre: str = None, tipo: str = None) -> dict | None:
+                             radio_metros: float = 100, nombre: str = None, tipo: str = None,
+                             source: str = None, source_id: str = None,
+                             osm_id: str = None, place_id: str = None) -> dict | None:
+    # ── Dedup STICKY (estabilidad de dedup) ─────────────────────────────────
+    # Si ya conocemos este (source, source_id), devolvemos su spot ACTUAL sin
+    # re-evaluar geográficamente. Sin esto, cada re-scrape vuelve a correr el
+    # match por distancia: si las coords se mueven unos metros o aparece un spot
+    # más cercano, el source_record MIGRA a otro spot y deja el original como
+    # duplicado con sus reviews huérfanas (medido: ~310K reviews huérfanas, p4n
+    # 267K). La estabilidad prima sobre re-emparejar: el dedup geográfico solo
+    # debe decidir para source_ids NUEVOS.
+    if source and source_id:
+        sticky = await conn.fetchrow("""
+            SELECT s.id, s.canonical_name, s.tipo, s.fuentes
+            FROM source_records sr
+            JOIN spots s ON s.id = sr.spot_id
+            WHERE sr.source = $1 AND sr.source_id = $2 AND s.activo = TRUE
+        """, source, str(source_id))
+        if sticky:
+            return dict(sticky)
+
+    # ── Ancla de identidad EXACTA (Sprint 2) ────────────────────────────────
+    # osm_id / google_place_id son únicos por entidad física. Si un spot activo
+    # ya los tiene, es la misma entidad → match seguro, sin depender de distancia.
+    # (telefono/web NO se anclan aquí: un valor compartido por una cadena daría
+    #  falsos merges; quedan como señal de auditoría manual.)
+    for col, val in (("osm_id", osm_id), ("google_place_id", place_id)):
+        if val:
+            anchor = await conn.fetchrow(
+                f"SELECT id, canonical_name, tipo, fuentes FROM spots "
+                f"WHERE {col} = $1 AND activo = TRUE LIMIT 1",
+                str(val),
+            )
+            if anchor:
+                return dict(anchor)
+
     # Buscar candidatos ordenados por distancia
     rows = await conn.fetch("""
         SELECT id, canonical_name, tipo, fuentes,
@@ -86,22 +121,89 @@ async def find_spot_cercano(conn: asyncpg.Connection, lat: float, lon: float,
     return None
 
 
+# Dominios de agregadores: NO son la web oficial de un spot (son listados en una
+# plataforma). Se usan tanto para limpiar `web` como para `web_domain`.
+EXCLUDED_DOMAINS = [
+    "campercontact.com", "park4night.com", "caramaps.com", "stayfree.app",
+    "campspace.com", "vansite.eu", "searchforsites.co.uk", "alpacacamping.de",
+    "welcometomygarden.org", "campingcar-infos.com", "freecampsites.net",
+    "campernight.com", "bobilguiden.no", "camperstop.com", "campingcarpark.com",
+    "agricamper.it", "roadsurfer.com", "campy.app", "campy.nl", "agricamper.com",
+    "thedyrt.com",
+    # Añadidos tras auditoría dedup (2026-05-30): agregadores/fuentes que estaban
+    # filtrándose como web_domain (campendium 32K spots, womostell 21K, etc.).
+    "campendium.com", "womo-stellplatz.eu", "furgovw.org", "nomady.camp",
+    "aireparkreservation.com",
+]
+
+# Dominios que SÍ pueden ser la web válida de un spot (no se quitan de _limpiar_web)
+# pero NO sirven como CLAVE DE IDENTIDAD: plataformas genéricas que agruparían
+# miles de spots no relacionados. Solo los usa extract_domain (web_domain).
+NON_IDENTITY_DOMAINS = [
+    "facebook.com", "instagram.com", "sites.google.com", "linktr.ee",
+    "wixsite.com", "google.com/maps", "goo.gl", "maps.app.goo.gl",
+    # Organismos / cadenas multi-sitio: web legítima pero NO identifican un único
+    # spot (gestionan cientos/miles). Detectados en la auditoría dedup.
+    "fs.usda.gov", "blm.gov", "recreation.gov", "nps.gov", "bcparks.ca",
+    "caravanclub.co.uk", "campingandcaravanningclub.co.uk", "koa.com",
+    "trafikverket.se",
+]
+
+
 def _limpiar_web(web: str | None) -> str | None:
     if not web:
         return None
     web_lower = web.lower()
-    EXCLUDED_DOMAINS = [
-        "campercontact.com", "park4night.com", "caramaps.com", "stayfree.app",
-        "campspace.com", "vansite.eu", "searchforsites.co.uk", "alpacacamping.de",
-        "welcometomygarden.org", "campingcar-infos.com", "freecampsites.net",
-        "campernight.com", "bobilguiden.no", "camperstop.com", "campingcarpark.com",
-        "agricamper.it", "roadsurfer.com", "campy.app", "campy.nl", "agricamper.com",
-        "thedyrt.com"
-    ]
     for domain in EXCLUDED_DOMAINS:
         if domain in web_lower:
             return None
     return web
+
+
+def normalize_phone(raw: str | None) -> str | None:
+    """Normaliza un teléfono a una clave comparable entre fuentes.
+
+    Conserva solo dígitos y el prefijo internacional ('00' inicial → '+').
+    Devuelve None si no quedan al menos 6 dígitos. NO valida país: es una clave
+    de agrupación para auditoría de duplicados, no E.164 estricto.
+    """
+    if not raw:
+        return None
+    s = str(raw).strip()
+    plus = s.startswith("+") or s.startswith("00")
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if s.startswith("00"):
+        digits = digits[2:]
+    if len(digits) < 6:
+        return None
+    return ("+" if plus else "") + digits
+
+
+def extract_domain(url: str | None) -> str | None:
+    """Extrae el dominio raíz de una URL como clave de identidad.
+
+    Quita esquema, 'www.', path y querystring. Devuelve None para dominios de
+    agregador (park4night.com, etc.): agruparían spots NO relacionados.
+    """
+    if not url:
+        return None
+    s = str(url).strip().lower()
+    s = s.split("://", 1)[-1]
+    s = s.split("/", 1)[0]
+    s = s.split("?", 1)[0].split("#", 1)[0]
+    if s.startswith("www."):
+        s = s[4:]
+    s = s.strip(".")
+    if not s or "." not in s:
+        return None
+    for domain in EXCLUDED_DOMAINS:
+        if domain in s:
+            return None
+    # Plataformas genéricas: válidas como web pero inútiles como clave de identidad.
+    for domain in NON_IDENTITY_DOMAINS:
+        if domain in s:
+            return None
+    return s
 
 
 async def crear_spot(conn: asyncpg.Connection, data: dict) -> int:

@@ -201,6 +201,48 @@ async def run_pending_jobs():
         job_id, source_key, job_type = job["id"], job["source"], job["job_type"]
         logger.info(f"[queue] Ejecutando job {job_id}: {source_key} ({job_type})")
 
+        # Job de mantenimiento especial: reconciliación multi-fuente.
+        # No es una "fuente" del registro SOURCES; lo ejecutamos aparte para
+        # que el panel admin pueda lanzarlo con un botón como el resto.
+        if source_key == "reconciliar":
+            try:
+                from reconciliar import job_reconciliar
+                stats = await job_reconciliar(pool)
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE scraper_jobs SET status='done', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                        json.dumps(stats or {}, default=str), job_id,
+                    )
+                logger.info(f"[queue] Job {job_id} (reconciliar) completado: {stats}")
+            except Exception as e:
+                logger.error(f"[queue] Job {job_id} (reconciliar) falló: {e}")
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE scraper_jobs SET status='error', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                        json.dumps({"error": str(e)}), job_id,
+                    )
+            return
+
+        # Job de mantenimiento especial: contexto geoespacial OSM (Sprint 3).
+        if source_key == "geo_osm":
+            try:
+                from geo_context import run_geo_osm
+                stats = await run_geo_osm(pool, job_id=job_id)
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE scraper_jobs SET status='done', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                        json.dumps(stats or {}, default=str), job_id,
+                    )
+                logger.info(f"[queue] Job {job_id} (geo_osm) completado: {stats}")
+            except Exception as e:
+                logger.error(f"[queue] Job {job_id} (geo_osm) falló: {e}")
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE scraper_jobs SET status='error', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                        json.dumps({"error": str(e)}), job_id,
+                    )
+            return
+
         if source_key not in SOURCES:
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -282,6 +324,13 @@ async def main():
                 from reconciliar import job_reconciliar
                 stats = await job_reconciliar(pool)
                 logger.info(f"Reconciliación completada: {stats}")
+                return
+
+            if source_key == "geo_osm":
+                logger.info("Modo: contexto geoespacial OSM (piloto)")
+                from geo_context import run_geo_osm
+                stats = await run_geo_osm(pool)
+                logger.info(f"geo_osm completado: {stats}")
                 return
 
             if source_key == "run-pending":

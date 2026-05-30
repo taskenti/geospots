@@ -80,7 +80,10 @@ class AlpacaCampingSource(AbstractSource):
             elif any(i in am_ids for i in [41, 315, 229, 231]):
                 perros = True
 
-            acceso_grandes = (26 in am_ids)
+            # Solo afirmamos False si HAY lista de amenities y no incluye el flag 26
+            # (vehículos grandes). Sin lista de amenities → desconocido (None), nunca False:
+            # "no etiquetado" no es "no apto". Ver docs/auditoria-compatibilidad-vehiculos.md §4.
+            acceso_grandes = (26 in am_ids) if am_ids else None
 
             # Photos
             photos = []
@@ -262,41 +265,55 @@ class AlpacaCampingSource(AbstractSource):
                 "fecha": fecha
             })
             
-        # 2. Iterate over DOM visual reviews to extract author names
+        # 2. Recolectar bloques visuales del DOM (autor + texto renderizado).
+        #    El DOM SOLO aporta el nombre del autor (no está en el dump PHP) y un
+        #    texto mejor decodificado. NO es la fuente autoritativa de reviews.
+        dom_blocks = []
         blocks = soup.find_all("div", class_=lambda x: x and "rounded-xl" in x and "border-gray-200" in x)
         for b in blocks:
             p = b.find("p", class_=lambda x: x and "text-gray-800" in x)
             if not p:
                 continue
-            
             text_elements = [t.strip() for t in b.find_all(string=True) if t.strip()]
+            author = text_elements[0] if text_elements else "Usuario AlpacaCamping"
+            dom_blocks.append({"author": author, "p_text": p.text.strip()})
+
+        # 3. Emitir TODAS las reviews desde los dumps PHP (autoritativos: id,
+        #    rating, fecha y mensaje). Se adjunta el autor del DOM si hay match
+        #    difuso de texto; si no, se usa un autor genérico, pero la review NO
+        #    se descarta (bug histórico: el parseo DOM-driven perdía ~1/8 reviews
+        #    cuando el match fallaba — ~7.5K reviews perdidas en el dataset).
+        used_dom = set()
+        for d in parsed_dumps:
+            d_clean = re.sub(r'[^a-zA-Z]', '', d["texto"] or "")
             author = "Usuario AlpacaCamping"
-            if text_elements:
-                author = text_elements[0]
-                
-            p_text = p.text.strip()
-            
-            matched_dump = None
-            for d in parsed_dumps:
-                # Compare cleaned text subsets to align author with pre dump
-                d_text_clean = re.sub(r'[^a-zA-Z]', '', d["texto"] or "")
-                p_text_clean = re.sub(r'[^a-zA-Z]', '', p_text)
-                if d_text_clean and p_text_clean[:30] in d_text_clean:
-                    matched_dump = d
+            texto = d["texto"]  # fallback: mensaje del propio dump
+            for i, blk in enumerate(dom_blocks):
+                if i in used_dom:
+                    continue
+                p_clean = re.sub(r'[^a-zA-Z]', '', blk["p_text"])
+                # Match bidireccional: el texto del DOM suele estar truncado o
+                # el del dump puede tener escapes — comparar ambos prefijos.
+                if d_clean and p_clean and (p_clean[:30] in d_clean or d_clean[:30] in p_clean):
+                    author = blk["author"]
+                    texto = blk["p_text"]  # mejor decodificado que el dump crudo
+                    used_dom.add(i)
                     break
-                    
-            if matched_dump:
-                reviews_list.append({
-                    "spot_id": spot_id,
-                    "source": self.name,
-                    "source_review_id": str(matched_dump["id"]),
-                    "texto": p_text,
-                    "rating": float(matched_dump["rating"]) if matched_dump["rating"] is not None else None,
-                    "autor": author,
-                    "fecha": matched_dump["fecha"],
-                    "idioma": "de"
-                })
-                
+
+            if not texto:
+                continue  # sin texto ni en dump ni en DOM: nada que guardar
+
+            reviews_list.append({
+                "spot_id": spot_id,
+                "source": self.name,
+                "source_review_id": str(d["id"]),
+                "texto": texto,
+                "rating": float(d["rating"]) if d["rating"] is not None else None,
+                "autor": author,
+                "fecha": d["fecha"],
+                "idioma": "de"
+            })
+
         return reviews_list
 
     async def download_reviews(self, pool, config, job_id: int = None) -> dict:
@@ -324,7 +341,16 @@ class AlpacaCampingSource(AbstractSource):
                   AND sr.review_count > 0
                   AND (
                     (sr.normalized_data->>'reviews_fetched') IS NULL
-                    OR COALESCE(r.cnt, 0) < sr.review_count
+                    -- Re-fetch solo si tenemos MENOS de lo que la página estática
+                    -- llega a renderizar (~10 reviews recientes). El resto vive tras
+                    -- paginación Livewire que no scrapeamos. Usar review_count (total
+                    -- real, a menudo 100+) provocaría un re-fetch infinito de spots
+                    -- que nunca podremos "completar". reviews_on_page se fija tras el
+                    -- primer fetch; si aún es NULL, LEAST cae a review_count y procesa.
+                    OR COALESCE(r.cnt, 0) < LEAST(
+                        sr.review_count,
+                        COALESCE((sr.normalized_data->>'reviews_on_page')::int, sr.review_count)
+                    )
                   )
                 ORDER BY sr.review_count DESC;
             """)
@@ -352,11 +378,12 @@ class AlpacaCampingSource(AbstractSource):
                     await asyncio.sleep(self.rate_limit)
                     resp = await client.get(url, timeout=20)
                     if resp.status_code == 404:
-                        # Skip if not found
+                        # Spot borrado: marcar fetched con 0 en página para no reintentar.
                         async with pool.acquire() as conn:
                             await conn.execute("""
                                 UPDATE source_records
-                                SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb
+                                SET normalized_data = normalized_data
+                                    || '{"reviews_fetched": true, "reviews_on_page": 0}'::jsonb
                                 WHERE source = 'alpacacamping' AND source_id = $1
                             """, sid)
                         job_queue.task_done()
@@ -372,13 +399,18 @@ class AlpacaCampingSource(AbstractSource):
                                 for rev in parsed_reviews:
                                     await upsert_review(conn, rev)
                                     inserted += 1
-                                    
+
+                    # reviews_on_page = cuántas reviews ofrece realmente la página
+                    # estática. Marca el "techo" alcanzable y evita el re-fetch
+                    # eterno de spots con review_count >> lo renderizado.
                     async with pool.acquire() as conn:
                         await conn.execute("""
                             UPDATE source_records
-                            SET normalized_data = normalized_data || '{"reviews_fetched": true}'::jsonb
+                            SET normalized_data = normalized_data
+                                || jsonb_build_object('reviews_fetched', true,
+                                                      'reviews_on_page', $2::int)
                             WHERE source = 'alpacacamping' AND source_id = $1
-                        """, sid)
+                        """, sid, len(parsed_reviews))
                         if inserted > 0:
                             await conn.execute("""
                                 UPDATE spots SET total_reviews = (

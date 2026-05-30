@@ -204,7 +204,8 @@ class GoogleMapsAPISource(AbstractSource):
             "nuevos": 0, "actualizados": 0, "reviews_nuevas": 0,
             "errores": 0, "iniciado_en": inicio,
             "detalle": {"sin_match": 0, "cerrados": 0,
-                        "search_calls": 0, "details_calls": 0, "budget": 0},
+                        "search_calls": 0, "details_calls": 0, "budget": 0,
+                        "conflictos_procesados": 0, "colisiones_place_id": 0},
         }
 
         if not self.api_key:
@@ -216,24 +217,37 @@ class GoogleMapsAPISource(AbstractSource):
                 await finish_scraper_log(conn, log_id, stats)
             return stats
 
-        # 1. Cola de candidatos priorizada (camping/area_ac sin contacto y
-        #    no intentados o ya stale por TTL).
+        # 1. Cola de candidatos priorizada. Incluye dos casos:
+        #    (a) contacto incompleto (telefono o web NULL), y
+        #    (b) CONFLICTO ACTIVO en telefono/web (Sprint 1): aunque el dato
+        #        exista, varias fuentes discrepan → Google desempata.
+        #    Los conflictos van primero (has_conflict DESC). Defensivo: si la
+        #    tabla spot_field_provenance aún no existe, cae al caso (a) solo.
         async with pool.acquire() as conn:
+            has_prov = await conn.fetchval("SELECT to_regclass('spot_field_provenance')")
+            conflict_expr = (
+                "EXISTS (SELECT 1 FROM spot_field_provenance p "
+                "WHERE p.spot_id = s.id AND p.conflict_detected "
+                "AND p.field IN ('telefono','web'))"
+            ) if has_prov else "FALSE"
+
             candidatos = await conn.fetch(f"""
-                SELECT id, canonical_name, lat, lon, tipo, country_iso
-                FROM spots
-                WHERE activo = TRUE
-                  AND lat IS NOT NULL AND lon IS NOT NULL
-                  AND tipo IN ('camping', 'area_ac')
-                  AND google_place_id IS NULL
-                  AND (telefono IS NULL OR web IS NULL)
-                  AND (google_last_refreshed IS NULL
-                       OR google_last_refreshed < NOW() - ($1 || ' days')::interval)
+                SELECT s.id, s.canonical_name, s.lat, s.lon, s.tipo, s.country_iso,
+                       {conflict_expr} AS has_conflict
+                FROM spots s
+                WHERE s.activo = TRUE
+                  AND s.lat IS NOT NULL AND s.lon IS NOT NULL
+                  AND s.tipo IN ('camping', 'area_ac')
+                  AND s.google_place_id IS NULL
+                  AND (s.google_last_refreshed IS NULL
+                       OR s.google_last_refreshed < NOW() - ($1 || ' days')::interval)
+                  AND (s.telefono IS NULL OR s.web IS NULL OR {conflict_expr})
                 ORDER BY
-                  {_COUNTRY_PRIORITY_SQL}
-                  CASE tipo WHEN 'camping' THEN 1 WHEN 'area_ac' THEN 2 ELSE 99 END,
-                  COALESCE(total_reviews, 0) DESC,
-                  id
+                  has_conflict DESC,
+                  {_COUNTRY_PRIORITY_SQL.replace('country_iso', 's.country_iso')}
+                  CASE s.tipo WHEN 'camping' THEN 1 WHEN 'area_ac' THEN 2 ELSE 99 END,
+                  COALESCE(s.total_reviews, 0) DESC,
+                  s.id
                 LIMIT $2
             """, str(self.refresh_days), self.daily_budget)
 
@@ -256,6 +270,9 @@ class GoogleMapsAPISource(AbstractSource):
                 orig_name = spot["canonical_name"]
                 orig_lat = float(spot["lat"])
                 orig_lon = float(spot["lon"])
+
+                if spot["has_conflict"]:
+                    stats["detalle"]["conflictos_procesados"] += 1
 
                 try:
                     await asyncio.sleep(self.rate_limit)
@@ -293,6 +310,30 @@ class GoogleMapsAPISource(AbstractSource):
 
                     async with pool.acquire() as conn:
                         async with conn.transaction():
+                            # Ancla de identidad: si OTRO spot ya tiene este
+                            # place_id, es señal fuerte de duplicado. Lo
+                            # registramos como candidato a merge (NO auto-merge).
+                            colision = await conn.fetchval(
+                                "SELECT id FROM spots WHERE google_place_id = $1 "
+                                "AND id <> $2 LIMIT 1",
+                                pid, spot_id,
+                            )
+                            if colision:
+                                stats["detalle"]["colisiones_place_id"] += 1
+                                await conn.execute(
+                                    """
+                                    INSERT INTO dedup_log
+                                      (action, spot_id, source_a, source_id_a,
+                                       source_b, source_id_b, reason, manual_review)
+                                    VALUES ('place_id_collision', $1,
+                                            'google_maps_api', $2,
+                                            'spot_collision', $3, $4, TRUE)
+                                    """,
+                                    spot_id, pid, str(colision),
+                                    f"Mismo google_place_id {pid} que spot {colision} "
+                                    f"→ candidato a merge",
+                                )
+
                             # Enriquecer (COALESCE: nunca pisa lo que ya hay)
                             await enriquecer_spot(conn, spot_id, norm, self.name)
                             # Source record anclado al place_id (idempotente)

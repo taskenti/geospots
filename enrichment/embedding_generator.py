@@ -521,11 +521,13 @@ async def buscar_spots(
             sss.police_risk_score, sss.stealth_score, sss.crowd_level_score,
             sss.overnight_safe, sss.semantic_dsl,
             sss.summary_es, sss.tags, sss.best_for,
+            sg.nearby_osm, sg.nearby_spots,
             1 - (se.embedding <=> $1::vector) AS similarity,
             ST_Distance(s.geog, ST_SetSRID(ST_MakePoint($3, $2), 4326)::geography) / 1000 AS dist_km
         FROM spots s
         JOIN spot_embeddings se ON se.spot_id = s.id
         JOIN spot_semantic_state sss ON sss.spot_id = s.id
+        LEFT JOIN spot_geo sg ON sg.spot_id = s.id
         WHERE {where_clause}
         ORDER BY similarity DESC
         LIMIT ${idx}
@@ -535,21 +537,61 @@ async def buscar_spots(
     return [dict(r) for r in rows], intent
 
 
+# Etiquetas ES para las categorías de proximidad (osm + spots).
+_NEARBY_LABELS = {
+    "drinking_water": "agua", "dump_station": "vaciado", "supermarket": "super",
+    "fuel": "gasolinera", "pharmacy": "farmacia", "viewpoint": "mirador",
+    "bakery": "panaderia", "laundry": "lavanderia", "restaurant": "restaurante",
+    "ev_charging": "recarga EV", "beach": "playa",
+    "area_ac": "area AC", "camping": "camping", "spot_vaciado": "spot con vaciado",
+}
+
+
+def _fmt_km(v) -> str:
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return ""
+    return f"{int(v*1000)}m" if v < 1 else f"{v:.1f}km"
+
+
+def _entorno_str(s: dict) -> str:
+    """Contexto de proximidad legible para el prompt (Canal C). Combina nearby_osm
+    (1a) y nearby_spots (1b). Distancia en LÍNEA RECTA por ahora; pendiente
+    carretera donde aplique (ver docs/diseno-distancias-y-contexto.md)."""
+    parts: list[str] = []
+    for blob in (s.get("nearby_osm"), s.get("nearby_spots")):
+        d = _json_object(blob)
+        for cat, km in d.items():
+            label = _NEARBY_LABELS.get(cat, cat)
+            dist = _fmt_km(km)
+            if dist:
+                parts.append(f"{label} {dist}")
+    return "; ".join(parts)
+
+
 async def generar_respuesta_busqueda(query: str, spots: list[dict]) -> str:
     if not spots:
         return ""
     from .llm_provider import call_llm_sync
-    contexto = "\n".join(
-        (
+
+    def _line(i: int, s: dict) -> str:
+        base = (
             f"#{i + 1} {s['canonical_name']} ({s['tipo']}, {float(s['dist_km']):.1f}km, "
             f"sim={float(s['similarity']):.2f}): {s.get('semantic_dsl') or 'N/A'}"
         )
-        for i, s in enumerate(spots[:10])
-    )
+        entorno = _entorno_str(s)
+        if entorno:
+            base += f" | entorno: {entorno}"
+        return base
+
+    contexto = "\n".join(_line(i, s) for i, s in enumerate(spots[:10]))
     prompt = (
         f'El usuario busca: "{query}"\n\n'
-        f"Top spots encontrados (DSL semantico):\n{contexto}\n\n"
-        "Recomienda los mejores. Se conciso y directo. Usa el nombre del spot y la distancia."
+        f"Top spots encontrados (DSL semantico + entorno cercano):\n{contexto}\n\n"
+        "Recomienda los mejores. Se conciso y directo. Usa el nombre del spot y la "
+        "distancia. Si el usuario pide servicios cercanos (agua, super, vaciado, etc.) "
+        "y aparecen en 'entorno', mencionalos con su distancia."
     )
     resp = await asyncio.to_thread(
         call_llm_sync, prompt, system_prompt="", response_format="text",

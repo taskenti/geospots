@@ -278,7 +278,8 @@ class WomoStellplatzSource(AbstractSource):
                                     conn, norm["lat"], norm["lon"],
                                     self.dedup_radius_m,
                                     nombre=norm.get("nombre"),
-                                    tipo=norm.get("tipo")
+                                    tipo=norm.get("tipo"),
+                                    source=self.name, source_id=sid,
                                 )
                                 if existente:
                                     spot_id = existente["id"]
