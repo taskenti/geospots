@@ -178,7 +178,9 @@ async def run_geo_osm(pool, job_id: int = None) -> dict:
             except Exception as e:
                 stats["errores"] += 1
                 consecutive_errors += 1
-                logger.warning(f"[geo_osm] error spot {spot_id}: {e}")
+                # repr() para ver el tipo real (ReadTimeout/ConnectError suelen
+                # tener str vacío). Overpass público es la causa habitual.
+                logger.warning(f"[geo_osm] error spot {spot_id}: {e!r}")
 
             if consecutive_errors >= 10:
                 logger.error("[geo_osm] 10 errores seguidos — abortando (Overpass caído/ban).")
