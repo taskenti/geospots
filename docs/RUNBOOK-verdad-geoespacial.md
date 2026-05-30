@@ -30,6 +30,24 @@
 - ⏸ **Sprint 1 (Google) NO validado**: `.env` sin `GOOGLE_MAPS_API_KEY`. Endpoints
   responden (presupuesto a $0). Pendiente de configurar clave + billing.
 
+### Búsqueda semántica — Canales C/B/A (código listo)
+- ✅ **Canal C**: la respuesta LLM menciona el entorno cercano.
+- ✅ **Canal B**: 13 filtros `max_dist_*_km` (intent LLM + SQL sobre nearby_osm/nearby_spots).
+- ✅ **Canal A (código)**: contexto geo en el texto del embedding; modelo corregido a
+  `gemini-embedding-001` (text-embedding-004 fue RETIRADO → 404) con
+  output_dimensionality=768 + task_type. `nightly_embeddings --country --loop`.
+- ⛔ **BLOQUEADO**: generar embeddings da `429 RESOURCE_EXHAUSTED` — el proyecto
+  Gemini tiene el **spend cap mensual agotado**. Acciones:
+  1. Subir el cap en https://ai.studio/spend (coste: ES ~$0.14, ~50K spots ~$1.2).
+  2. `docker compose exec enrichment python -m jobs.nightly_embeddings --country es --loop`
+  3. Luego el resto sin `--country` (FR/DE/… sin geo, solo semántico — degradación OK).
+  Hasta generar embeddings, `/search/semantic` devuelve vacío (JOIN spot_embeddings).
+- ⚠ **Colisión con sesión paralela**: el refactor (sin commitear) de `reconciliar.py`
+  (`_canon_value`) convirtió `telefono` en campo de voto ponderado → el test
+  `test_full_rankfirst_confidence_is_base_score_margin_none` (mío, Sprint 0) falla
+  porque asumía rank-first. Decidir diseño (telefono voto vs rank-first) y ajustar
+  el test. NO tocado para no interferir con el WIP paralelo.
+
 ### ✅ Sprint 4 — PBF local (RESUELTO; sustituye a Overpass para bulk)
 
 **España al 100% — 52.072 spots con contexto OSM en 4 min (0 errores), modo local.**
