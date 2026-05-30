@@ -49,3 +49,34 @@ Se ha implementado el descargador desacoplado `download_reviews` en `searchforsi
 - **Carga Dinámica de Países**: Eliminada la lista estática fija. Ahora se realiza una consulta `SELECT DISTINCT UPPER(iso_a2)` sobre la tabla `countries` para barrer todo el planeta, manteniendo la lista estática como fallback.
 - **Pipeline de Reviews**: Añadido soporte para descarga concurrente de valoraciones usando `fetch_and_save_reviews()`.
 
+## 🐛 Fix de paginación de reviews (2026-05-30)
+
+**Síntoma:** el panel mostraba reviews "al 306%" (44K reviews reales vs ~15K
+esperadas según `SUM(review_count)`).
+
+**Causa raíz:** `getReviews.php` devuelve solo **10 reviews** por defecto y
+`fetch_and_save_reviews` **no paginaba**. Los spots con `rvwCnt` alto (hasta
+303) perdían el ~97% de sus reviews. Las 44K en DB se acumularon a lo largo de
+múltiples runs (cada vez los 10 más recientes) + agregación por dedup
+multi-marker, de ahí el desajuste contra el total esperado. **`rvwCnt` SÍ es el
+total real** — no subcontaba; era el fetch el que truncaba.
+
+**Fix:** `getReviews.php` acepta `limit` y `offset` (semántica `LIMIT/OFFSET`
+SQL; verificado que `offset=0` y `offset=100` no solapan). `fetch_and_save_reviews`
+ahora pagina en lotes de 200 (`REVIEWS_PAGE_SIZE`) hasta agotar. Verificado en
+vivo: un spot pasó de 11 a 140 reviews; un marker de `rvwCnt=303` devuelve 302
+(1-2 borradas/ocultas).
+
+**Completitud con tolerancia:** el criterio de re-fetch en `download_reviews`
+es `db_cnt < review_count * 0.9`. Sin la tolerancia del 10%, los spots donde
+`getReviews` devuelve 1-2 menos que `rvwCnt` (o multi-marker que no suma exacto)
+se re-fetchearían en cada run para siempre. El truncamiento real (10 de 303)
+cae muy por debajo del 90% y sí se reintenta correctamente.
+
+**Pendiente (no crítico):** ~3.6K reviews quedaron en 443 spots que ya no tienen
+un `source_record` de searchforsites (deriva referencial: markers que en runs
+posteriores dedujeron a un spot vecino distinto, dejando reviews "huérfanas" en
+el spot_id antiguo). No es pérdida de datos —son reviews reales en spots
+reales— y afecta potencialmente a todas las fuentes; queda para una revisión
+transversal de estabilidad de dedup.
+
