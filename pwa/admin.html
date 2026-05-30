@@ -598,6 +598,17 @@
     </div>
 </div>
 
+<!-- Sprint 2: Entity resolution — candidatos a duplicado por ancla compartida -->
+<div class="jobs-panel" id="dedup-panel" style="margin-bottom:1rem">
+    <div class="jobs-panel-header">
+        <div class="jobs-panel-title">🧩 Entity resolution (auditoría)</div>
+        <span class="dim" style="font-size:0.72rem">candidatos a duplicado · revisión manual, sin auto-merge</span>
+    </div>
+    <div id="dedup-body" style="padding:0.6rem 1rem; display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-start; font-size:0.82rem;">
+        <span class="dim">Cargando auditoría…</span>
+    </div>
+</div>
+
 <div class="table-wrap" id="main-wrap">
     <div class="loading"><span class="spinner"></span> Cargando fuentes…</div>
 </div>
@@ -959,6 +970,31 @@ async function loadGooglePanel() {
     }
 }
 
+// ── Sprint 2: panel de auditoría de entity resolution ──
+async function loadDedupPanel() {
+    const body = document.getElementById('dedup-body');
+    try {
+        const a = await H.get('/admin/dedup/audit?limit=10');
+        const cell = (titulo, cat, color) => `
+            <div>
+                <div class="dim" style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.06em">${titulo}</div>
+                <div style="font-size:1.3rem;color:${cat.grupos?color:'#4ade80'}">${cat.grupos||0}</div>
+                <div class="dim" style="font-size:0.72rem">${cat.spots||0} spots en ${cat.grupos||0} grupos</div>
+            </div>`;
+        body.innerHTML =
+            cell('Mismo teléfono', a.telefono_norm, '#f1c40f') +
+            cell('Mismo dominio web', a.web_domain, '#f1c40f') +
+            cell('Mismo place_id', a.google_place_id, '#ef4444') +
+            `<div>
+                <div class="dim" style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.06em">Colisiones place_id (log)</div>
+                <div style="font-size:1.3rem;color:${a.place_id_collisions_unresolved?'#f1c40f':'#4ade80'}">${a.place_id_collisions_unresolved||0}</div>
+                <div class="dim" style="font-size:0.72rem">sin resolver</div>
+            </div>`;
+    } catch(e) {
+        body.innerHTML = `<span class="dim">Auditoría no disponible (¿migración entity_keys + backfill?): ${esc(e.message)}</span>`;
+    }
+}
+
 async function loadAll() {
     clearTimeout(pollTimer);
     const btn = document.getElementById('btn-refresh');
@@ -970,6 +1006,7 @@ async function loadAll() {
     refreshActivityFeed();
     loadReconcilePanel();
     loadGooglePanel();
+    loadDedupPanel();
 
     try {
         allData = await H.get('/admin/scrapers');

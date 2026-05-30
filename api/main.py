@@ -1058,6 +1058,52 @@ async def admin_dedup_collisions(limit: int = Query(50, ge=1, le=500)):
     }
 
 
+@app.get("/admin/dedup/audit")
+async def admin_dedup_audit(limit: int = Query(25, ge=1, le=200)):
+    """Auditoría de entity resolution (Sprint 2): candidatos a DUPLICADO por
+    ancla compartida (mismo telefono_norm / web_domain / google_place_id en ≥2
+    spots activos). Cola de REVISIÓN MANUAL — no se fusiona nada automáticamente.
+    Un grupo grande con teléfono/dominio compartido suele ser una cadena, no un
+    duplicado: por eso se revisa, no se mergea."""
+    # Whitelist estricta de columnas (anti-inyección).
+    async def _cat(conn, col):
+        summ = await conn.fetchrow(f"""
+            WITH g AS (
+              SELECT {col} AS valor, COUNT(*) AS n
+              FROM spots WHERE activo AND {col} IS NOT NULL
+              GROUP BY {col} HAVING COUNT(*) > 1
+            )
+            SELECT COUNT(*) AS grupos, COALESCE(SUM(n),0) AS spots FROM g
+        """)
+        muestra = await conn.fetch(f"""
+            SELECT {col} AS valor, COUNT(*) AS n_spots,
+                   (array_agg(id ORDER BY id))[1:10] AS spot_ids
+            FROM spots WHERE activo AND {col} IS NOT NULL
+            GROUP BY {col} HAVING COUNT(*) > 1
+            ORDER BY COUNT(*) DESC
+            LIMIT $1
+        """, limit)
+        return {
+            "grupos": int(summ["grupos"] or 0),
+            "spots": int(summ["spots"] or 0),
+            "muestra": [dict(m) for m in muestra],
+        }
+
+    async with pool.acquire() as conn:
+        telefono = await _cat(conn, "telefono_norm")
+        web = await _cat(conn, "web_domain")
+        place = await _cat(conn, "google_place_id")
+        collisions = await conn.fetchval(
+            "SELECT COUNT(*) FROM dedup_log WHERE action='place_id_collision' AND resolved=FALSE"
+        )
+    return {
+        "telefono_norm": telefono,
+        "web_domain": web,
+        "google_place_id": place,
+        "place_id_collisions_unresolved": int(collisions or 0),
+    }
+
+
 @app.post("/admin/scrapers/{nombre}/cron")
 async def admin_update_cron(nombre: str, cron_expr: str = Query(..., description="Cron expression o 'none' para borrar")):
     async with pool.acquire() as conn:

@@ -5,7 +5,7 @@
 > aplicado abajo, es que falta ejecutarlo contra la DB / configurar el entorno.
 >
 > Plan de diseño completo: `docs/plan-verdad-geoespacial.md`.
-> Última actualización: 2026-05-30 (Sprints 0 y 1 en código).
+> Última actualización: 2026-05-30 (Sprints 0, 1 y 2 en código).
 
 ---
 
@@ -39,6 +39,16 @@
 - `api/main.py` — `GET /admin/google/budget`, `GET /admin/dedup/collisions`.
 - `pwa/admin.html` — panel "Google" (gauge presupuesto + colisiones).
 
+### Sprint 2 — Entity resolution: anclas + auditoría (sin re-merge masivo)
+- `db/migration_entity_keys.sql` — columnas `spots.telefono_norm`, `web_domain`, `osm_id` + índices.
+- `db.py` — `normalize_phone()`, `extract_domain()` (excluye agregadores), `EXCLUDED_DOMAINS`
+  a nivel módulo; `find_spot_cercano` acepta `osm_id`/`place_id` y los usa como **ancla de
+  identidad exacta** (únicos por entidad). `base.run()` los pasa.
+- `jobs/backfill_entity_keys.py` — puebla las 3 claves (regenerable, idempotente).
+- `api/main.py` — `GET /admin/dedup/audit` (candidatos a duplicado por ancla compartida).
+- `pwa/admin.html` — panel "Entity resolution (auditoría)".
+- `tests/test_entity_keys.py` — tests de normalize_phone/extract_domain.
+
 ### Ficha viajero (Sprint 5 v1, adelantado)
 - `pwa/spot.html` — buscador + mapa + badges de procedencia + contexto OSM + reviews.
 - `pwa/index.html` — pestaña enlazando a la ficha.
@@ -65,7 +75,14 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
   ```bash
   psql -h localhost -p 25433 -U geospots -d geospots -f db/migration_google_api.sql
   psql -h localhost -p 25433 -U geospots -d geospots -f db/migration_provenance.sql
+  psql -h localhost -p 25433 -U geospots -d geospots -f db/migration_entity_keys.sql
   ```
+
+- [ ] **2b. Backfill de claves de entidad** (Sprint 2 — telefono_norm/web_domain/osm_id):
+  ```bash
+  docker-compose exec scraper python -m jobs.backfill_entity_keys
+  ```
+  Luego en admin.html → panel "Entity resolution": revisar candidatos a duplicado.
 
 - [ ] **3. Primera reconciliación** (puebla `spot_field_provenance` + marca conflictos):
   ```bash
@@ -117,10 +134,9 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
 
 ## 📋 PENDIENTE DE IMPLEMENTAR (próximos sprints — código)
 
-- [ ] **Sprint 2 — Entity resolution**: auditoría de dedup (precisión/recall sobre
-  muestra desde `dedup_log`), normalización de telefono (E.164) + web (dominio) +
-  captura `osm_id` como señales fuertes en `find_spot_cercano`. SIN re-merge masivo.
-  UI: panel de auditoría dedup en admin.html.
+- [x] **Sprint 2 — Entity resolution** ✅ (en código): claves normalizadas + backfill +
+  anclas exactas (osm_id/place_id) en `find_spot_cercano` + endpoint/UI de auditoría.
+  SIN re-merge masivo. Pendiente: aplicar migración + backfill (pasos 2 y 2b).
 - [ ] **Sprint 3 — Motor OSM (piloto ES)**: poblar `spot_geo` vía Overpass cacheado
   para spots ES; integrar en embeddings + `/spot` + `/search/semantic`. UI: estado
   pipeline geo (% poblado). NOTA: `spot_geo` ya existe con columnas (`dist_*_km`,
@@ -137,6 +153,7 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
 
 | Commit | Contenido |
 |---|---|
+| `c82d743` | Sprint 2: entity resolution (claves normalizadas + anclas + auditoría + backfill). |
 | `d212dd5` | Sprints 0-1 + ficha viajero (spot.html) + plan + este runbook. (Agrupado con cleanup_dedup_shells.py por un add concurrente.) |
 | _(turno previo, en main)_ | google_maps_api source + migration_google_api.sql + fix job_id google_maps DOM + .env.example + CLAUDE.md |
 
