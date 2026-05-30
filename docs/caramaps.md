@@ -36,6 +36,44 @@ Se ha implementado el descargador desacoplado `download_reviews` en `caramaps.py
    - Fecha: Parseada a partir del string ISO `createdAt`.
    - Idioma: Extraído de `authorLocale.alpha2` (con fallback a "es").
 
+## 🔎 Fase de Detalle (2026-05-30)
+
+La lista de ElasticSearch que descarga `run()` **NO** trae varios campos ricos que
+sí expone el endpoint de detalle por revisión:
+
+```
+GET https://admin.caramaps.com/api/revisions/{uuid}
+```
+
+donde `{uuid}` es `raw_data->>'uuid'` (el UUID de la revisión, distinto del
+`pointOfInterest.uuid` que usan las reviews). El helper `extract_caramaps_detail()`
+mapea:
+
+| Campo detalle | GeoSpots | Cobertura medida |
+|---|---|---|
+| `nbCarPlace` | `num_plazas` | ~100% (valores reales 2–50) |
+| `contactInformation.telephone` / `telephone2` | `telefono` | ~13% |
+| `contactInformation.website` | `web` (web real del establecimiento) | ~10% |
+| `contactInformation.email` / `email2` | `email` | ~13% |
+| `nbChargingPoint` | `servicios_extras.ev_charging_points` | raro pero valioso |
+| `floorType` | `servicios_extras.floor_type` | alto |
+
+**El gran win es `num_plazas`**: ~39.600 spots de caramaps estaban sin plazas y el
+detalle las aporta al ~100%. La **web real** aterriza vía `COALESCE` solo donde
+ninguna otra fuente puso web (caramaps tenía 0 spots con web propia, su permalink
+nunca gana frente a otras fuentes).
+
+**Integración:** la fase de detalle vive dentro de `download_reviews()` con un
+marcador propio `details_fetched` (independiente de `reviews_fetched`). La query
+selecciona spots con reviews **O** detalle pendientes. Como la mayoría de spots ya
+tienen `reviews_fetched=true` pero `details_fetched=NULL`, el primer pass tras este
+cambio recorre los ~66K spots haciendo solo el detalle; los spots nuevos reciben
+ambas cosas en una sola pasada. Coste estimado del pass completo: ~1.5–2h
+(rate_limit 0.3s × 3 workers).
+
+`ev_charging` se guarda solo en `servicios_extras` (NO es columna de `spots`, es un
+`signal_type`; escribirlo como columna rompería el `UPDATE` de `enriquecer_spot`).
+
 ## ⚠️ Peligros y Carencias (Riesgos Conocidos)
 
 1. **Vulnerabilidad de los UUIDs Hardcodeados (Taxonomy Drift)**:
