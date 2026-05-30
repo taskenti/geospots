@@ -18,6 +18,7 @@ from reconciliar import (  # noqa: E402
     KEEP_EXISTING,
     TIE_MARGIN,
     _reconciliar_campo,
+    _reconciliar_campo_full,
     _detectar_conflictos,
 )
 
@@ -135,6 +136,62 @@ def test_numeric_weighted_vote():
     val, _src = _reconciliar_campo(records, "num_plazas", credibility)
     # 50 acumula 1.82, 45 acumula 0.92 → margen 33% → gana 50
     assert val == 50
+
+
+# ─── _reconciliar_campo_full: procedencia/confianza (Sprint 0) ────────
+
+
+def test_full_weighted_confidence_and_supporting():
+    """Voto ponderado: confidence = cuota de peso del ganador; supporting_sources
+    lista todas las fuentes que votaron el valor ganador; conflict=True si hay
+    más de un valor distinto."""
+    records = {
+        "park4night":    {"agua_potable": True},
+        "campercontact": {"agua_potable": True},
+        "areasac":       {"agua_potable": False},
+    }
+    credibility = {"park4night": 0.8, "campercontact": 0.8, "areasac": 0.85}
+    val, witness, supporting, confidence, margin, conflict = \
+        _reconciliar_campo_full(records, "agua_potable", credibility)
+    assert val is True
+    # True acumula 1.6 sobre total 2.45 → confidence ≈ 0.653
+    assert abs(confidence - (1.6 / 2.45)) < 1e-6
+    assert set(supporting) == {"park4night", "campercontact"}
+    assert conflict is True
+    assert margin is not None
+
+
+def test_full_no_conflict_when_all_agree():
+    records = {
+        "park4night":    {"agua_potable": True},
+        "campercontact": {"agua_potable": True},
+    }
+    val, _w, supporting, confidence, _m, conflict = _reconciliar_campo_full(
+        records, "agua_potable", {"park4night": 0.8, "campercontact": 0.8}
+    )
+    assert val is True
+    assert conflict is False
+    assert set(supporting) == {"park4night", "campercontact"}
+    assert confidence == 1.0  # único valor → 100% del peso
+
+
+def test_full_rankfirst_confidence_is_base_score_margin_none():
+    """Rank-first (contacto): confidence = base_score de la fuente ganadora,
+    margin = None, conflict refleja discrepancia."""
+    records = {
+        "areasac":    {"telefono": "+34 111"},
+        "park4night": {"telefono": "+34 222"},
+    }
+    credibility = {"areasac": 0.85, "park4night": 0.92}
+    val, witness, supporting, confidence, margin, conflict = \
+        _reconciliar_campo_full(records, "telefono", credibility)
+    # areasac va antes que park4night en CREDIBILITY["telefono"]
+    assert witness == "areasac"
+    assert val == "+34 111"
+    assert confidence == 0.85
+    assert margin is None
+    assert conflict is True
+    assert supporting == ["areasac"]
 
 
 # ─── _detectar_conflictos ─────────────────────────────────────────────

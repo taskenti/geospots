@@ -282,6 +282,26 @@ async def get_spot(spot_id: int):
             spot_id,
         )
 
+        # Sprint 0: procedencia y confianza por campo (qué fuentes respaldan
+        # cada valor, su fiabilidad y si hubo conflicto). Habilita atribución
+        # (TOS Google) y respuestas LLM explicables.
+        provenance = await conn.fetch(
+            """
+            SELECT field, winning_value, confidence, consensus_margin,
+                   supporting_sources, conflict_detected, updated_at
+            FROM spot_field_provenance
+            WHERE spot_id = $1
+            ORDER BY conflict_detected DESC, confidence ASC
+            """,
+            spot_id,
+        )
+
+        # Contexto geoespacial OSM/DEM (Phase 6 / Sprint 3). Puede estar vacío
+        # hasta que el pipeline geo lo pueble; la ficha lo muestra si existe.
+        geo = await conn.fetchrow(
+            "SELECT * FROM spot_geo WHERE spot_id = $1", spot_id
+        )
+
     result = dict(spot)
     for lang in ("es", "fr", "de", "it", "nl", "pt"):
         result.pop(f"descripcion_{lang}", None)
@@ -301,6 +321,18 @@ async def get_spot(spot_id: int):
     result["enrichment_source"] = enrichment_source
     result["reviews"] = [dict(r) for r in reviews]
     result["field_overrides"] = [dict(o) for o in field_overrides]
+    result["provenance"] = {p["field"]: {
+        "value": p["winning_value"],
+        "confidence": p["confidence"],
+        "consensus_margin": p["consensus_margin"],
+        "sources": list(p["supporting_sources"] or []),
+        "conflict": p["conflict_detected"],
+    } for p in provenance}
+    result["geo"] = dict(geo) if geo else None
+    if result.get("geo"):
+        for k in list(result["geo"].keys()):
+            if isinstance(result["geo"][k], (bytes, memoryview)):
+                del result["geo"][k]
     for key in list(result.keys()):
         if isinstance(result[key], (bytes, memoryview)):
             del result[key]
@@ -883,6 +915,149 @@ async def admin_scraper_run(nombre: str, job_type: str = Query("spots", pattern=
     return {"job_id": job_id, "source": nombre, "job_type": job_type, "status": "pending"}
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Sprint 0 — Observabilidad de procedencia / conflictos + reconciliar
+# ─────────────────────────────────────────────────────────────────────
+
+@app.post("/admin/reconciliar/run")
+async def admin_reconciliar_run():
+    """Encola un job de reconciliación multi-fuente (lo ejecuta el daemon)."""
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            "SELECT id, status FROM scraper_jobs WHERE source='reconciliar' AND status IN ('pending','running')"
+        )
+        if existing:
+            raise HTTPException(409, f"Ya hay un job de reconciliación {existing['status']}")
+        job_id = await conn.fetchval(
+            "INSERT INTO scraper_jobs (source, job_type) VALUES ('reconciliar','maintenance') RETURNING id"
+        )
+    return {"job_id": job_id, "source": "reconciliar", "status": "pending"}
+
+
+@app.get("/admin/coverage/provenance")
+async def admin_coverage_provenance():
+    """Cobertura de spot_field_provenance: cuántos spots multifuente tienen
+    procedencia persistida y desglose por campo."""
+    async with pool.acquire() as conn:
+        multifuente = await conn.fetchval(
+            "SELECT COUNT(*) FROM spots WHERE activo = TRUE AND array_length(fuentes,1) > 1"
+        )
+        con_prov = await conn.fetchval(
+            "SELECT COUNT(DISTINCT spot_id) FROM spot_field_provenance"
+        )
+        por_campo = await conn.fetch(
+            """
+            SELECT field,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE conflict_detected) AS conflictos,
+                   ROUND(AVG(confidence)::numeric, 3) AS confianza_media
+            FROM spot_field_provenance
+            GROUP BY field
+            ORDER BY conflictos DESC, total DESC
+            """
+        )
+    pct = round(100.0 * con_prov / multifuente, 1) if multifuente else 0.0
+    return {
+        "spots_multifuente": int(multifuente or 0),
+        "spots_con_provenance": int(con_prov or 0),
+        "cobertura_pct": pct,
+        "por_campo": [dict(r) for r in por_campo],
+    }
+
+
+@app.get("/admin/conflicts/count")
+async def admin_conflicts_count():
+    """Conflictos activos por campo (alimenta la cola del desempatador Google)."""
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM spot_field_provenance WHERE conflict_detected = TRUE"
+        )
+        por_campo = await conn.fetch(
+            """
+            SELECT field, COUNT(*) AS conflictos
+            FROM spot_field_provenance
+            WHERE conflict_detected = TRUE
+            GROUP BY field
+            ORDER BY conflictos DESC
+            """
+        )
+    return {
+        "conflictos_total": int(total or 0),
+        "por_campo": [dict(r) for r in por_campo],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Sprint 1 — Presupuesto Google + colisiones de place_id (ancla identidad)
+# ─────────────────────────────────────────────────────────────────────
+
+# SKU aproximados Places API (New), tier Pro (USD por 1000 llamadas).
+_GOOGLE_SEARCH_PER_1K = 32.0
+_GOOGLE_DETAILS_PER_1K = 17.0
+_GOOGLE_MONTHLY_CREDIT = 200.0  # crédito gratuito de Google Cloud
+
+@app.get("/admin/google/budget")
+async def admin_google_budget():
+    """Gasto estimado de google_maps_api en el mes en curso, a partir de las
+    llamadas registradas en scraper_log.detalle (search_calls/details_calls)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM((detalle->>'search_calls')::int), 0)  AS search_calls,
+                COALESCE(SUM((detalle->>'details_calls')::int), 0) AS details_calls,
+                COALESCE(SUM((detalle->>'conflictos_procesados')::int), 0) AS conflictos_procesados,
+                COALESCE(SUM((detalle->>'colisiones_place_id')::int), 0)  AS colisiones,
+                COUNT(*) AS runs
+            FROM scraper_log
+            WHERE fuente = 'google_maps_api'
+              AND iniciado_en >= date_trunc('month', NOW())
+            """
+        )
+    search_calls = int(row["search_calls"] or 0)
+    details_calls = int(row["details_calls"] or 0)
+    cost = (search_calls / 1000.0) * _GOOGLE_SEARCH_PER_1K + \
+           (details_calls / 1000.0) * _GOOGLE_DETAILS_PER_1K
+    cost = round(cost, 2)
+    return {
+        "month": datetime.utcnow().strftime("%Y-%m"),
+        "search_calls": search_calls,
+        "details_calls": details_calls,
+        "conflictos_procesados": int(row["conflictos_procesados"] or 0),
+        "colisiones_place_id": int(row["colisiones"] or 0),
+        "runs": int(row["runs"] or 0),
+        "cost_usd": cost,
+        "monthly_credit_usd": _GOOGLE_MONTHLY_CREDIT,
+        "credit_used_pct": round(100.0 * cost / _GOOGLE_MONTHLY_CREDIT, 1),
+        "credit_remaining_usd": round(_GOOGLE_MONTHLY_CREDIT - cost, 2),
+    }
+
+
+@app.get("/admin/dedup/collisions")
+async def admin_dedup_collisions(limit: int = Query(50, ge=1, le=500)):
+    """Colisiones de google_place_id detectadas (dos spots → mismo place_id).
+    Candidatos a merge sin resolver. NO se fusionan automáticamente."""
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM dedup_log WHERE action='place_id_collision' AND resolved=FALSE"
+        )
+        rows = await conn.fetch(
+            """
+            SELECT id, spot_id, source_id_a AS place_id, source_id_b AS spot_colision,
+                   reason, created_at
+            FROM dedup_log
+            WHERE action='place_id_collision' AND resolved=FALSE
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+    return {
+        "colisiones_total": int(total or 0),
+        "items": [dict(r) for r in rows],
+    }
+
+
 @app.post("/admin/scrapers/{nombre}/cron")
 async def admin_update_cron(nombre: str, cron_expr: str = Query(..., description="Cron expression o 'none' para borrar")):
     async with pool.acquire() as conn:
@@ -1080,5 +1255,88 @@ async def admin_enrichment_run_worker(
         "cap": max_llm_calls if needs_llm else 0,
     }
 
+
+# ── System config endpoints ────────────────────────────────────────────────────
+# Permiten cambiar el provider LLM (y otros ajustes) sin reiniciar contenedores.
+# La tabla system_config es la fuente de verdad; los runs de enrichment leen de
+# aquí si no se les pasa --provider / --model explícitamente por CLI.
+
+_VALID_PROVIDERS = {"deepseek", "gemini"}
+_WRITABLE_KEYS = {
+    "enrichment_provider",
+    "enrichment_model",
+    "enrichment_concurrency",
+    "enrichment_max_cost_default",
+}
+
+
+async def _get_config(conn) -> dict:
+    rows = await conn.fetch("SELECT key, value, description, updated_at, updated_by FROM system_config ORDER BY key")
+    return {r["key"]: {"value": r["value"], "description": r["description"],
+                       "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                       "updated_by": r["updated_by"]} for r in rows}
+
+
+@app.get("/admin/config")
+async def get_config():
+    """Devuelve la configuración dinámica del sistema."""
+    async with pool.acquire() as conn:
+        return await _get_config(conn)
+
+
+@app.put("/admin/config/{key}")
+async def set_config(key: str, request: Request):
+    """Actualiza un valor de configuración.
+
+    Body JSON: {"value": "deepseek", "updated_by": "admin"}
+
+    Claves permitidas: enrichment_provider (deepseek|gemini),
+    enrichment_model, enrichment_concurrency, enrichment_max_cost_default.
+    """
+    if key not in _WRITABLE_KEYS:
+        raise HTTPException(400, f"Clave no editable: '{key}'. Permitidas: {sorted(_WRITABLE_KEYS)}")
+
+    body = await request.json()
+    value = str(body.get("value", "")).strip()
+    updated_by = str(body.get("updated_by", "api")).strip() or "api"
+
+    if not value and key != "enrichment_model":
+        raise HTTPException(400, f"El valor no puede estar vacío para '{key}'")
+
+    if key == "enrichment_provider" and value not in _VALID_PROVIDERS:
+        raise HTTPException(400, f"Provider inválido: '{value}'. Válidos: {sorted(_VALID_PROVIDERS)}")
+
+    if key == "enrichment_concurrency":
+        try:
+            c = int(value)
+            if c < 1 or c > 100:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(400, "enrichment_concurrency debe ser un entero entre 1 y 100")
+
+    if key == "enrichment_max_cost_default":
+        try:
+            v = float(value)
+            if v <= 0:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(400, "enrichment_max_cost_default debe ser un número > 0")
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO system_config (key, value, updated_at, updated_by)
+            VALUES ($1, $2, NOW(), $3)
+            ON CONFLICT (key) DO UPDATE
+               SET value = EXCLUDED.value,
+                   updated_at = EXCLUDED.updated_at,
+                   updated_by = EXCLUDED.updated_by
+            """,
+            key, value, updated_by,
+        )
+        config = await _get_config(conn)
+
+    logger.info(f"[config] {key}={value!r} (by={updated_by})")
+    return {"ok": True, "key": key, "value": value, "config": config}
 
 app.mount("/pwa", StaticFiles(directory="/pwa"), name="pwa")

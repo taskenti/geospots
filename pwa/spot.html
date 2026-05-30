@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GeoSpots — Ficha de spot</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:'Inter',system-ui,sans-serif; background:#0a0a0f; color:#e0e0e0; padding:1.5rem 1rem; }
+    .container { max-width:760px; margin:0 auto; }
+    .topnav { display:flex; gap:1rem; margin-bottom:1.2rem; font-size:.85rem; }
+    .topnav a { color:#00d4ff; text-decoration:none; opacity:.8; }
+    .topnav a:hover { opacity:1; }
+    h1 { font-size:1.9rem; background:linear-gradient(135deg,#00d4ff,#7b2ff7); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+    .subtitle { color:#888; font-size:.95rem; margin:.2rem 0 1.2rem; }
+
+    .searchbar { display:flex; gap:.5rem; margin-bottom:1.2rem; }
+    .searchbar input { flex:1; padding:.6rem .9rem; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.12); border-radius:9px; color:#eee; font-size:.95rem; }
+    .searchbar input:focus { outline:none; border-color:rgba(0,212,255,.45); }
+    .searchbar button { padding:.6rem 1.1rem; background:rgba(0,212,255,.14); border:1px solid rgba(0,212,255,.3); border-radius:9px; color:#00d4ff; cursor:pointer; }
+    .results { list-style:none; margin:-0.6rem 0 1rem; }
+    .results li { padding:.55rem .8rem; border:1px solid rgba(255,255,255,.07); border-radius:8px; margin-top:.4rem; cursor:pointer; display:flex; justify-content:space-between; gap:.5rem; }
+    .results li:hover { background:rgba(255,255,255,.05); }
+    .results .r-type { color:#777; font-size:.78rem; }
+
+    .card { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:1.1rem 1.3rem; margin-bottom:1rem; }
+    .card h2 { font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:#666; margin-bottom:.8rem; }
+    #map { height:240px; border-radius:12px; margin-bottom:1rem; }
+
+    .chips { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:.4rem; }
+    .chip { font-size:.72rem; padding:.2rem .6rem; border-radius:20px; background:rgba(255,255,255,.07); color:#bbb; }
+
+    .kv { display:flex; align-items:flex-start; gap:.6rem; padding:.45rem 0; border-bottom:1px solid rgba(255,255,255,.05); }
+    .kv:last-child { border-bottom:none; }
+    .kv-key { color:#888; font-size:.85rem; min-width:120px; }
+    .kv-val { color:#e8e8e8; font-size:.9rem; flex:1; word-break:break-word; }
+    .kv-val a { color:#4fc3f7; text-decoration:none; }
+
+    /* Badges de procedencia */
+    .prov { font-size:.68rem; padding:.12rem .5rem; border-radius:12px; white-space:nowrap; cursor:help; }
+    .prov.ok    { background:rgba(46,204,113,.13); color:#2ecc71; border:1px solid rgba(46,204,113,.3); }
+    .prov.weak  { background:rgba(255,255,255,.06); color:#999; border:1px solid rgba(255,255,255,.12); }
+    .prov.warn  { background:rgba(241,196,15,.13); color:#f1c40f; border:1px solid rgba(241,196,15,.35); }
+    .attr-google { font-size:.66rem; color:#5a7fa0; margin-left:.3rem; }
+
+    .geo-grid { display:grid; grid-template-columns:1fr 1fr; gap:.5rem .9rem; }
+    .geo-item { font-size:.85rem; }
+    .geo-item .g-k { color:#888; font-size:.74rem; }
+    .geo-item .g-v { color:#e8e8e8; }
+    .empty { color:#666; font-size:.85rem; font-style:italic; }
+
+    .review { padding:.55rem 0; border-bottom:1px solid rgba(255,255,255,.05); font-size:.86rem; }
+    .review:last-child { border-bottom:none; }
+    .review .r-meta { color:#777; font-size:.72rem; margin-top:.2rem; }
+    .rating-big { font-size:1.6rem; color:#f1c40f; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="index.html">← Panel</a>
+        <a href="admin.html">Admin scrapers</a>
+        <span style="color:#444">·</span>
+        <span style="color:#777">Ficha viajero</span>
+    </div>
+    <h1>GeoSpots</h1>
+    <p class="subtitle">Ficha de spot — datos, fiabilidad por fuente y contexto del entorno</p>
+
+    <div class="searchbar">
+        <input id="q" type="text" placeholder="Buscar spot por nombre…" onkeydown="if(event.key==='Enter')doSearch()">
+        <button onclick="doSearch()">Buscar</button>
+    </div>
+    <ul class="results" id="results"></ul>
+
+    <div id="detail"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const API_KEY = localStorage.getItem('gs_api_key') || '';
+const headers = { 'Content-Type':'application/json', 'X-API-Key':API_KEY };
+let map, marker;
+
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function doSearch(){
+    const q = document.getElementById('q').value.trim();
+    if(!q) return;
+    const ul = document.getElementById('results');
+    ul.innerHTML = '<li>Buscando…</li>';
+    try{
+        const r = await fetch(`/search?q=${encodeURIComponent(q)}&limit=12`, { headers });
+        const rows = await r.json();
+        if(!rows.length){ ul.innerHTML = '<li class="empty">Sin resultados</li>'; return; }
+        ul.innerHTML = rows.map(s =>
+            `<li onclick="loadSpot(${s.id})"><span>${esc(s.canonical_name)}</span><span class="r-type">${esc(s.tipo||'')}</span></li>`
+        ).join('');
+    }catch(e){ ul.innerHTML = `<li class="empty">Error: ${esc(e.message)}</li>`; }
+}
+
+// ── Badge de procedencia para un campo ──
+function provBadge(prov, field){
+    const p = prov && prov[field];
+    if(!p) return '';
+    const sources = (p.sources||[]);
+    const srcTxt = sources.join(', ') || '—';
+    const conf = p.confidence!=null ? Math.round(p.confidence*100) : null;
+    let cls='weak', label='1 fuente';
+    if(p.conflict){ cls='warn'; label='⚠ en conflicto'; }
+    else if(conf!=null && conf>=80 && sources.length>=2){ cls='ok'; label=`✓ verificado (${sources.length})`; }
+    else if(sources.length>=2){ cls='ok'; label=`${sources.length} fuentes`; }
+    const google = sources.includes('google_maps_api') ? '<span class="attr-google">vía Google</span>' : '';
+    const tip = `Fuentes: ${srcTxt}${conf!=null?` · confianza ${conf}%`:''}${p.conflict?' · valores en disputa':''}`;
+    return `<span class="prov ${cls}" title="${esc(tip)}">${label}</span>${google}`;
+}
+
+function kvRow(key, valHtml, prov, field){
+    if(valHtml==null || valHtml==='') return '';
+    return `<div class="kv"><span class="kv-key">${esc(key)}</span><span class="kv-val">${valHtml} ${provBadge(prov,field)}</span></div>`;
+}
+
+const SI='Sí', NO='No';
+function boolTxt(v){ return v===true?SI:(v===false?NO:null); }
+
+function renderGeo(geo){
+    if(!geo) return '<p class="empty">Sin contexto geoespacial todavía (pendiente del pipeline OSM).</p>';
+    const items = [
+        ['Supermercado', geo.dist_supermarket_km, 'km'],
+        ['Gasolinera', geo.dist_fuel_km, 'km'],
+        ['Hospital', geo.dist_hospital_km, 'km'],
+        ['Costa', geo.dist_coast_km, 'km'],
+        ['Lago', geo.dist_lake_km, 'km'],
+        ['Río', geo.dist_river_km, 'km'],
+        ['Autovía', geo.dist_motorway_km, 'km'],
+        ['Altitud', geo.elevation_m, 'm'],
+        ['Ruido (combinado)', geo.noise_combined, ''],
+    ].filter(([,v])=>v!=null);
+    let html = '';
+    if(geo.protected_area) html += `<div class="chip" style="background:rgba(46,204,113,.13);color:#2ecc71;margin-bottom:.6rem">Área protegida${geo.protected_area_name?': '+esc(geo.protected_area_name):''}</div>`;
+    if(!items.length && !geo.protected_area) return '<p class="empty">Sin contexto geoespacial todavía (pendiente del pipeline OSM).</p>';
+    html += '<div class="geo-grid">' + items.map(([k,v,u])=>
+        `<div class="geo-item"><div class="g-k">${k}</div><div class="g-v">${typeof v==='number'?v.toFixed( u==='km'?1:0 ):esc(v)} ${u}</div></div>`
+    ).join('') + '</div>';
+    return html;
+}
+
+async function loadSpot(id){
+    document.getElementById('results').innerHTML='';
+    const det = document.getElementById('detail');
+    det.innerHTML = '<div class="card">Cargando…</div>';
+    try{
+        const r = await fetch(`/spot/${id}`, { headers });
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const d = await r.json();
+        const prov = d.provenance || {};
+
+        const chips = [];
+        if(d.tipo) chips.push(d.tipo);
+        if(d.country_iso) chips.push(d.country_iso.toUpperCase());
+        if(d.gratuito===true) chips.push('Gratis');
+        if(d.fuentes) chips.push(`${d.fuentes.length} fuentes`);
+
+        const servicios = [
+            ['Agua potable', boolTxt(d.agua_potable), 'agua_potable'],
+            ['Electricidad', boolTxt(d.electricidad), 'electricidad'],
+            ['Vaciado negras', boolTxt(d.vaciado_negras), 'vaciado_negras'],
+            ['Vaciado grises', boolTxt(d.vaciado_grises), 'vaciado_grises'],
+            ['Ducha', boolTxt(d.ducha), null],
+            ['WiFi', boolTxt(d.wifi), null],
+            ['WC público', boolTxt(d.wc_publico), null],
+            ['Perros', boolTxt(d.perros), null],
+        ].map(([k,v,f])=>kvRow(k,v,prov,f)).join('');
+
+        const reviews = (d.reviews||[]).slice(0,6).map(rv=>
+            `<div class="review">${esc((rv.texto_limpio||rv.texto||'').slice(0,260))||'<span class="empty">(sin texto)</span>'}
+             <div class="r-meta">${esc(rv.source)} · ${esc(rv.autor||'anónimo')} · ${rv.rating!=null?rv.rating+'★':''} · ${esc(rv.fecha||'')}</div></div>`
+        ).join('') || '<p class="empty">Sin reseñas.</p>';
+
+        det.innerHTML = `
+            <h1 style="font-size:1.5rem">${esc(d.canonical_name)}</h1>
+            <div class="chips" style="margin:.5rem 0 1rem">${chips.map(c=>`<span class="chip">${esc(c)}</span>`).join('')}</div>
+            <div id="map"></div>
+
+            <div class="card">
+                <h2>Contacto</h2>
+                ${kvRow('Teléfono', d.telefono?esc(d.telefono):null, prov, 'telefono') || '<p class="empty">Sin teléfono.</p>'}
+                ${kvRow('Web', d.web?`<a href="${esc(d.web)}" target="_blank" rel="noopener">${esc(d.web)}</a>`:null, prov, 'web')}
+                ${kvRow('Dirección', d.direccion_formateada?esc(d.direccion_formateada):null, prov, 'direccion_formateada')}
+                ${kvRow('Email', d.email?esc(d.email):null, prov, 'email')}
+                ${d.master_rating!=null?`<div class="kv"><span class="kv-key">Rating</span><span class="kv-val"><span class="rating-big">${d.master_rating.toFixed(1)}</span> ★ <span style="color:#777">(${d.total_reviews||0} reseñas)</span> ${provBadge(prov,'master_rating')}</span></div>`:''}
+            </div>
+
+            <div class="card">
+                <h2>Servicios</h2>
+                ${servicios || '<p class="empty">Sin datos de servicios.</p>'}
+            </div>
+
+            <div class="card">
+                <h2>Contexto del entorno (OSM)</h2>
+                ${renderGeo(d.geo)}
+            </div>
+
+            <div class="card">
+                <h2>Reseñas recientes</h2>
+                ${reviews}
+            </div>
+        `;
+
+        // Mapa (Leaflet). Degrada si la CDN no cargó.
+        if(window.L && d.lat && d.lon){
+            if(map){ map.remove(); }
+            map = L.map('map',{attributionControl:true}).setView([d.lat,d.lon],14);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+            L.marker([d.lat,d.lon]).addTo(map);
+        } else {
+            const m=document.getElementById('map'); if(m) m.style.display='none';
+        }
+    }catch(e){
+        det.innerHTML = `<div class="card"><p class="empty">Error cargando spot: ${esc(e.message)}</p></div>`;
+    }
+}
+
+// Soporte de ?id= en la URL para enlace directo
+const params = new URLSearchParams(location.search);
+if(params.get('id')) loadSpot(parseInt(params.get('id'),10));
+</script>
+</body>
+</html>
