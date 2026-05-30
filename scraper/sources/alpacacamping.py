@@ -80,7 +80,10 @@ class AlpacaCampingSource(AbstractSource):
             elif any(i in am_ids for i in [41, 315, 229, 231]):
                 perros = True
 
-            acceso_grandes = (26 in am_ids)
+            # Solo afirmamos False si HAY lista de amenities y no incluye el flag 26
+            # (vehículos grandes). Sin lista de amenities → desconocido (None), nunca False:
+            # "no etiquetado" no es "no apto". Ver docs/auditoria-compatibilidad-vehiculos.md §4.
+            acceso_grandes = (26 in am_ids) if am_ids else None
 
             # Photos
             photos = []

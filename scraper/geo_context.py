@@ -96,45 +96,67 @@ async def _fetch_overpass(client, url: str, query: str) -> list:
     return (r.json() or {}).get("elements", [])
 
 
-async def run_geo_osm(pool, job_id: int = None) -> dict:
-    """Pipeline piloto: spots del país → Overpass → spot_geo."""
-    country = os.environ.get("GEO_OSM_COUNTRY", "es").lower()
-    batch = int(os.environ.get("GEO_OSM_BATCH", "300"))
-    radius_m = int(os.environ.get("GEO_OSM_RADIUS_M", "3000"))
-    rate = float(os.environ.get("GEO_OSM_RATE", "1.5"))
-    refresh_days = int(os.environ.get("GEO_OSM_REFRESH_DAYS", "180"))
-    overpass_url = os.environ.get("OVERPASS_URL", DEFAULT_OVERPASS)
+_CAT_TO_COL = {name: col for name, _k, _v, col in CATEGORIES}
 
-    inicio = datetime.now(timezone.utc)
-    stats = {"procesados": 0, "con_contexto": 0, "errores": 0,
-             "pais": country, "batch": batch}
 
-    async with pool.acquire() as conn:
-        candidatos = await conn.fetch(
-            """
-            SELECT s.id, s.lat, s.lon
-            FROM spots s
-            LEFT JOIN spot_geo g ON g.spot_id = s.id AND g.source = 'osm_overpass'
-            WHERE s.activo = TRUE
-              AND s.country_iso = $1
-              AND s.lat IS NOT NULL AND s.lon IS NOT NULL
-              AND (g.spot_id IS NULL
-                   OR g.processed_at < NOW() - ($2 || ' days')::interval)
-            ORDER BY COALESCE(s.total_reviews, 0) DESC, s.id
-            LIMIT $3
-            """,
-            country, str(refresh_days), batch,
-        )
-
-    if not candidatos:
-        logger.info(f"[geo_osm] No hay candidatos (pais={country}).")
-        return stats
-
-    logger.info(
-        f"[geo_osm] {len(candidatos)} spots (pais={country}, radio={radius_m}m, "
-        f"rate={rate}s)"
+async def _upsert_geo(conn, spot_id, vals: dict, source: str):
+    """Upsert de las columnas de proximidad en spot_geo (preserva otras columnas)."""
+    placeholders = ", ".join(f"${i+2}" for i in range(len(_COLS)))
+    src_idx = len(_COLS) + 2
+    await conn.execute(
+        f"""
+        INSERT INTO spot_geo (spot_id, {", ".join(_COLS)}, source, processed_at)
+        VALUES ($1, {placeholders}, ${src_idx}, NOW())
+        ON CONFLICT (spot_id) DO UPDATE SET
+          {", ".join(f"{c} = EXCLUDED.{c}" for c in _COLS)},
+          source = EXCLUDED.source,
+          processed_at = NOW()
+        """,
+        spot_id, *[vals[c] for c in _COLS], source,
     )
 
+
+_LOCAL_NEAREST_SQL = """
+    SELECT category,
+           MIN(ST_Distance(geog, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography))
+             / 1000.0 AS km
+    FROM osm_pois
+    WHERE country = $4
+      AND ST_DWithin(geog, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
+    GROUP BY category
+"""
+
+
+async def _run_local(pool, candidatos, radius_m, country, stats, job_id):
+    """Modo LOCAL: KNN sobre osm_pois. Sin internet, sin rate limit."""
+    async with pool.acquire() as conn:
+        for idx, spot in enumerate(candidatos):
+            try:
+                rows = await conn.fetch(
+                    _LOCAL_NEAREST_SQL,
+                    float(spot["lat"]), float(spot["lon"]), radius_m, country,
+                )
+                vals = {col: None for col in _COLS}
+                for r in rows:
+                    col = _CAT_TO_COL.get(r["category"])
+                    if col:
+                        vals[col] = round(r["km"], 3)
+                await _upsert_geo(conn, spot["id"], vals, "osm_pbf")
+                stats["procesados"] += 1
+                if rows:
+                    stats["con_contexto"] += 1
+            except Exception as e:
+                stats["errores"] += 1
+                logger.warning(f"[geo_osm] local error spot {spot['id']}: {e!r}")
+            if (idx + 1) % 2000 == 0:
+                logger.info(
+                    f"[geo_osm] local {idx+1}/{len(candidatos)} | "
+                    f"con_contexto={stats['con_contexto']}"
+                )
+
+
+async def _run_overpass(pool, candidatos, radius_m, rate, overpass_url, stats, job_id):
+    """Modo OVERPASS: una query por spot. Frágil/rate-limited (piloto/fallback)."""
     consecutive_errors = 0
     async with httpx.AsyncClient(headers={"User-Agent": "GeoSpots/1.0 (+geo_context)"}) as client:
         for idx, spot in enumerate(candidatos):
@@ -144,31 +166,16 @@ async def run_geo_osm(pool, job_id: int = None) -> dict:
                 await asyncio.sleep(rate)
                 elements = await _fetch_overpass(client, overpass_url, _build_query(lat, lon, radius_m))
                 consecutive_errors = 0
-
                 nearest = _nearest_by_category(elements, lat, lon)
                 vals = {col: None for col in _COLS}
                 for name, _k, _v, col in CATEGORIES:
                     if name in nearest:
                         vals[col] = round(nearest[name], 3)
-
                 async with pool.acquire() as conn:
-                    await conn.execute(
-                        f"""
-                        INSERT INTO spot_geo
-                          (spot_id, {", ".join(_COLS)}, source, processed_at)
-                        VALUES ($1, {", ".join(f"${i+2}" for i in range(len(_COLS)))},
-                                'osm_overpass', NOW())
-                        ON CONFLICT (spot_id) DO UPDATE SET
-                          {", ".join(f"{c} = EXCLUDED.{c}" for c in _COLS)},
-                          source = 'osm_overpass',
-                          processed_at = NOW()
-                        """,
-                        spot_id, *[vals[c] for c in _COLS],
-                    )
+                    await _upsert_geo(conn, spot_id, vals, "osm_overpass")
                 stats["procesados"] += 1
                 if nearest:
                     stats["con_contexto"] += 1
-
             except httpx.HTTPStatusError as e:
                 stats["errores"] += 1
                 consecutive_errors += 1
@@ -178,14 +185,10 @@ async def run_geo_osm(pool, job_id: int = None) -> dict:
             except Exception as e:
                 stats["errores"] += 1
                 consecutive_errors += 1
-                # repr() para ver el tipo real (ReadTimeout/ConnectError suelen
-                # tener str vacío). Overpass público es la causa habitual.
                 logger.warning(f"[geo_osm] error spot {spot_id}: {e!r}")
-
             if consecutive_errors >= 10:
                 logger.error("[geo_osm] 10 errores seguidos — abortando (Overpass caído/ban).")
                 break
-
             if job_id and (idx + 1) % 25 == 0:
                 import json as _json
                 try:
@@ -197,6 +200,68 @@ async def run_geo_osm(pool, job_id: int = None) -> dict:
                         )
                 except Exception:
                     pass
+
+
+async def run_geo_osm(pool, job_id: int = None) -> dict:
+    """Pipeline de contexto OSM. Modo LOCAL (osm_pois, preferido) o OVERPASS
+    (fallback/piloto). GEO_OSM_MODE = auto|local|overpass (default auto)."""
+    country = os.environ.get("GEO_OSM_COUNTRY", "es").lower()
+    batch = int(os.environ.get("GEO_OSM_BATCH", "300"))
+    radius_m = int(os.environ.get("GEO_OSM_RADIUS_M", "3000"))
+    rate = float(os.environ.get("GEO_OSM_RATE", "1.5"))
+    refresh_days = int(os.environ.get("GEO_OSM_REFRESH_DAYS", "180"))
+    overpass_url = os.environ.get("OVERPASS_URL", DEFAULT_OVERPASS)
+
+    mode = os.environ.get("GEO_OSM_MODE", "auto").lower()
+    inicio = datetime.now(timezone.utc)
+    stats = {"procesados": 0, "con_contexto": 0, "errores": 0,
+             "pais": country, "modo": None}
+
+    # Determinar modo: LOCAL si osm_pois tiene datos del país (o forzado).
+    has_local = False
+    async with pool.acquire() as conn:
+        if mode in ("auto", "local"):
+            reg = await conn.fetchval("SELECT to_regclass('osm_pois')")
+            if reg:
+                has_local = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM osm_pois WHERE country = $1)", country
+                )
+    use_local = mode == "local" or (mode == "auto" and has_local)
+    stats["modo"] = "local" if use_local else "overpass"
+
+    # En local no hay rate limit → procesa todo el país de una pasada.
+    limit = int(os.environ.get("GEO_OSM_LOCAL_BATCH", "100000")) if use_local else batch
+
+    async with pool.acquire() as conn:
+        candidatos = await conn.fetch(
+            """
+            SELECT s.id, s.lat, s.lon
+            FROM spots s
+            LEFT JOIN spot_geo g ON g.spot_id = s.id AND g.source LIKE 'osm%'
+            WHERE s.activo = TRUE
+              AND s.country_iso = $1
+              AND s.lat IS NOT NULL AND s.lon IS NOT NULL
+              AND (g.spot_id IS NULL
+                   OR g.processed_at < NOW() - ($2 || ' days')::interval)
+            ORDER BY COALESCE(s.total_reviews, 0) DESC, s.id
+            LIMIT $3
+            """,
+            country, str(refresh_days), limit,
+        )
+
+    if not candidatos:
+        logger.info(f"[geo_osm] No hay candidatos (pais={country}, modo={stats['modo']}).")
+        return stats
+
+    logger.info(
+        f"[geo_osm] modo={stats['modo']} | {len(candidatos)} spots "
+        f"(pais={country}, radio={radius_m}m)"
+    )
+
+    if use_local:
+        await _run_local(pool, candidatos, radius_m, country, stats, job_id)
+    else:
+        await _run_overpass(pool, candidatos, radius_m, rate, overpass_url, stats, job_id)
 
     dur = (datetime.now(timezone.utc) - inicio).total_seconds()
     logger.info(f"[geo_osm] Completado en {dur:.0f}s | {stats}")

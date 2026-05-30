@@ -35,6 +35,17 @@ from enrichment.db_pool import create_pool
 from enrichment.orchestrator_v2 import COUNTRY_TIERS, run_enrichment
 
 
+async def _read_system_config(pool) -> dict:
+    """Lee system_config de DB. Devuelve dict key→value. Falla silenciosamente."""
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT key, value FROM system_config")
+            return {r["key"]: r["value"] for r in rows}
+    except Exception as exc:
+        logger.warning(f"[nightly_enrichment_v2] no se pudo leer system_config: {exc}")
+        return {}
+
+
 def _resolve_countries(args) -> list[str] | None:
     if args.rest:
         # NULL = sin filtro; los tiers ya procesados se distinguen por
@@ -105,21 +116,40 @@ async def main_async(argv: list[str] | None = None) -> int:
         return 2
 
     countries = _resolve_countries(args)
+
+    # Leer configuración de DB (fallback cuando no hay override explícito por CLI)
+    pool = await create_pool(max_size=max(8, args.concurrency + 4))
+    sys_cfg = await _read_system_config(pool)
+
+    provider = args.provider or sys_cfg.get("enrichment_provider") or None
+    model    = args.model    or sys_cfg.get("enrichment_model") or None
+    if model == "":
+        model = None  # cadena vacía = usar default del provider
+
+    # Concurrencia: CLI > system_config > env > default 20
+    if args.concurrency == int(os.environ.get("ENRICHMENT_CONCURRENCY", "20")):
+        # El usuario no lo pasó explícitamente por CLI (sigue siendo el default)
+        cfg_concurrency = sys_cfg.get("enrichment_concurrency")
+        if cfg_concurrency:
+            try:
+                args.concurrency = int(cfg_concurrency)
+            except ValueError:
+                pass
+
     label = f"countries={countries}" if countries else "ALL"
     logger.info(f"[nightly_enrichment_v2] start {label} limit={args.limit} "
                 f"max_cost_usd={args.max_cost_usd} "
-                f"concurrency={args.concurrency} provider={args.provider or '(env)'} "
-                f"model={args.model or '(env)'} dry_run={args.dry_run}")
-
-    pool = await create_pool(max_size=max(8, args.concurrency + 4))
+                f"concurrency={args.concurrency} provider={provider or '(env)'} "
+                f"model={model or '(default)'} dry_run={args.dry_run} "
+                f"[config src: {'CLI' if args.provider else 'system_config/env'}]")
     try:
         stats = await run_enrichment(
             pool,
             countries=countries,
             limit=args.limit,
             concurrency=args.concurrency,
-            provider=args.provider,
-            model=args.model,
+            provider=provider,
+            model=model,
             dry_run=args.dry_run,
             force_spot_ids=force_spot_ids,
             max_cost_usd=args.max_cost_usd,

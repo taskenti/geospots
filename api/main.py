@@ -1090,12 +1090,12 @@ async def admin_coverage_geo(country: str = Query("es")):
             """
             SELECT COUNT(*) FROM spot_geo g
             JOIN spots s ON s.id = g.spot_id
-            WHERE s.country_iso=$1 AND g.source='osm_overpass' AND g.processed_at IS NOT NULL
+            WHERE s.country_iso=$1 AND g.source LIKE 'osm%' AND g.processed_at IS NOT NULL
             """,
             country,
         )
         ultimo = await conn.fetchval(
-            "SELECT MAX(processed_at) FROM spot_geo WHERE source='osm_overpass'"
+            "SELECT MAX(processed_at) FROM spot_geo WHERE source LIKE 'osm%'"
         )
     pct = round(100.0 * con_geo / total, 1) if total else 0.0
     return {

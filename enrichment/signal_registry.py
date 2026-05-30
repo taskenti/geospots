@@ -68,6 +68,13 @@ STATIC_SIGNALS = {
     "ev_charging":      SignalType("ev_charging",      "boolean", 730, "consensus_boolean", 0.7),
     "swimming_access":  SignalType("swimming_access",  "boolean", 36500, "consensus_boolean", 0.7),
     "caravan_accepted": SignalType("caravan_accepted",  "boolean", 3650, "consensus_boolean", 0.6),
+    # Sprint 1/3 — señales de ACCESO con polaridad correcta (difusas, derivadas de reseñas).
+    # El valor físico numérico vive en spot_vehicle_access; estas son la versión textual.
+    # half_life largo: una pista 4x4 o una barrera no cambian. importance alta = seguridad.
+    "road_4x4_only":   SignalType("road_4x4_only",   "boolean", 3650, "consensus_boolean", 2.5),
+    "narrow_access":   SignalType("narrow_access",   "boolean", 3650, "consensus_boolean", 1.8),
+    "steep_access":    SignalType("steep_access",    "boolean", 3650, "consensus_boolean", 1.5),
+    "rough_surface":   SignalType("rough_surface",   "boolean", 3650, "consensus_boolean", 1.2),
 }
 
 

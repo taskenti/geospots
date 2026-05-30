@@ -306,9 +306,11 @@ class VansiteSource(AbstractSource):
             except (ValueError, TypeError):
                 num_plazas = None
 
-        # Acceso Grandes
+        # Acceso Grandes. Solo afirmamos False si HAY lista de vehículos (kfz) y ninguno
+        # es grande. Sin lista → desconocido (None), nunca False: "no especificado" no es
+        # "no apto". Ver docs/auditoria-compatibilidad-vehiculos.md §4.
         kfz = pub_data.get("~:kfz", [])
-        acceso_grandes = any(v in kfz for v in ("motorhome", "camper", "bus", "caravan"))
+        acceso_grandes = any(v in kfz for v in ("motorhome", "camper", "bus", "caravan")) if kfz else None
 
         # Amenities
         amenities = pub_data.get("~:amenities", [])

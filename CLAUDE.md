@@ -337,7 +337,7 @@ Esta sección es referencia del plan `docs/fase-3-hardening-pre-batch.md` (Princ
 **Estado actual de fases:**
 - Phase 0 (infra) ✅ | Phase 1 (data) ~70% ✅ | Phase 2 (canonical) ✅ | Phase 3 (LLM enrichment) ✅ | Phase 3b (scraped facts) ✅ | Phase 4 (vector search) ✅ | Phase 5 (visual) 📋 | Phase 6 (geo) 📋 | Phase 7 (product) 📋
 
-**Datos en producción (Mayo 2026):** ~125K spots activos, ~5M reviews, 1.08M source records, 20+ fuentes integradas o escritas.
+**Datos en producción (Mayo 2026):** ~858K spots activos (verificado 2026-05-30 contra DB; el dato anterior "~125K" estaba desactualizado), ~4.9M reviews con texto, 1.10M source records, 20+ fuentes integradas o escritas.
 
 **Phase 3b — Scraped Facts Pipeline:** `jobs/ingest_spot_facts.py` convierte los campos estructurados de `source_records.normalized_data` (agua_potable, campfire, environment_labels, prohibitions, etc.) en `extracted_claims` + `normalized_observations` sin LLM. Cada source_record aporta 1 claim por señal con `source_confidence = source_credibility.base_score`. ~40 señales mapeadas, extractor_name=`scraped_facts_v1`. Correr una vez tras la primera ingesta de scrapers, antes del worker LLM. Idempotente.
 

@@ -15,3 +15,5 @@ project_context.md
 *.egg-info/
 dist/
 build/
+.claude/
+*.log
