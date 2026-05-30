@@ -29,6 +29,19 @@
 - ⏸ **Sprint 1 (Google) NO validado**: `.env` sin `GOOGLE_MAPS_API_KEY`. Endpoints
   responden (presupuesto a $0). Pendiente de configurar clave + billing.
 
+### geo_osm — acumulación progresiva (en curso)
+
+**Estado 2026-05-30:** 292 spots ES con contexto OSM real.
+- Run de 300 spots: 283 OK / 17 errores (94%), 30 min. ~560 spots/hora con `rate=3s`.
+- Overpass público con `rate=3s` es estable. Mirror kumi (10% éxito) descartado.
+- **Crons activos** (IDs: a9783df7, 966b302d, b56c6d33): 3 runs/día a las 7:23 / 13:47
+  / 21:11. ~850 spots/día → cobertura ES completa (~52K) en ~60 días.
+- Los crons viven en la sesión de Claude (7 días máx). Relanzar con:
+  `CronCreate cron="23 7 * * *" / "47 13 * * *" / "11 21 * * *"` + mismo prompt.
+- **Sprint 4 (PBF local)**: alternativa para cubrir ES en una tarde (900 MB descarga,
+  ~3 GB en disco, ~2 GB RAM durante import). Abordarlo cuando `rate=3s` deje de ser
+  suficiente o se quiera cubrir Francia/Alemania en escala.
+
 ---
 
 ## ✅ APLICADO EN CÓDIGO (commiteado — no requiere acción tuya)
