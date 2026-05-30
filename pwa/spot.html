@@ -126,8 +126,12 @@ function boolTxt(v){ return v===true?SI:(v===false?NO:null); }
 function renderGeo(geo){
     if(!geo) return '<p class="empty">Sin contexto geoespacial todavía (pendiente del pipeline OSM).</p>';
     const items = [
+        ['Agua potable', geo.dist_drinking_water_km, 'km'],
+        ['Vaciado', geo.dist_dump_station_km, 'km'],
         ['Supermercado', geo.dist_supermarket_km, 'km'],
         ['Gasolinera', geo.dist_fuel_km, 'km'],
+        ['Farmacia', geo.dist_pharmacy_km, 'km'],
+        ['Mirador', geo.dist_viewpoint_km, 'km'],
         ['Hospital', geo.dist_hospital_km, 'km'],
         ['Costa', geo.dist_coast_km, 'km'],
         ['Lago', geo.dist_lake_km, 'km'],

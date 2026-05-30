@@ -223,6 +223,26 @@ async def run_pending_jobs():
                     )
             return
 
+        # Job de mantenimiento especial: contexto geoespacial OSM (Sprint 3).
+        if source_key == "geo_osm":
+            try:
+                from geo_context import run_geo_osm
+                stats = await run_geo_osm(pool, job_id=job_id)
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE scraper_jobs SET status='done', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                        json.dumps(stats or {}, default=str), job_id,
+                    )
+                logger.info(f"[queue] Job {job_id} (geo_osm) completado: {stats}")
+            except Exception as e:
+                logger.error(f"[queue] Job {job_id} (geo_osm) falló: {e}")
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE scraper_jobs SET status='error', finished_at=NOW(), result=$1::jsonb WHERE id=$2",
+                        json.dumps({"error": str(e)}), job_id,
+                    )
+            return
+
         if source_key not in SOURCES:
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -304,6 +324,13 @@ async def main():
                 from reconciliar import job_reconciliar
                 stats = await job_reconciliar(pool)
                 logger.info(f"Reconciliación completada: {stats}")
+                return
+
+            if source_key == "geo_osm":
+                logger.info("Modo: contexto geoespacial OSM (piloto)")
+                from geo_context import run_geo_osm
+                stats = await run_geo_osm(pool)
+                logger.info(f"geo_osm completado: {stats}")
                 return
 
             if source_key == "run-pending":

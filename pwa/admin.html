@@ -609,6 +609,17 @@
     </div>
 </div>
 
+<!-- Sprint 3: Motor geoespacial OSM (piloto) -->
+<div class="jobs-panel" id="geo-panel" style="margin-bottom:1rem">
+    <div class="jobs-panel-header">
+        <div class="jobs-panel-title">🗺️ Contexto OSM (piloto)</div>
+        <button class="btn" id="btn-geo-osm" onclick="runGeoOsm()" title="Encola el cálculo de proximidad OSM (agua, vaciado, súper, mirador…) — piloto país, vía Overpass">▶ Calcular contexto</button>
+    </div>
+    <div id="geo-body" style="padding:0.6rem 1rem; display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-start; font-size:0.82rem;">
+        <span class="dim">Cargando cobertura geo…</span>
+    </div>
+</div>
+
 <div class="table-wrap" id="main-wrap">
     <div class="loading"><span class="spinner"></span> Cargando fuentes…</div>
 </div>
@@ -995,6 +1006,46 @@ async function loadDedupPanel() {
     }
 }
 
+// ── Sprint 3: panel de contexto geoespacial OSM ──
+async function runGeoOsm() {
+    const btn = document.getElementById('btn-geo-osm');
+    btn.disabled = true;
+    try {
+        const res = await H.post('/admin/geo/run');
+        toast('Contexto OSM encolado', `Job #${res.job_id} — piloto vía Overpass`, 'ok');
+    } catch(e) {
+        toast('No se pudo encolar geo', e.message, 'err');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function loadGeoPanel() {
+    const body = document.getElementById('geo-body');
+    try {
+        const g = await H.get('/admin/coverage/geo?country=es');
+        const pct = g.cobertura_pct || 0;
+        const color = pct >= 80 ? '#4ade80' : (pct > 0 ? '#f1c40f' : '#888');
+        const last = g.ultimo_procesado ? new Date(g.ultimo_procesado).toLocaleString('es-ES') : '—';
+        body.innerHTML = `
+            <div style="min-width:200px">
+                <div class="dim" style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.06em">Cobertura geo (${esc(g.country)})</div>
+                <div style="font-size:1.3rem;color:${color}">${pct}%</div>
+                <div style="height:6px;background:rgba(255,255,255,.08);border-radius:4px;margin:.35rem 0;overflow:hidden">
+                    <div style="height:100%;width:${Math.min(pct,100)}%;background:${color}"></div>
+                </div>
+                <div class="dim" style="font-size:0.72rem">${(g.spots_con_geo||0).toLocaleString()} / ${(g.spots_total||0).toLocaleString()} spots</div>
+            </div>
+            <div>
+                <div class="dim" style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.06em">Último procesado</div>
+                <div style="font-size:0.95rem;color:#ccc">${esc(last)}</div>
+            </div>
+        `;
+    } catch(e) {
+        body.innerHTML = `<span class="dim">Geo no disponible (¿migración geo_osm + algún run?): ${esc(e.message)}</span>`;
+    }
+}
+
 async function loadAll() {
     clearTimeout(pollTimer);
     const btn = document.getElementById('btn-refresh');
@@ -1007,6 +1058,7 @@ async function loadAll() {
     loadReconcilePanel();
     loadGooglePanel();
     loadDedupPanel();
+    loadGeoPanel();
 
     try {
         allData = await H.get('/admin/scrapers');

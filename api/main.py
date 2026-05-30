@@ -1058,6 +1058,55 @@ async def admin_dedup_collisions(limit: int = Query(50, ge=1, le=500)):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Sprint 3 — Motor geoespacial OSM (piloto)
+# ─────────────────────────────────────────────────────────────────────
+
+@app.post("/admin/geo/run")
+async def admin_geo_run():
+    """Encola el pipeline de contexto geoespacial OSM (piloto, lo ejecuta el daemon)."""
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            "SELECT id, status FROM scraper_jobs WHERE source='geo_osm' AND status IN ('pending','running')"
+        )
+        if existing:
+            raise HTTPException(409, f"Ya hay un job geo_osm {existing['status']}")
+        job_id = await conn.fetchval(
+            "INSERT INTO scraper_jobs (source, job_type) VALUES ('geo_osm','maintenance') RETURNING id"
+        )
+    return {"job_id": job_id, "source": "geo_osm", "status": "pending"}
+
+
+@app.get("/admin/coverage/geo")
+async def admin_coverage_geo(country: str = Query("es")):
+    """Cobertura del contexto geoespacial OSM en el país piloto."""
+    country = country.lower()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM spots WHERE activo AND country_iso=$1 AND lat IS NOT NULL",
+            country,
+        )
+        con_geo = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM spot_geo g
+            JOIN spots s ON s.id = g.spot_id
+            WHERE s.country_iso=$1 AND g.source='osm_overpass' AND g.processed_at IS NOT NULL
+            """,
+            country,
+        )
+        ultimo = await conn.fetchval(
+            "SELECT MAX(processed_at) FROM spot_geo WHERE source='osm_overpass'"
+        )
+    pct = round(100.0 * con_geo / total, 1) if total else 0.0
+    return {
+        "country": country,
+        "spots_total": int(total or 0),
+        "spots_con_geo": int(con_geo or 0),
+        "cobertura_pct": pct,
+        "ultimo_procesado": ultimo,
+    }
+
+
 @app.get("/admin/dedup/audit")
 async def admin_dedup_audit(limit: int = Query(25, ge=1, le=200)):
     """Auditoría de entity resolution (Sprint 2): candidatos a DUPLICADO por

@@ -5,7 +5,7 @@
 > aplicado abajo, es que falta ejecutarlo contra la DB / configurar el entorno.
 >
 > Plan de diseño completo: `docs/plan-verdad-geoespacial.md`.
-> Última actualización: 2026-05-30 (Sprints 0, 1 y 2 en código).
+> Última actualización: 2026-05-30 (Sprints 0, 1, 2 y 3 en código).
 
 ---
 
@@ -48,6 +48,19 @@
 - `api/main.py` — `GET /admin/dedup/audit` (candidatos a duplicado por ancla compartida).
 - `pwa/admin.html` — panel "Entity resolution (auditoría)".
 - `tests/test_entity_keys.py` — tests de normalize_phone/extract_domain.
+
+### Sprint 3 — Motor geoespacial OSM (piloto Overpass)
+- `db/migration_geo_osm.sql` — columnas `spot_geo.dist_drinking_water_km`,
+  `dist_dump_station_km`, `dist_pharmacy_km`, `dist_viewpoint_km` + índice.
+- `scraper/geo_context.py` — `run_geo_osm`: Overpass alrededor de cada spot del país
+  piloto → distancia al amenity más cercano por categoría → upsert `spot_geo`
+  (source='osm_overpass'). Rate-limit + backoff + abort tras 10 errores.
+- `scheduler.py` — job `geo_osm` desde cola y CLI `--geo_osm`.
+- `api/main.py` — `POST /admin/geo/run`, `GET /admin/coverage/geo`.
+- `pwa/admin.html` — panel "Contexto OSM (piloto)" (cobertura + botón).
+- `pwa/spot.html` — ficha muestra agua/vaciado/súper/gasolinera/farmacia/mirador.
+- `tests/test_geo_context.py` — tests de categorize/nearest/build_query/haversine.
+- `.env.example` — variables `GEO_OSM_*`.
 
 ### Ficha viajero (Sprint 5 v1, adelantado)
 - `pwa/spot.html` — buscador + mapa + badges de procedencia + contexto OSM + reviews.
@@ -110,6 +123,15 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
 - [ ] **7. Revisar colisiones de place_id** (cola de merge manual): `GET /admin/dedup/collisions`.
   NO se fusionan solas — decisión manual (Sprint 2 dará la auditoría).
 
+- [ ] **8. Contexto geoespacial OSM** (Sprint 3 — piloto ES):
+  ```bash
+  psql ... -f db/migration_geo_osm.sql                 # columnas spot_geo
+  docker-compose exec scraper python scheduler.py --geo_osm   # o botón en admin.html
+  ```
+  ⚠ Overpass público es frágil: empezar con `GEO_OSM_BATCH` bajo y `GEO_OSM_RATE`≥1.5s.
+  Verifica en admin.html → panel "Contexto OSM": cobertura sube; ficha viajero muestra
+  "Agua a X km · Súper a Y km · Mirador a Z km".
+
 ---
 
 ## ⚠ RECORDATORIOS PERMANENTES (gotchas)
@@ -137,10 +159,10 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
 - [x] **Sprint 2 — Entity resolution** ✅ (en código): claves normalizadas + backfill +
   anclas exactas (osm_id/place_id) en `find_spot_cercano` + endpoint/UI de auditoría.
   SIN re-merge masivo. Pendiente: aplicar migración + backfill (pasos 2 y 2b).
-- [ ] **Sprint 3 — Motor OSM (piloto ES)**: poblar `spot_geo` vía Overpass cacheado
-  para spots ES; integrar en embeddings + `/spot` + `/search/semantic`. UI: estado
-  pipeline geo (% poblado). NOTA: `spot_geo` ya existe con columnas (`dist_*_km`,
-  elevation, noise, protected_area) — la ficha viajero ya las pinta.
+- [x] **Sprint 3 — Motor OSM (piloto ES)** ✅ (en código): `spot_geo` poblado vía
+  Overpass por categoría (agua/vaciado/súper/gasolinera/farmacia/mirador); panel de
+  cobertura + ficha viajero. Pendiente: aplicar migración + correr (paso 8).
+  Falta (mejora futura): integrar el contexto en embeddings + `/search/semantic`.
 - [ ] **Sprint 4 — Escalado geo (PBF→PostGIS)**: condicional a que el piloto valide.
 - [ ] **Sprint 5 — Ficha viajero v2**: enriquecer cuando haya datos reales de
   provenance + spot_geo (v1 ya en `pwa/spot.html`).
@@ -153,6 +175,7 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
 
 | Commit | Contenido |
 |---|---|
+| `116108e` | Sprint 3: motor geoespacial OSM (piloto Overpass) + ficha con contexto. |
 | `c82d743` | Sprint 2: entity resolution (claves normalizadas + anclas + auditoría + backfill). |
 | `d212dd5` | Sprints 0-1 + ficha viajero (spot.html) + plan + este runbook. (Agrupado con cleanup_dedup_shells.py por un add concurrente.) |
 | _(turno previo, en main)_ | google_maps_api source + migration_google_api.sql + fix job_id google_maps DOM + .env.example + CLAUDE.md |
