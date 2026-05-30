@@ -116,9 +116,11 @@ Categorías con esta doble naturaleza a tratar: `tourism=viewpoint`, `leisure=pa
 ## 4. Orden propuesto
 
 1. ✅ **Canal C** (hecho): la respuesta LLM menciona el entorno cercano.
-2. **Ampliar categorías OSM** (1a) + **contexto desde nuestros spots** (1b) — barato,
-   multiplica el valor del entorno que ya menciona el Canal C.
-3. **Canal B** (filtros geo en intent+SQL) con el set ampliado.
+2. ✅ **1a + 1b** (hecho): 11 categorías OSM + contexto desde nuestros spots (JSONB).
+3. ✅ **Canal B** (hecho): 13 filtros de proximidad (`max_dist_*_km`) en INTENT_PROMPT +
+   FILTER_MAP → SQL sobre `nearby_osm`/`nearby_spots`. Predicado validado en datos
+   reales (4.567 spots ES con super<1km y vaciado<2km). NOTA: `/search/semantic` solo
+   devuelve filas cuando existan `spot_embeddings` (hoy 0 → pendiente Canal A).
 4. **Cross-reference de enriquecimiento** (3.2) — determinista, bajo riesgo.
 5. **Spike OSRM** (2A): medir viabilidad en NAS + perfil camper. Si OK → distancia por
    carretera usuario→spot en query time. **El diferencial gordo del producto.**

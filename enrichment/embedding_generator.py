@@ -37,6 +37,28 @@ FILTER_MAP = {
     "tipo": ("s.tipo = ${}", str),
 }
 
+# Canal B — filtros de PROXIMIDAD (distancia máx en km al servicio más cercano).
+# Consultan los diccionarios JSONB de spot_geo (sg). Un spot sin esa categoría
+# cerca (clave ausente → NULL) queda EXCLUIDO cuando el usuario la exige.
+# (filter_key, columna_jsonb, clave_categoria)
+_GEO_FILTER_DEFS = [
+    ("max_dist_agua_km",        "nearby_osm",   "drinking_water"),
+    ("max_dist_vaciado_km",     "nearby_osm",   "dump_station"),
+    ("max_dist_super_km",       "nearby_osm",   "supermarket"),
+    ("max_dist_gasolinera_km",  "nearby_osm",   "fuel"),
+    ("max_dist_farmacia_km",    "nearby_osm",   "pharmacy"),
+    ("max_dist_panaderia_km",   "nearby_osm",   "bakery"),
+    ("max_dist_restaurante_km", "nearby_osm",   "restaurant"),
+    ("max_dist_lavanderia_km",  "nearby_osm",   "laundry"),
+    ("max_dist_ev_km",          "nearby_osm",   "ev_charging"),
+    ("max_dist_playa_km",       "nearby_osm",   "beach"),
+    ("max_dist_mirador_km",     "nearby_osm",   "viewpoint"),
+    ("max_dist_area_ac_km",     "nearby_spots", "area_ac"),
+    ("max_dist_camping_km",     "nearby_spots", "camping"),
+]
+for _fk, _col, _jkey in _GEO_FILTER_DEFS:
+    FILTER_MAP[_fk] = (f"(sg.{_col}->>'{_jkey}')::float <= ${{}}", float)
+
 INTENT_PROMPT = """Analiza esta busqueda de un usuario que busca spots para pernoctar con autocaravana.
 Extrae filtros SQL y una query semantica para busqueda vectorial.
 
@@ -51,13 +73,22 @@ FILTROS DISPONIBLES:
 - gratuito, agua_potable, electricidad, ducha, wifi, perros: BOOLEAN
 - tipo: area_ac, camping, parking_publico, wild, naturaleza, parking
 
+FILTROS DE PROXIMIDAD (km, distancia máxima al MÁS CERCANO; usar solo si el
+usuario pide explícitamente algo "cerca"):
+- max_dist_agua_km, max_dist_vaciado_km, max_dist_super_km, max_dist_gasolinera_km
+- max_dist_farmacia_km, max_dist_panaderia_km, max_dist_restaurante_km
+- max_dist_lavanderia_km, max_dist_ev_km, max_dist_playa_km, max_dist_mirador_km
+- max_dist_area_ac_km, max_dist_camping_km
+Distancia razonable por defecto si no la dan: 1.0 km a pie (agua, super, panadería,
+farmacia), 2.0 km en coche (gasolinera, vaciado, playa).
+
 QUERY DEL USUARIO: "{query}"
 
 Responde SOLO JSON:
 {{
-  "sql_filters": {{"quietness_score_min": 0.7, "overnight_safe": true}},
-  "semantic_query": "quiet beach with shade, dog friendly",
-  "explanation": "busca playa tranquila con sombra y perro"
+  "sql_filters": {{"quietness_score_min": 0.7, "overnight_safe": true, "max_dist_super_km": 1.0}},
+  "semantic_query": "quiet beach with supermarket nearby, dog friendly",
+  "explanation": "playa tranquila con super a menos de 1km y perro"
 }}"""
 
 
