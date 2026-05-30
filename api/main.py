@@ -333,6 +333,14 @@ async def get_spot(spot_id: int):
         for k in list(result["geo"].keys()):
             if isinstance(result["geo"][k], (bytes, memoryview)):
                 del result["geo"][k]
+        # nearby_osm / nearby_spots son JSONB → decodificar si vienen como str
+        for k in ("nearby_osm", "nearby_spots"):
+            v = result["geo"].get(k)
+            if isinstance(v, str):
+                try:
+                    result["geo"][k] = _json.loads(v)
+                except Exception:
+                    pass
     for key in list(result.keys()):
         if isinstance(result[key], (bytes, memoryview)):
             del result[key]

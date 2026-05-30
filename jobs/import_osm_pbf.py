@@ -48,7 +48,7 @@ def _dsn() -> str:
 # lookups por objeto (amenity/shop/tourism).
 def _build_keymap():
     km: dict[str, dict[str, str]] = {}
-    for name, key, val, _col in CATEGORIES:
+    for name, key, val in CATEGORIES:
         km.setdefault(key, {})[val] = name
     return km
 

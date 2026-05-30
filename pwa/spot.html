@@ -123,28 +123,34 @@ function kvRow(key, valHtml, prov, field){
 const SI='Sí', NO='No';
 function boolTxt(v){ return v===true?SI:(v===false?NO:null); }
 
+const NEARBY_LABELS = {
+    drinking_water:'Agua potable', dump_station:'Vaciado', supermarket:'Supermercado',
+    fuel:'Gasolinera', pharmacy:'Farmacia', viewpoint:'Mirador', bakery:'Panadería',
+    laundry:'Lavandería', restaurant:'Restaurante', ev_charging:'Recarga EV', beach:'Playa',
+    area_ac:'Área AC', camping:'Camping', spot_vaciado:'Spot con vaciado',
+};
+function fmtKm(v){ v=parseFloat(v); if(isNaN(v)) return ''; return v<1 ? Math.round(v*1000)+' m' : v.toFixed(1)+' km'; }
+
 function renderGeo(geo){
     if(!geo) return '<p class="empty">Sin contexto geoespacial todavía (pendiente del pipeline OSM).</p>';
-    const items = [
-        ['Agua potable', geo.dist_drinking_water_km, 'km'],
-        ['Vaciado', geo.dist_dump_station_km, 'km'],
-        ['Supermercado', geo.dist_supermarket_km, 'km'],
-        ['Gasolinera', geo.dist_fuel_km, 'km'],
-        ['Farmacia', geo.dist_pharmacy_km, 'km'],
-        ['Mirador', geo.dist_viewpoint_km, 'km'],
-        ['Hospital', geo.dist_hospital_km, 'km'],
-        ['Costa', geo.dist_coast_km, 'km'],
-        ['Lago', geo.dist_lake_km, 'km'],
-        ['Río', geo.dist_river_km, 'km'],
-        ['Autovía', geo.dist_motorway_km, 'km'],
-        ['Altitud', geo.elevation_m, 'm'],
-        ['Ruido (combinado)', geo.noise_combined, ''],
-    ].filter(([,v])=>v!=null);
+    const items = [];
+    // 1a + 1b: proximidad desde los diccionarios JSONB
+    for(const blob of [geo.nearby_osm, geo.nearby_spots]){
+        if(blob && typeof blob==='object'){
+            for(const [cat,km] of Object.entries(blob)){
+                const d = fmtKm(km); if(d) items.push([NEARBY_LABELS[cat]||cat, d]);
+            }
+        }
+    }
+    // Columnas DEM/terreno (otro pipeline)
+    if(geo.elevation_m!=null) items.push(['Altitud', Math.round(geo.elevation_m)+' m']);
+    if(geo.noise_combined!=null) items.push(['Ruido', (+geo.noise_combined).toFixed(2)]);
     let html = '';
     if(geo.protected_area) html += `<div class="chip" style="background:rgba(46,204,113,.13);color:#2ecc71;margin-bottom:.6rem">Área protegida${geo.protected_area_name?': '+esc(geo.protected_area_name):''}</div>`;
     if(!items.length && !geo.protected_area) return '<p class="empty">Sin contexto geoespacial todavía (pendiente del pipeline OSM).</p>';
-    html += '<div class="geo-grid">' + items.map(([k,v,u])=>
-        `<div class="geo-item"><div class="g-k">${k}</div><div class="g-v">${typeof v==='number'?v.toFixed( u==='km'?1:0 ):esc(v)} ${u}</div></div>`
+    // Ordenar por distancia ascendente (los más cercanos primero)
+    html += '<div class="geo-grid">' + items.map(([k,v])=>
+        `<div class="geo-item"><div class="g-k">${esc(k)}</div><div class="g-v">${esc(v)}</div></div>`
     ).join('') + '</div>';
     return html;
 }

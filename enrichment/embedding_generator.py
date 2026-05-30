@@ -521,9 +521,7 @@ async def buscar_spots(
             sss.police_risk_score, sss.stealth_score, sss.crowd_level_score,
             sss.overnight_safe, sss.semantic_dsl,
             sss.summary_es, sss.tags, sss.best_for,
-            sg.dist_drinking_water_km, sg.dist_dump_station_km,
-            sg.dist_supermarket_km, sg.dist_fuel_km,
-            sg.dist_pharmacy_km, sg.dist_viewpoint_km,
+            sg.nearby_osm, sg.nearby_spots,
             1 - (se.embedding <=> $1::vector) AS similarity,
             ST_Distance(s.geog, ST_SetSRID(ST_MakePoint($3, $2), 4326)::geography) / 1000 AS dist_km
         FROM spots s
@@ -539,22 +537,36 @@ async def buscar_spots(
     return [dict(r) for r in rows], intent
 
 
-_GEO_LABELS = [
-    ("dist_drinking_water_km", "agua"), ("dist_dump_station_km", "vaciado"),
-    ("dist_supermarket_km", "super"), ("dist_fuel_km", "gasolinera"),
-    ("dist_pharmacy_km", "farmacia"), ("dist_viewpoint_km", "mirador"),
-]
+# Etiquetas ES para las categorías de proximidad (osm + spots).
+_NEARBY_LABELS = {
+    "drinking_water": "agua", "dump_station": "vaciado", "supermarket": "super",
+    "fuel": "gasolinera", "pharmacy": "farmacia", "viewpoint": "mirador",
+    "bakery": "panaderia", "laundry": "lavanderia", "restaurant": "restaurante",
+    "ev_charging": "recarga EV", "beach": "playa",
+    "area_ac": "area AC", "camping": "camping", "spot_vaciado": "spot con vaciado",
+}
+
+
+def _fmt_km(v) -> str:
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return ""
+    return f"{int(v*1000)}m" if v < 1 else f"{v:.1f}km"
 
 
 def _entorno_str(s: dict) -> str:
-    """Contexto de proximidad legible para el prompt (Canal C). Distancia en
-    LÍNEA RECTA por ahora; pendiente sustituir por distancia por carretera donde
-    aplique (ver docs/diseno-distancias-y-contexto.md)."""
+    """Contexto de proximidad legible para el prompt (Canal C). Combina nearby_osm
+    (1a) y nearby_spots (1b). Distancia en LÍNEA RECTA por ahora; pendiente
+    carretera donde aplique (ver docs/diseno-distancias-y-contexto.md)."""
     parts: list[str] = []
-    for col, label in _GEO_LABELS:
-        v = s.get(col)
-        if v is not None:
-            parts.append(f"{label} {int(v*1000)}m" if v < 1 else f"{label} {v:.1f}km")
+    for blob in (s.get("nearby_osm"), s.get("nearby_spots")):
+        d = _json_object(blob)
+        for cat, km in d.items():
+            label = _NEARBY_LABELS.get(cat, cat)
+            dist = _fmt_km(km)
+            if dist:
+                parts.append(f"{label} {dist}")
     return "; ".join(parts)
 
 

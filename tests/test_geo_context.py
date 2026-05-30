@@ -25,8 +25,9 @@ def test_categorize_known_tags():
     assert _categorize({"tourism": "viewpoint"}) == "viewpoint"
 
 def test_categorize_unknown_is_none():
-    assert _categorize({"amenity": "restaurant"}) is None
+    assert _categorize({"amenity": "bench"}) is None   # bench no es categoría
     assert _categorize({}) is None
+    assert _categorize({"amenity": "restaurant"}) == "restaurant"  # sí lo es ahora
 
 def test_haversine_zero_and_known():
     assert _haversine_km(40.0, -3.0, 40.0, -3.0) == 0.0
@@ -39,11 +40,11 @@ def test_nearest_picks_closest_per_category():
         {"tags": {"amenity": "drinking_water"}, "lat": 40.001, "lon": -3.0},   # ~111 m
         {"tags": {"amenity": "drinking_water"}, "lat": 40.02, "lon": -3.0},    # ~2.2 km
         {"tags": {"shop": "supermarket"}, "center": {"lat": 40.005, "lon": -3.0}},  # ~555 m
-        {"tags": {"amenity": "restaurant"}, "lat": 40.0, "lon": -3.0},         # ignorado
+        {"tags": {"amenity": "bench"}, "lat": 40.0, "lon": -3.0},              # ignorado
     ]
     near = _nearest_by_category(elements, spot_lat, spot_lon)
     assert "drinking_water" in near and "supermarket" in near
-    assert "restaurant" not in near
+    assert "bench" not in near
     # Toma el agua más cercana (~0.11 km), no la lejana
     assert near["drinking_water"] < 0.2
 

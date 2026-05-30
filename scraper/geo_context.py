@@ -23,6 +23,7 @@ Config por env:
 """
 
 import asyncio
+import json
 import math
 import os
 from datetime import datetime, timezone
@@ -32,16 +33,39 @@ from loguru import logger
 
 DEFAULT_OVERPASS = "https://overpass-api.de/api/interpreter"
 
-# Categoría → (clave OSM, valor OSM, columna spot_geo en km)
+# Categoría → (clave OSM, valor OSM). Se guarda en nearby_osm JSONB {categoria: km}.
+# Añadir una categoría nueva aquí = aparece en el import y en el contexto sin más
+# cambios de schema (re-import del PBF + re-run geo).
 CATEGORIES = [
-    ("drinking_water", "amenity", "drinking_water",        "dist_drinking_water_km"),
-    ("dump_station",   "amenity", "sanitary_dump_station", "dist_dump_station_km"),
-    ("supermarket",    "shop",    "supermarket",           "dist_supermarket_km"),
-    ("fuel",           "amenity", "fuel",                  "dist_fuel_km"),
-    ("pharmacy",       "amenity", "pharmacy",              "dist_pharmacy_km"),
-    ("viewpoint",      "tourism", "viewpoint",             "dist_viewpoint_km"),
+    ("drinking_water", "amenity", "drinking_water"),
+    ("dump_station",   "amenity", "sanitary_dump_station"),
+    ("supermarket",    "shop",    "supermarket"),
+    ("fuel",           "amenity", "fuel"),
+    ("pharmacy",       "amenity", "pharmacy"),
+    ("viewpoint",      "tourism", "viewpoint"),
+    ("bakery",         "shop",    "bakery"),
+    ("laundry",        "shop",    "laundry"),
+    ("restaurant",     "amenity", "restaurant"),
+    ("ev_charging",    "amenity", "charging_station"),
+    ("beach",          "natural", "beach"),
 ]
-_COLS = [c[3] for c in CATEGORIES]
+
+# Etiquetas legibles (ES) para UI / prompt LLM.
+CATEGORY_LABELS = {
+    "drinking_water": "agua", "dump_station": "vaciado", "supermarket": "super",
+    "fuel": "gasolinera", "pharmacy": "farmacia", "viewpoint": "mirador",
+    "bakery": "panaderia", "laundry": "lavanderia", "restaurant": "restaurante",
+    "ev_charging": "recarga EV", "beach": "playa",
+}
+
+# 1b — proximidad a NUESTROS spots por tipo/servicio. {etiqueta: condición SQL}.
+# Condiciones fijas (sin inyección). Complementa a OSM: area_ac/camping no son
+# amenities OSM, y "spot con vaciado" usa la verdad reconciliada de fuentes camper.
+NEARBY_SPOT_CONDS = {
+    "area_ac": "tipo = 'area_ac'",
+    "camping": "tipo = 'camping'",
+    "spot_vaciado": "vaciado_negras = TRUE",
+}
 
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
@@ -56,13 +80,13 @@ def _haversine_km(lat1, lon1, lat2, lon2) -> float:
 def _build_query(lat: float, lon: float, radius_m: int) -> str:
     parts = "".join(
         f"  nwr(around:{radius_m},{lat},{lon})[{key}={val}];\n"
-        for _, key, val, _ in CATEGORIES
+        for _, key, val in CATEGORIES
     )
     return f"[out:json][timeout:25];\n(\n{parts});\nout center tags;"
 
 
 def _categorize(tags: dict) -> str | None:
-    for name, key, val, _ in CATEGORIES:
+    for name, key, val in CATEGORIES:
         if tags.get(key) == val:
             return name
     return None
@@ -96,23 +120,19 @@ async def _fetch_overpass(client, url: str, query: str) -> list:
     return (r.json() or {}).get("elements", [])
 
 
-_CAT_TO_COL = {name: col for name, _k, _v, col in CATEGORIES}
-
-
-async def _upsert_geo(conn, spot_id, vals: dict, source: str):
-    """Upsert de las columnas de proximidad en spot_geo (preserva otras columnas)."""
-    placeholders = ", ".join(f"${i+2}" for i in range(len(_COLS)))
-    src_idx = len(_COLS) + 2
+async def _upsert_geo(conn, spot_id, nearby_osm: dict, nearby_spots: dict, source: str):
+    """Upsert de la proximidad (JSONB) en spot_geo. Preserva columnas DEM."""
     await conn.execute(
-        f"""
-        INSERT INTO spot_geo (spot_id, {", ".join(_COLS)}, source, processed_at)
-        VALUES ($1, {placeholders}, ${src_idx}, NOW())
+        """
+        INSERT INTO spot_geo (spot_id, nearby_osm, nearby_spots, source, processed_at)
+        VALUES ($1, $2::jsonb, $3::jsonb, $4, NOW())
         ON CONFLICT (spot_id) DO UPDATE SET
-          {", ".join(f"{c} = EXCLUDED.{c}" for c in _COLS)},
-          source = EXCLUDED.source,
+          nearby_osm   = EXCLUDED.nearby_osm,
+          nearby_spots = EXCLUDED.nearby_spots,
+          source       = EXCLUDED.source,
           processed_at = NOW()
         """,
-        spot_id, *[vals[c] for c in _COLS], source,
+        spot_id, json.dumps(nearby_osm), json.dumps(nearby_spots), source,
     )
 
 
@@ -127,23 +147,39 @@ _LOCAL_NEAREST_SQL = """
 """
 
 
+async def _nearest_spots(conn, spot_id, lat, lon, radius_m: int = 30000) -> dict:
+    """1b — distancia (km) al NUESTRO spot más cercano por tipo/servicio."""
+    out: dict[str, float] = {}
+    for label, cond in NEARBY_SPOT_CONDS.items():
+        km = await conn.fetchval(
+            f"""
+            SELECT ST_Distance(geog, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography)
+                     / 1000.0
+            FROM spots
+            WHERE activo = TRUE AND {cond} AND id <> $3
+              AND ST_DWithin(geog, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $4)
+            ORDER BY geog <-> ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
+            LIMIT 1
+            """,
+            lat, lon, spot_id, radius_m,
+        )
+        if km is not None:
+            out[label] = round(km, 3)
+    return out
+
+
 async def _run_local(pool, candidatos, radius_m, country, stats, job_id):
-    """Modo LOCAL: KNN sobre osm_pois. Sin internet, sin rate limit."""
+    """Modo LOCAL: KNN sobre osm_pois (1a) + spots cercanos (1b). Sin internet."""
     async with pool.acquire() as conn:
         for idx, spot in enumerate(candidatos):
             try:
-                rows = await conn.fetch(
-                    _LOCAL_NEAREST_SQL,
-                    float(spot["lat"]), float(spot["lon"]), radius_m, country,
-                )
-                vals = {col: None for col in _COLS}
-                for r in rows:
-                    col = _CAT_TO_COL.get(r["category"])
-                    if col:
-                        vals[col] = round(r["km"], 3)
-                await _upsert_geo(conn, spot["id"], vals, "osm_pbf")
+                lat, lon = float(spot["lat"]), float(spot["lon"])
+                rows = await conn.fetch(_LOCAL_NEAREST_SQL, lat, lon, radius_m, country)
+                nearby_osm = {r["category"]: round(r["km"], 3) for r in rows}
+                nearby_spots = await _nearest_spots(conn, spot["id"], lat, lon)
+                await _upsert_geo(conn, spot["id"], nearby_osm, nearby_spots, "osm_pbf")
                 stats["procesados"] += 1
-                if rows:
+                if nearby_osm or nearby_spots:
                     stats["con_contexto"] += 1
             except Exception as e:
                 stats["errores"] += 1
@@ -156,7 +192,7 @@ async def _run_local(pool, candidatos, radius_m, country, stats, job_id):
 
 
 async def _run_overpass(pool, candidatos, radius_m, rate, overpass_url, stats, job_id):
-    """Modo OVERPASS: una query por spot. Frágil/rate-limited (piloto/fallback)."""
+    """Modo OVERPASS: una query por spot (1a) + spots cercanos (1b). Fallback."""
     consecutive_errors = 0
     async with httpx.AsyncClient(headers={"User-Agent": "GeoSpots/1.0 (+geo_context)"}) as client:
         for idx, spot in enumerate(candidatos):
@@ -166,15 +202,13 @@ async def _run_overpass(pool, candidatos, radius_m, rate, overpass_url, stats, j
                 await asyncio.sleep(rate)
                 elements = await _fetch_overpass(client, overpass_url, _build_query(lat, lon, radius_m))
                 consecutive_errors = 0
-                nearest = _nearest_by_category(elements, lat, lon)
-                vals = {col: None for col in _COLS}
-                for name, _k, _v, col in CATEGORIES:
-                    if name in nearest:
-                        vals[col] = round(nearest[name], 3)
+                nearby_osm = {k: round(v, 3) for k, v in
+                              _nearest_by_category(elements, lat, lon).items()}
                 async with pool.acquire() as conn:
-                    await _upsert_geo(conn, spot_id, vals, "osm_overpass")
+                    nearby_spots = await _nearest_spots(conn, spot_id, lat, lon)
+                    await _upsert_geo(conn, spot_id, nearby_osm, nearby_spots, "osm_overpass")
                 stats["procesados"] += 1
-                if nearest:
+                if nearby_osm or nearby_spots:
                     stats["con_contexto"] += 1
             except httpx.HTTPStatusError as e:
                 stats["errores"] += 1
@@ -190,13 +224,12 @@ async def _run_overpass(pool, candidatos, radius_m, rate, overpass_url, stats, j
                 logger.error("[geo_osm] 10 errores seguidos — abortando (Overpass caído/ban).")
                 break
             if job_id and (idx + 1) % 25 == 0:
-                import json as _json
                 try:
                     async with pool.acquire() as conn:
                         await conn.execute(
                             "UPDATE scraper_jobs SET progress = $1::jsonb WHERE id = $2",
-                            _json.dumps({"processed": idx + 1, "total": len(candidatos),
-                                         "stats": stats}, default=str), job_id,
+                            json.dumps({"processed": idx + 1, "total": len(candidatos),
+                                        "stats": stats}, default=str), job_id,
                         )
                 except Exception:
                     pass
