@@ -43,6 +43,20 @@
   consultan para calcular distancias en `spot_geo`. Verificado: ningún `tipo` de spot
   es farmacia/agua/súper/mirador/vaciado.
 
+**Contexto extensible (1a+1b) — aplicado 2026-05-30:**
+- `spot_geo.nearby_osm` / `nearby_spots` (JSONB) sustituyen a las columnas dist_*_km.
+  Añadir categoría = 1 línea en `geo_context.CATEGORIES` + re-import + re-run (sin migración).
+- 11 categorías OSM (agua, vaciado, súper, gasolinera, farmacia, mirador, panadería,
+  lavandería, restaurante, recarga EV, playa). osm_pois ES: **182.001 POIs**.
+- 1b (`nearby_spots`): área AC / camping / spot con vaciado más cercanos (KNN sobre
+  nuestros spots). 52.441/52.477 spots ES con contexto de spots.
+- Re-run completo ES: 52.477 spots en 5.5 min, modo local.
+- La ficha y el Canal C (respuesta LLM) ya iteran ambos diccionarios.
+
+**Para añadir una categoría OSM nueva:** editar `geo_context.CATEGORIES`, luego
+`import_osm_pbf --country es` (re-parsea) + `DELETE FROM spot_geo WHERE source LIKE 'osm%'`
++ `scheduler.py --geo_osm` (recomputa).
+
 **Pasos para otro país (FR/IT/DE…):**
 ```bash
 # 1. Descargar PBF de Geofabrik (ej. francia)
