@@ -426,7 +426,8 @@ class SearchForSitesSource(AbstractSource):
                             async with pool.acquire() as conn:
                                 async with conn.transaction():
                                     existente = await find_spot_cercano(
-                                        conn, norm["lat"], norm["lon"], self.dedup_radius_m
+                                        conn, norm["lat"], norm["lon"], self.dedup_radius_m,
+                                        source=self.name, source_id=sid,
                                     )
                                     if existente:
                                         spot_id = existente["id"]

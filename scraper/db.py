@@ -27,7 +27,26 @@ async def create_pool(config: Config) -> asyncpg.Pool:
 # ═══════════════════════════════════════════════════════════════
 
 async def find_spot_cercano(conn: asyncpg.Connection, lat: float, lon: float,
-                             radio_metros: float = 100, nombre: str = None, tipo: str = None) -> dict | None:
+                             radio_metros: float = 100, nombre: str = None, tipo: str = None,
+                             source: str = None, source_id: str = None) -> dict | None:
+    # ── Dedup STICKY (estabilidad de dedup) ─────────────────────────────────
+    # Si ya conocemos este (source, source_id), devolvemos su spot ACTUAL sin
+    # re-evaluar geográficamente. Sin esto, cada re-scrape vuelve a correr el
+    # match por distancia: si las coords se mueven unos metros o aparece un spot
+    # más cercano, el source_record MIGRA a otro spot y deja el original como
+    # duplicado con sus reviews huérfanas (medido: ~310K reviews huérfanas, p4n
+    # 267K). La estabilidad prima sobre re-emparejar: el dedup geográfico solo
+    # debe decidir para source_ids NUEVOS.
+    if source and source_id:
+        sticky = await conn.fetchrow("""
+            SELECT s.id, s.canonical_name, s.tipo, s.fuentes
+            FROM source_records sr
+            JOIN spots s ON s.id = sr.spot_id
+            WHERE sr.source = $1 AND sr.source_id = $2 AND s.activo = TRUE
+        """, source, str(source_id))
+        if sticky:
+            return dict(sticky)
+
     # Buscar candidatos ordenados por distancia
     rows = await conn.fetch("""
         SELECT id, canonical_name, tipo, fuentes,
