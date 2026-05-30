@@ -131,6 +131,17 @@ Ejecutar **en este orden**. Marca `[x]` a medida que lo hagas.
 
 ---
 
+## 🧾 Historial de commits de la iniciativa
+
+> Rama: `feature/provenance-google-geo`. Se actualiza en cada commit.
+
+| Commit | Contenido |
+|---|---|
+| `d212dd5` | Sprints 0-1 + ficha viajero (spot.html) + plan + este runbook. (Agrupado con cleanup_dedup_shells.py por un add concurrente.) |
+| _(turno previo, en main)_ | google_maps_api source + migration_google_api.sql + fix job_id google_maps DOM + .env.example + CLAUDE.md |
+
+---
+
 ## 🔍 Comandos de verificación (no tocan DB)
 
 ```bash
