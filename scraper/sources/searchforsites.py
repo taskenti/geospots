@@ -29,60 +29,77 @@ def detect_language(text: str) -> str:
         return "en"
     return max_lang
 
+REVIEWS_URL = "https://www.searchforsites.co.uk/pdo/getReviews.php"
+REVIEWS_PAGE_SIZE = 200  # getReviews.php acepta limit+offset (verificado 2026-05-30)
+
+
 async def fetch_and_save_reviews(client: httpx.AsyncClient, pool, spot_id: int, marker_id: str) -> int:
-    url = "https://www.searchforsites.co.uk/pdo/getReviews.php"
-    payload = {"markerID": marker_id}
+    """Descarga TODAS las reviews de un marker paginando con limit+offset.
+
+    BUG histórico: el endpoint devuelve solo 10 reviews por defecto y no
+    paginábamos → spots con rvwCnt alto (hasta 303) perdían el ~97% de sus
+    reviews. getReviews.php acepta `limit` y `offset` (LIMIT/OFFSET SQL), así
+    que iteramos hasta agotar.
+    """
+    from db import upsert_review
+
+    saved = 0
+    offset = 0
     try:
-        resp = await client.post(url, data=payload, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-        reviews = data.get("reviews", [])
-        if not reviews:
-            return 0
-        
-        saved = 0
-        async with pool.acquire() as conn:
-            for item in reviews:
-                r_id = item.get("review", {}).get("id")
-                r_text = item.get("review", {}).get("text")
-                r_author = item.get("user", {}).get("name")
-                r_updated = item.get("review", {}).get("updated")
-                
-                r_score = item.get("review", {}).get("rating", {}).get("score")
-                rating_val = None
-                if r_score is not None:
-                    try:
-                        rating_val = float(r_score) / 2.0
-                    except (ValueError, TypeError):
-                        pass
+        while True:
+            payload = {"markerID": marker_id, "limit": str(REVIEWS_PAGE_SIZE), "offset": str(offset)}
+            resp = await client.post(REVIEWS_URL, data=payload, timeout=20)
+            resp.raise_for_status()
+            reviews = resp.json().get("reviews", [])
+            if not reviews:
+                break
 
-                if not r_id or not r_text:
-                    continue
+            async with pool.acquire() as conn:
+                for item in reviews:
+                    r_id = item.get("review", {}).get("id")
+                    r_text = item.get("review", {}).get("text")
+                    r_author = item.get("user", {}).get("name")
+                    r_updated = item.get("review", {}).get("updated")
 
-                fecha = None
-                if r_updated:
-                    try:
-                        fecha = datetime.strptime(r_updated, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                    except Exception:
-                        pass
+                    r_score = item.get("review", {}).get("rating", {}).get("score")
+                    rating_val = None
+                    if r_score is not None:
+                        try:
+                            rating_val = float(r_score) / 2.0
+                        except (ValueError, TypeError):
+                            pass
 
-                idioma = detect_language(r_text)
+                    if not r_id or not r_text:
+                        continue
 
-                review_dict = {
-                    "spot_id": spot_id,
-                    "source": "searchforsites",
-                    "source_review_id": str(r_id),
-                    "texto": r_text,
-                    "rating": rating_val,
-                    "autor": r_author,
-                    "fecha": fecha,
-                    "idioma": idioma
-                }
-                
-                from db import upsert_review
-                await upsert_review(conn, review_dict)
-                saved += 1
-            if saved > 0:
+                    fecha = None
+                    if r_updated:
+                        try:
+                            fecha = datetime.strptime(r_updated, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                        except Exception:
+                            pass
+
+                    review_dict = {
+                        "spot_id": spot_id,
+                        "source": "searchforsites",
+                        "source_review_id": str(r_id),
+                        "texto": r_text,
+                        "rating": rating_val,
+                        "autor": r_author,
+                        "fecha": fecha,
+                        "idioma": detect_language(r_text),
+                    }
+                    await upsert_review(conn, review_dict)
+                    saved += 1
+
+            # Última página si vino incompleta
+            if len(reviews) < REVIEWS_PAGE_SIZE:
+                break
+            offset += REVIEWS_PAGE_SIZE
+            await asyncio.sleep(0.3)
+
+        if saved > 0:
+            async with pool.acquire() as conn:
                 await conn.execute("""
                     UPDATE spots SET total_reviews = (
                         SELECT COUNT(*) FROM reviews WHERE spot_id = $1
@@ -91,7 +108,7 @@ async def fetch_and_save_reviews(client: httpx.AsyncClient, pool, spot_id: int, 
         return saved
     except Exception as e:
         logger.error(f"[SFS] Error descargando reviews para marker {marker_id}: {e}")
-        return 0
+        return saved
 
 BASE_URL = "https://www.searchforsites.co.uk/pdo/getDataAdvanced.php"
 
@@ -473,7 +490,12 @@ class SearchForSitesSource(AbstractSource):
                   AND sr.review_count > 0
                   AND (
                         (sr.normalized_data->>'reviews_fetched') IS NULL
-                     OR COALESCE(r.cnt, 0) < sr.review_count
+                     -- Tolerancia 10%: getReviews puede devolver 1-2 menos que rvwCnt
+                     -- (reviews borradas/ocultas) y un spot puede tener varios markers
+                     -- cuyos counts no suman exacto. Sin tolerancia, esos spots se
+                     -- re-fetchearían en cada run para siempre. El truncamiento real
+                     -- (10 de 303) cae muy por debajo del 90% y sí se reintenta.
+                     OR COALESCE(r.cnt, 0) < sr.review_count * 0.9
                   )
                 ORDER BY sr.review_count DESC;
             """)
